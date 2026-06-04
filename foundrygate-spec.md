@@ -46,9 +46,10 @@ foundrygate/
 
 | Layer | Technology |
 |---|---|
-| Frontend | Blazor WebAssembly (.NET 9), hosted on Azure Static Web Apps |
-| API | ASP.NET Core 9 Web API, hosted on Azure Container Apps |
-| Database | Azure SQL, accessed via Entity Framework Core 9 |
+| Frontend | Blazor WebAssembly (.NET 10), hosted on Azure Static Web Apps |
+| UI Components | MudBlazor |
+| API | ASP.NET Core 10 Web API, hosted on Azure Container Apps |
+| Database | Azure SQL, accessed via Entity Framework Core 10 |
 | Auth | Microsoft Entra ID (MSAL, Microsoft.Identity.Web) |
 | Infra-as-Code | Bicep + GitHub Actions (OIDC, no long-lived secrets) |
 | APIM integration | Azure SDK for .NET (`Azure.ResourceManager.ApiManagement`) |

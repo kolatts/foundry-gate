@@ -5,35 +5,38 @@
 > Labels: epic, frontend
 
 ## Overview
-This epic delivers the three remaining admin pages: a summary dashboard that gives a bird's-eye view of system health and activity, a system configuration editor for the seven `SystemConfiguration` key-value pairs, and an audit log viewer with filters. The dashboard is the landing page for admins after login, so it needs to surface the most actionable information (pending requests count, top consumers, quota utilisation) at a glance without requiring navigation to other pages.
+This epic delivers the three remaining admin pages: a summary dashboard that gives a bird's-eye view of system health and activity, a system configuration editor for the `SystemConfiguration` key-value pairs, and an audit log viewer with filters. The dashboard is the admin landing page, so it uses `MudCard` stat cards for at-a-glance numbers and `MudDataGrid` for the top consumers table. The config editor uses an inline-edit `MudTable` pattern. The audit log viewer uses `MudDataGrid` with `MudSelect` and `MudDateRangePicker` filters — no custom date picker component needed.
 
 ## Approach
 
 ### Build /dashboard with summary stat cards, top consumers table, and pending badge (#54)
-Create `Pages/Admin/Dashboard.razor` (route `/dashboard`, default admin landing page). Call `GET /admin/dashboard-summary` (a new lightweight endpoint that returns aggregate counts: total users, total groups, pending requests, system-wide token usage this month as a percentage of total allocated quota). Render four stat cards at the top of the page. Below, render a "Top consumers this month" table showing the 10 users with the highest `TokensUsed` for the current period. Add a red badge next to the "Requests" nav item showing the count of pending requests; update it on every dashboard load. Use `IntersectionObserver` (via JS interop) or a simple polling interval to keep the pending count fresh while the admin is on the dashboard.
+Create `Pages/Admin/Dashboard.razor` (route `/dashboard`, default admin landing). Call `GET /dashboard` to fetch aggregate counts. Render four `MudCard` stat cards in a `MudGrid` (2-column on mobile, 4-column on desktop): Total Users, Active Users, Pending Requests (with `MudBadge` colour warning if > 0), and System Token Usage % this month. Below, render a "Top consumers this month" `MudDataGrid` (non-interactive, no paging — top 10 only) with a `MudProgressLinear` usage bar per row.
+
+Wire the pending request count to the `MudBadge` on the "Requests" `MudNavLink` in `NavMenu.razor` — pass it as a cascading value or via a lightweight `DashboardStateService` singleton. Refresh the dashboard data every 60 s using `PeriodicTimer` in `OnAfterRenderAsync`.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Admin/Dashboard.razor`
 - `src/FoundryGate.Web/Pages/Admin/Dashboard.razor.cs`
-- `src/FoundryGate.Web/Components/StatCard.razor`
 - `src/FoundryGate.Web/Shared/NavMenu.razor` (pending badge)
-- `src/FoundryGate.Api/Controllers/AdminController.cs` (dashboard-summary endpoint)
+- `src/FoundryGate.Web/Services/DashboardStateService.cs`
 
 ### Build /config key-value editor and /audit log viewer with filters (#55)
-Create `Pages/Admin/Config.razor` (route `/config`) that loads all `SystemConfiguration` rows from `GET /admin/config` and renders them as an editable key-value table. Each row has the key name (read-only), a description tooltip, and an editable value input. A single "Save changes" button at the bottom calls `PUT /admin/config` with the full updated set. Show a diff preview (original vs. new values) in a confirmation modal before saving. Create `Pages/Admin/AuditLog.razor` (route `/audit`) with a filterable, paginated table of audit log entries. Filters: actor (user search), action (enum dropdown), target entity type (dropdown), and date range picker. Each row shows timestamp, actor, action badge, target entity, and a details popover.
+Create `Pages/Admin/Config.razor` (route `/config`). Load all `SystemConfiguration` rows from `GET /config` into a `MudTable` with `Hover=true`. Each row has the key name (read-only `MudText`), a `MudTooltip` description, and a `MudTextField` for the value. A "Save all changes" `MudButton` at the bottom calls `PUT /config/{key}` for each dirty row in sequence and shows a `MudDialog` diff preview (original vs new values) before proceeding.
+
+Create `Pages/Admin/AuditLog.razor` (route `/audit`) with a `MudDataGrid` (`ServerData`, paged). Filter bar above the grid: `MudAutocomplete` for actor (searches users), `MudSelect<string>` for action (populated from known audit action constants in `FoundryGate.Domain`), `MudSelect<string>` for target type, and `MudDateRangePicker` for date range. Apply filters on change with 300 ms debounce. Each grid row has a `MudChip` for the action and a `MudIconButton` that expands a `MudPopover` showing the raw `Details` JSON blob formatted with `MudHighlighter` or a `<pre>` block.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Admin/Config.razor`
 - `src/FoundryGate.Web/Pages/Admin/Config.razor.cs`
 - `src/FoundryGate.Web/Pages/Admin/AuditLog.razor`
 - `src/FoundryGate.Web/Pages/Admin/AuditLog.razor.cs`
-- `src/FoundryGate.Web/Components/DiffPreviewModal.razor`
-- `src/FoundryGate.Web/Components/DateRangePicker.razor`
+- `src/FoundryGate.Web/Services/DashboardStateService.cs`
 
 ## Verification
 - [ ] `dotnet build` passes
 - [ ] Dashboard stat cards show correct counts from the API
-- [ ] Pending request badge on the nav item shows the correct count
-- [ ] Config editor shows a diff preview before saving and reflects saved values after
-- [ ] Audit log filters correctly narrow the result set
-- [ ] Audit log date range filter works across a month boundary
+- [ ] Pending request MudBadge on the nav item reflects the live count
+- [ ] Config editor shows only dirty rows in the diff preview dialog
+- [ ] Saving config calls PUT for each changed key and shows a success snackbar
+- [ ] Audit log MudDateRangePicker filter works across a month boundary
+- [ ] Audit log details popover renders JSON without crashing on malformed input

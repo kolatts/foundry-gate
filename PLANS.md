@@ -62,6 +62,7 @@ Files expected to be created or modified:
 - **ASP.NET Core 10** Web API
 - **EF Core 10** + Azure SQL (single database, no sharding)
 - **Blazor WebAssembly** (.NET 10)
+- **MudBlazor** component library for all UI
 - **Microsoft Entra ID** via `Microsoft.Identity.Web`
 - **Azure SDK** for APIM management (`Azure.ResourceManager.ApiManagement`)
 - **Microsoft Graph SDK** for Entra sync
