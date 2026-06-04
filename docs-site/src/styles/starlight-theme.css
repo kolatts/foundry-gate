@@ -1,0 +1,51 @@
+/* Map --fg-* design tokens onto Starlight's --sl-* variables.
+   This file is the only place Starlight internals are touched. */
+
+:root[data-theme='dark'],
+:root {
+  /* Accent — Azure scale */
+  --sl-color-accent-low:  var(--fg-azure-dim);
+  --sl-color-accent:      var(--fg-azure);
+  --sl-color-accent-high: var(--fg-azure-neon);
+
+  /* Page background */
+  --sl-color-black:  var(--fg-bg-base);
+  --sl-color-gray-6: var(--fg-bg-surface);
+  --sl-color-gray-5: var(--fg-bg-raised);
+  --sl-color-gray-4: var(--fg-bg-overlay);
+  --sl-color-gray-3: var(--fg-border-subtle);
+  --sl-color-gray-2: var(--fg-border-strong);
+  --sl-color-gray-1: var(--fg-text-muted);
+
+  /* Text */
+  --sl-color-white:  var(--fg-text-primary);
+
+  /* Semantic */
+  --sl-color-green:  var(--fg-success);
+  --sl-color-blue:   var(--fg-info);
+  --sl-color-orange: var(--fg-ember);
+  --sl-color-red:    var(--fg-ember-hot);
+
+  /* Typography */
+  --sl-font:      var(--fg-font-ui);
+  --sl-font-mono: var(--fg-font-mono);
+  --sl-text-code: var(--fg-text-mono);
+}
+
+/* Tighten the site header */
+header.header {
+  background: var(--fg-bg-base);
+  border-bottom: 1px solid var(--fg-border-subtle);
+}
+
+/* Sidebar background */
+.sidebar-pane {
+  background: var(--fg-bg-surface);
+  border-right: 1px solid var(--fg-border-subtle);
+}
+
+/* Code block background */
+.expressive-code .frame {
+  background: var(--fg-bg-raised) !important;
+  border: 1px solid var(--fg-border-subtle) !important;
+}

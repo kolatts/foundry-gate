@@ -1,0 +1,60 @@
+# ─── .NET ────────────────────────────────────────────────────
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# EF Core migrations bundle
+efbundle
+
+# ─── IDE ─────────────────────────────────────────────────────
+.vs/
+.vscode/settings.json
+.idea/
+*.DotSettings.user
+*.rsuser
+
+# Rider
+.idea/
+
+# ─── Secrets / local config ──────────────────────────────────
+appsettings.Development.json
+appsettings.Local.json
+appsettings.Secrets.json
+*.pfx
+*.p12
+
+# ─── Docs site ───────────────────────────────────────────────
+docs-site/node_modules/
+docs-site/dist/
+docs-site/.astro/
+
+# Fonts are fetched at build time, not committed
+docs-site/public/fonts/
+docs-site/src/assets/fonts/
+
+# ─── Azure Functions local ───────────────────────────────────
+local.settings.json
+
+# ─── Docker ──────────────────────────────────────────────────
+.dockerignore
+
+# ─── OS ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ─── Node (root-level, if any scripts) ───────────────────────
+node_modules/
+npm-debug.log*
+
+# ─── Test results ────────────────────────────────────────────
+TestResults/
+coverage/
+*.trx
+*.coveragexml

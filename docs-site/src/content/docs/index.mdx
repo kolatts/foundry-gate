@@ -1,0 +1,87 @@
+---
+title: What is FoundryGate?
+description: Open-source token budget management for Azure AI Foundry — per-developer quotas, APIM key lifecycle, and a monthly hard reset.
+template: splash
+hero:
+  tagline: Token budgets, APIM keys, and quota governance for Azure AI Foundry — in one open-source gateway your team actually controls.
+  image:
+    file: ../../assets/logo.png
+    alt: FoundryGate
+  actions:
+    - text: Fork guide
+      link: /foundry-gate/getting-started/fork-guide/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/kolatts/foundry-gate
+      icon: external
+      variant: secondary
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## The problem
+
+Your team has Azure AI Foundry deployed. Developers need API keys to hit it through APIM. But there's no built-in way to:
+
+- Give each developer or group a **monthly token budget** that actually enforces
+- **Provision and revoke** APIM subscription keys without portal access
+- Let developers **self-serve quota increases** with an approval workflow
+- See at a glance who is burning tokens and who is hard-stopped
+
+FoundryGate is the missing operations layer.
+
+## How it works
+
+<CardGrid>
+  <Card title="Per-developer quotas" icon="bars">
+    Five-level quota resolution: individual override → group policy → system default. When a developer hits their limit, their APIM subscription is **suspended** — not just flagged.
+  </Card>
+  <Card title="APIM key lifecycle" icon="key">
+    Admins provision, rotate, and revoke Azure API Management subscription keys without touching the portal. Developers can rotate their own key from the self-service dashboard.
+  </Card>
+  <Card title="Monthly hard reset" icon="list-format">
+    An Azure Function fires at 00:01 UTC on the 1st. Every active developer gets a fresh allocation. Suspended subscriptions are automatically re-enabled.
+  </Card>
+  <Card title="Foundry model management" icon="setting">
+    Admins can deploy and remove Azure AI Foundry model deployments from the FoundryGate UI. New deployments are immediately reachable via existing keys — no APIM changes needed.
+  </Card>
+</CardGrid>
+
+## Stack at a glance
+
+| Layer | Technology |
+|---|---|
+| API | ASP.NET Core 10 · Azure Container Apps |
+| Background jobs | Azure Functions (.NET 10 isolated, Flex Consumption) |
+| Database | Azure SQL · EF Core 10 · dacpac deployment |
+| Frontend | Blazor WebAssembly · MudBlazor |
+| Auth | Microsoft Entra ID · `Microsoft.Identity.Web` |
+| APIM integration | `Azure.ResourceManager.ApiManagement` |
+| Foundry provisioning | `Azure.ResourceManager.CognitiveServices` |
+| Docs | Astro · Starlight · GitHub Pages |
+
+## Get started
+
+<CardGrid>
+  <LinkCard
+    title="Fork guide"
+    description="Deploy FoundryGate to your Azure tenant in under two hours."
+    href="/foundry-gate/getting-started/fork-guide/"
+  />
+  <LinkCard
+    title="CLI setup for developers"
+    description="Got a key? Point Claude Code or Codex at your Foundry gateway."
+    href="/foundry-gate/getting-started/cli-setup/"
+  />
+  <LinkCard
+    title="Architecture overview"
+    description="How quota resolution, APIM enforcement, and usage sync fit together."
+    href="/foundry-gate/architecture/overview/"
+  />
+  <LinkCard
+    title="Configuration reference"
+    description="Every SystemConfiguration key and environment variable, documented."
+    href="/foundry-gate/reference/configuration/"
+  />
+</CardGrid>

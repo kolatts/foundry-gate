@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Outer frame -->
+  <rect x="2" y="2" width="28" height="28" rx="3" stroke="#0078D4" stroke-width="2"/>
+  <!-- Perspective lines converging to center glow -->
+  <line x1="2"  y1="2"  x2="16" y2="16" stroke="#4DCFFF" stroke-width="1.2" opacity="0.7"/>
+  <line x1="30" y1="2"  x2="16" y2="16" stroke="#4DCFFF" stroke-width="1.2" opacity="0.7"/>
+  <line x1="2"  y1="30" x2="16" y2="16" stroke="#4DCFFF" stroke-width="1.2" opacity="0.7"/>
+  <line x1="30" y1="30" x2="16" y2="16" stroke="#4DCFFF" stroke-width="1.2" opacity="0.7"/>
+  <!-- Center glow -->
+  <circle cx="16" cy="16" r="3" fill="#4DCFFF" opacity="0.9"/>
+  <circle cx="16" cy="16" r="5" fill="#0078D4" opacity="0.25"/>
+</svg>

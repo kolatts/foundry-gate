@@ -1,0 +1,79 @@
+/* FoundryGate typography — Inter (UI) + Monaspace Argon (code/numbers)
+   Fonts are served from /foundry-gate/fonts/ on GitHub Pages.
+   Download: Inter via Fontsource, Monaspace Argon from github.com/githubnext/monaspace */
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/foundry-gate/fonts/Inter-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/foundry-gate/fonts/Inter-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('/foundry-gate/fonts/Inter-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Monaspace Argon';
+  src: url('/foundry-gate/fonts/MonaspaceArgon-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Monaspace Argon';
+  src: url('/foundry-gate/fonts/MonaspaceArgon-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --fg-font-ui:   'Inter', system-ui, -apple-system, sans-serif;
+  --fg-font-mono: 'Monaspace Argon', 'Fira Code', 'Cascadia Code', monospace;
+
+  --fg-text-display:    32px;
+  --fg-text-heading:    20px;
+  --fg-text-subheading: 14px;
+  --fg-text-body:       14px;
+  --fg-text-small:      12px;
+  --fg-text-label:      11px;
+  --fg-text-mono:       13px;
+  --fg-text-mono-sm:    11px;
+
+  --fg-weight-normal: 400;
+  --fg-weight-medium: 500;
+  --fg-weight-bold:   600;
+
+  --fg-leading-tight:  1.25;
+  --fg-leading-normal: 1.5;
+  --fg-leading-loose:  1.7;
+}
+
+/* Monospace utility used on token counts, quota numbers, API keys */
+.fg-mono {
+  font-family: var(--fg-font-mono);
+  font-size: var(--fg-text-mono);
+  font-variant-ligatures: contextual;
+}
+
+.fg-label {
+  font-size: var(--fg-text-label);
+  font-weight: 500;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}

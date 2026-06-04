@@ -1,0 +1,32 @@
+/* FoundryGate design tokens — generated from content/tokens.md */
+
+:root {
+  /* Background scale (darkest → lightest) */
+  --fg-bg-base:     #080C12;
+  --fg-bg-surface:  #0D1520;
+  --fg-bg-raised:   #111927;
+  --fg-bg-overlay:  #162032;
+  --fg-border-subtle: #1E2D42;
+  --fg-border-strong: #2D4460;
+
+  /* Azure primary */
+  --fg-azure-dim:   #0558A0;
+  --fg-azure:       #0078D4;
+  --fg-azure-hover: #3BA3E8;
+  --fg-azure-neon:  #4DCFFF;
+
+  /* Ember — quota / spend / alerts */
+  --fg-ember-soft:  #FFB347;
+  --fg-ember:       #F58025;
+  --fg-ember-hot:   #FF5400;
+
+  /* Text scale */
+  --fg-text-primary:   #E8EEF5;
+  --fg-text-secondary: #A0B0C0;
+  --fg-text-muted:     #6B7E94;
+  --fg-text-disabled:  #3A4F63;
+
+  /* Semantic */
+  --fg-success: #22C55E;
+  --fg-info:    #38BDF8;
+}
