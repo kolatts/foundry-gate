@@ -1,7 +1,7 @@
 # Documentation — Astro/Starlight docs site on GitHub Pages
 
 > GitHub: #19  
-> Milestone: v0.4 — Frontend  
+> Milestone: v0.1 — Foundation  
 > Labels: epic, docs
 
 ## Overview
