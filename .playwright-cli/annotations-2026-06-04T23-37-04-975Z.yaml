@@ -1,0 +1,129 @@
+- generic [active] [ref=e1] [box=0,0,1440,900]:
+  - navigation [ref=e2] [box=0,0,1440,56]:
+    - link "FoundryGate" [ref=e3] [cursor=pointer] [box=40,14,107,28]:
+      - /url: /foundry-gate
+      - img "FoundryGate" [ref=e4] [box=40,14,107,28]
+    - generic [ref=e5] [box=1102,12,298,32]:
+      - link "Docs" [ref=e6] [cursor=pointer] [box=1102,13,53,30]:
+        - /url: /foundry-gategetting-started/fork-guide/
+      - link "API" [ref=e7] [cursor=pointer] [box=1159,13,44,30]:
+        - /url: /foundry-gatereference/api/
+      - link "GitHub" [ref=e8] [cursor=pointer] [box=1207,13,66,30]:
+        - /url: https://github.com/kolatts/foundry-gate
+      - link "Get started →" [ref=e9] [cursor=pointer] [box=1285,12,115,32]:
+        - /url: /foundry-gategetting-started/fork-guide/
+  - main [ref=e10] [box=0,56,1440,844]:
+    - generic [ref=e11] [box=20,56,1400,844]:
+      - generic [ref=e12] [box=76,181,584,595]:
+        - generic [ref=e13] [box=76,181,243,27]: Open source · Azure AI Foundry
+        - heading "Every token. Every developer. Under control." [level=1] [ref=e14] [box=76,239,584,210]:
+          - text: Every token.
+          - text: Every developer.
+          - text: Under control.
+        - paragraph [ref=e15] [box=76,481,328,158]: Azure AI Foundry has no concept of per-developer budgets. FoundryGate adds them — individual APIM keys, monthly token quotas, Entra-synced provisioning, and a self-service dashboard. All on top of your existing Foundry deployment.
+        - generic [ref=e16] [box=76,672,584,42]:
+          - link "→ Get started" [ref=e17] [cursor=pointer] [box=76,673,132,40]:
+            - /url: /foundry-gategetting-started/fork-guide/
+          - link "</> View on GitHub" [ref=e18] [cursor=pointer] [box=222,672,176,42]:
+            - /url: https://github.com/kolatts/foundry-gate
+        - img "FoundryGate UI icons" [ref=e20] [box=76,753,167,22]
+      - generic [ref=e22] [box=708,250,672,455]:
+        - generic [ref=e27] [box=778,261,260,13]: foundrygate.yourtenant.com / admin / overview
+        - generic [ref=e28] [box=709,285,670,420]:
+          - complementary [ref=e29] [box=709,285,140,420]:
+            - generic [ref=e30] [box=709,297,139,38]:
+              - text: fg
+              - generic [ref=e31] [box=740,305,3,15]: "|"
+              - text: admin
+            - generic [ref=e32] [cursor=pointer] [box=709,342,139,26]: ▪ Developers
+            - generic [ref=e33] [cursor=pointer] [box=709,369,139,26]: ▪ Groups
+            - generic [ref=e34] [cursor=pointer] [box=709,396,139,26]: ▪ Requests
+            - generic [ref=e35] [cursor=pointer] [box=709,424,139,26]: ▪ Models
+            - generic [ref=e36] [cursor=pointer] [box=709,451,139,26]: ▪ API Keys
+            - generic [ref=e37] [cursor=pointer] [box=709,478,139,26]: ▪ Entra Sync
+            - generic [ref=e38] [cursor=pointer] [box=709,505,139,26]: ▪ Audit
+            - generic [ref=e39] [cursor=pointer] [box=709,532,139,26]: ▪ Config
+          - generic [ref=e40] [box=849,285,530,420]:
+            - generic [ref=e41] [box=863,299,502,18]:
+              - generic [ref=e42] [box=863,299,66,17]: Developers
+              - generic [ref=e43] [box=1228,299,137,18]: Jun 1 – Jun 30, 2025 ▾
+            - generic [ref=e44] [box=863,329,502,71]:
+              - generic [ref=e45] [box=863,329,119,71]:
+                - generic [ref=e46] [box=876,340,93,12]: Active devs
+                - generic [ref=e47] [box=876,356,93,19]: "48"
+                - generic [ref=e48] [box=876,377,93,12]: ↑ 6 via Entra sync
+              - generic [ref=e49] [box=991,329,119,71]:
+                - generic [ref=e50] [box=1004,340,93,12]: Tokens used
+                - generic [ref=e51] [box=1004,356,93,19]: 2.1B
+                - generic [ref=e52] [box=1004,377,93,12]: of 4.8B allocated
+              - generic [ref=e53] [box=1118,329,119,71]:
+                - generic [ref=e54] [box=1131,340,93,12]: Suspended
+                - generic [ref=e55] [box=1131,356,93,19]: "3"
+                - generic [ref=e56] [box=1131,377,93,12]: Quota exceeded
+              - generic [ref=e57] [box=1246,329,119,71]:
+                - generic [ref=e58] [box=1259,340,93,12]: Pending
+                - generic [ref=e59] [box=1259,356,93,19]: "7"
+                - generic [ref=e60] [box=1259,377,93,12]: Quota requests
+            - generic [ref=e61] [box=863,412,502,14]: Developer quota usage
+            - table [ref=e62] [box=863,438,502,162]:
+              - rowgroup [ref=e63] [box=863,438,502,22]:
+                - row "Developer Tokens Usage Quota source Status" [ref=e64] [box=863,438,502,22]:
+                  - columnheader "Developer" [ref=e65] [box=863,438,133,22]
+                  - columnheader "Tokens" [ref=e66] [box=997,438,74,22]
+                  - columnheader "Usage" [ref=e67] [box=1071,438,67,22]
+                  - columnheader "Quota source" [ref=e68] [box=1138,438,127,22]
+                  - columnheader "Status" [ref=e69] [box=1264,438,101,22]
+              - rowgroup [ref=e70] [box=863,460,502,139]:
+                - 'row "alex.chen ⬡ Entra 892.4M 89% Group: Platform Near limit" [ref=e71] [box=863,460,502,28]':
+                  - cell "alex.chen ⬡ Entra" [ref=e72] [box=863,460,133,28]
+                  - cell "892.4M" [ref=e73] [box=997,460,74,28]
+                  - cell "89%" [ref=e74] [box=1071,460,67,28]:
+                    - generic [ref=e78] [box=1109,466,21,15]: 89%
+                  - 'cell "Group: Platform" [ref=e79] [box=1138,460,127,28]'
+                  - cell "Near limit" [ref=e80] [box=1264,460,101,28]:
+                    - generic [ref=e81] [box=1272,466,53,15]: Near limit
+                - row "sarah.kim ⬡ Entra 541.2M 54% User override Active" [ref=e82] [box=863,487,502,28]:
+                  - cell "sarah.kim ⬡ Entra" [ref=e83] [box=863,487,133,28]
+                  - cell "541.2M" [ref=e84] [box=997,487,74,28]
+                  - cell "54%" [ref=e85] [box=1071,487,67,28]:
+                    - generic [ref=e89] [box=1109,494,21,15]: 54%
+                  - cell "User override" [ref=e90] [box=1138,487,127,28]
+                  - cell "Active" [ref=e91] [box=1264,487,101,28]:
+                    - generic [ref=e92] [box=1272,494,38,15]: Active
+                - row "marcus.j 1.0B 100% Default Suspended" [ref=e93] [box=863,515,502,28]:
+                  - cell "marcus.j" [ref=e94] [box=863,515,133,28]
+                  - cell "1.0B" [ref=e95] [box=997,515,74,28]
+                  - cell "100%" [ref=e96] [box=1071,515,67,28]:
+                    - generic [ref=e100] [box=1103,522,27,15]: 100%
+                  - cell "Default" [ref=e101] [box=1138,515,127,28]
+                  - cell "Suspended" [ref=e102] [box=1264,515,101,28]:
+                    - generic [ref=e103] [box=1272,522,58,15]: Suspended
+                - 'row "priya.n ⬡ Entra 218.7M 22% Group: Infra Active" [ref=e104] [box=863,543,502,28]':
+                  - cell "priya.n ⬡ Entra" [ref=e105] [box=863,543,133,28]
+                  - cell "218.7M" [ref=e106] [box=997,543,74,28]
+                  - cell "22%" [ref=e107] [box=1071,543,67,28]:
+                    - generic [ref=e111] [box=1109,549,21,15]: 22%
+                  - 'cell "Group: Infra" [ref=e112] [box=1138,543,127,28]'
+                  - cell "Active" [ref=e113] [box=1264,543,101,28]:
+                    - generic [ref=e114] [box=1272,549,38,15]: Active
+                - row "james.o 94.1M 9% Unlimited Active" [ref=e115] [box=863,571,502,28]:
+                  - cell "james.o" [ref=e116] [box=863,571,133,28]
+                  - cell "94.1M" [ref=e117] [box=997,571,74,28]
+                  - cell "9%" [ref=e118] [box=1071,571,67,28]:
+                    - generic [ref=e122] [box=1115,577,15,15]: 9%
+                  - cell "Unlimited" [ref=e123] [box=1138,571,127,28]
+                  - cell "Active" [ref=e124] [box=1264,571,101,28]:
+                    - generic [ref=e125] [box=1272,577,38,15]: Active
+  - generic [ref=e128] [box=634,883,173,40]:
+    - button "Menu" [ref=e129] [box=634,883,42,40]:
+      - img [ref=e131] [box=647,893,20,20]
+      - generic [box=630,802,54,27]: Menu
+    - button "Inspect" [ref=e135] [box=676,883,44,40]:
+      - img [ref=e137] [box=688,893,20,20]
+      - generic [box=666,802,62,27]: Inspect
+    - button "Audit" [ref=e139] [box=720,883,44,40]:
+      - img [ref=e141] [box=732,893,20,20]
+      - generic [box=716,802,51,27]: Audit
+    - button "Settings" [ref=e144] [box=765,883,42,40]:
+      - img [ref=e146] [box=774,893,20,20]
+      - generic [box=750,802,68,27]: Settings

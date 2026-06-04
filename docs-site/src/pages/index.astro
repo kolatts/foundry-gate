@@ -90,26 +90,47 @@ const base = import.meta.env.BASE_URL;
       font-size: 13px;
       font-weight: 500;
       color: var(--fg-text-secondary);
-      transition: color 0.15s, background 0.15s;
+      transition: color 0.18s, background 0.18s;
+      position: relative;
+    }
+
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      bottom: 2px;
+      left: 0.75rem;
+      right: 0.75rem;
+      height: 1px;
+      background: var(--fg-azure-neon);
+      transform: scaleX(0);
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      transform-origin: left;
     }
 
     .nav-links a:hover {
       color: var(--fg-text-primary);
-      background: var(--fg-bg-surface);
+    }
+
+    .nav-links a:hover::after {
+      transform: scaleX(1);
     }
 
     .nav-signin {
-      margin-left: 0.5rem;
-      padding: 0.4rem 1rem !important;
-      background: var(--fg-bg-surface) !important;
-      border: 1px solid var(--fg-border-strong) !important;
-      color: var(--fg-text-primary) !important;
+      margin-left: 0.75rem;
+      padding: 0.4rem 1.1rem !important;
+      background: var(--fg-azure) !important;
+      color: #fff !important;
       border-radius: 6px;
+      font-weight: 600 !important;
+      font-size: 13px;
+      transition: background 0.18s, box-shadow 0.22s !important;
     }
 
+    .nav-signin::after { display: none; }
+
     .nav-signin:hover {
-      border-color: var(--fg-azure) !important;
-      color: var(--fg-azure-neon) !important;
+      background: var(--fg-azure-hover) !important;
+      box-shadow: 0 0 16px 2px color-mix(in srgb, var(--fg-azure-neon) 30%, transparent) !important;
     }
 
     /* ── Hero ───────────────────────────────────────────── */
@@ -206,6 +227,59 @@ const base = import.meta.env.BASE_URL;
     .btn-secondary:hover {
       border-color: var(--fg-azure);
       color: var(--fg-text-primary);
+    }
+
+    /* ── Flow steps ─────────────────────────────────────── */
+    .hero-flow {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      row-gap: 1rem;
+    }
+
+    .flow-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.6rem;
+      background: var(--fg-bg-surface);
+      border: 1px solid var(--fg-border-subtle);
+      border-radius: 8px;
+      padding: 0.6rem 0.75rem;
+      transition: border-color 0.2s;
+      flex: 1;
+      min-width: 120px;
+    }
+
+    .flow-step:hover {
+      border-color: var(--fg-border-strong);
+    }
+
+    .flow-icon {
+      color: var(--fg-azure-neon);
+      font-size: 14px;
+      line-height: 1.4;
+      flex-shrink: 0;
+    }
+
+    .flow-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--fg-text-primary);
+      margin-bottom: 0.15rem;
+    }
+
+    .flow-desc {
+      font-size: 10px;
+      color: var(--fg-text-muted);
+      line-height: 1.4;
+    }
+
+    .flow-arrow {
+      color: var(--fg-border-strong);
+      font-size: 16px;
+      padding-top: 0.65rem;
+      flex-shrink: 0;
     }
 
     .hero-icons {
@@ -477,9 +551,9 @@ const base = import.meta.env.BASE_URL;
 
     .hero-eyebrow { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.05s both; }
     h1            { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.12s both; }
-    .hero-sub     { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.20s both; }
-    .cta-group    { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.28s both; }
-    .hero-icons   { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.36s both; }
+    .hero-flow    { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.20s both; }
+    .cta-group    { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.30s both; }
+    .hero-icons   { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.38s both; }
     .dashboard-wrap { animation: rise 0.6s cubic-bezier(0.16,1,0.3,1) 0.18s both; }
 
     @media (prefers-reduced-motion: reduce) {
@@ -495,9 +569,9 @@ const base = import.meta.env.BASE_URL;
     <img src={`${base}logo.png`} alt="FoundryGate" />
   </a>
   <div class="nav-links">
-    <a href={`${base}getting-started/fork-guide/`}>Docs</a>
-    <a href={`${base}reference/api/`}>API</a>
-    <a href="https://github.com/kolatts/foundry-gate" target="_blank" rel="noopener">GitHub</a>
+    <a href={`${base}getting-started/why-foundrygate/`}>📖 Docs</a>
+    <a href={`${base}reference/api/`}>⚡ API</a>
+    <a href="https://github.com/kolatts/foundry-gate" target="_blank" rel="noopener">✦ GitHub</a>
     <a href={`${base}getting-started/fork-guide/`} class="nav-signin">Get started →</a>
   </div>
 </nav>
@@ -508,19 +582,46 @@ const base = import.meta.env.BASE_URL;
 
     <!-- Left: copy -->
     <div class="hero-left">
-      <span class="hero-eyebrow">Open source · Azure AI Foundry</span>
+      <span class="hero-eyebrow">⬡ Open source · Azure AI Foundry · .NET 10</span>
 
       <h1>
-        Every token.<br />
-        Every developer.<br />
-        Under <span class="accent">control.</span>
+        Tokens and budgets,<br />
+        <span class="accent">finally</span> in sync.
       </h1>
 
-      <p class="hero-sub">
-        Azure AI Foundry has no concept of per-developer budgets. FoundryGate adds them —
-        individual APIM keys, monthly token quotas, Entra-synced provisioning, and a
-        self-service dashboard. All on top of your existing Foundry deployment.
-      </p>
+      <div class="hero-flow">
+        <div class="flow-step">
+          <span class="flow-icon">⬡</span>
+          <div>
+            <div class="flow-label">Entra</div>
+            <div class="flow-desc">Developers sync automatically from your directory</div>
+          </div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <span class="flow-icon">◈</span>
+          <div>
+            <div class="flow-label">Budget assigned</div>
+            <div class="flow-desc">Monthly token quota, individual APIM key</div>
+          </div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <span class="flow-icon">⬛</span>
+          <div>
+            <div class="flow-label">APIM enforces</div>
+            <div class="flow-desc">Access suspended the moment the cap is hit</div>
+          </div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <span class="flow-icon">↑</span>
+          <div>
+            <div class="flow-label">Adjust</div>
+            <div class="flow-desc">Approve a request or raise the limit in the dashboard</div>
+          </div>
+        </div>
+      </div>
 
       <div class="cta-group">
         <a href={`${base}getting-started/fork-guide/`} class="btn-primary">

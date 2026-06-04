@@ -1,0 +1,116 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - link "FoundryGate" [ref=e3] [cursor=pointer]:
+      - /url: /foundry-gate
+      - img "FoundryGate" [ref=e4]
+    - generic [ref=e5]:
+      - link "Docs" [ref=e6] [cursor=pointer]:
+        - /url: /foundry-gategetting-started/fork-guide/
+      - link "API" [ref=e7] [cursor=pointer]:
+        - /url: /foundry-gatereference/api/
+      - link "GitHub" [ref=e8] [cursor=pointer]:
+        - /url: https://github.com/kolatts/foundry-gate
+      - link "Get started →" [ref=e9] [cursor=pointer]:
+        - /url: /foundry-gategetting-started/fork-guide/
+  - main [ref=e10]:
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]: Open source · Azure AI Foundry
+        - heading "Every token. Every developer. Under control." [level=1] [ref=e14]:
+          - text: Every token.
+          - text: Every developer.
+          - text: Under control.
+        - paragraph [ref=e15]: Azure AI Foundry has no concept of per-developer budgets. FoundryGate adds them — individual APIM keys, monthly token quotas, Entra-synced provisioning, and a self-service dashboard. All on top of your existing Foundry deployment.
+        - generic [ref=e16]:
+          - link "→ Get started" [ref=e17] [cursor=pointer]:
+            - /url: /foundry-gategetting-started/fork-guide/
+          - link "</> View on GitHub" [ref=e18] [cursor=pointer]:
+            - /url: https://github.com/kolatts/foundry-gate
+        - img "FoundryGate UI icons" [ref=e20]
+      - generic [ref=e22]:
+        - generic [ref=e27]: foundrygate.yourtenant.com / admin / overview
+        - generic [ref=e28]:
+          - complementary [ref=e29]:
+            - generic [ref=e30]:
+              - text: fg
+              - generic [ref=e31]: "|"
+              - text: admin
+            - generic [ref=e32] [cursor=pointer]: ▪ Developers
+            - generic [ref=e33] [cursor=pointer]: ▪ Groups
+            - generic [ref=e34] [cursor=pointer]: ▪ Requests
+            - generic [ref=e35] [cursor=pointer]: ▪ Models
+            - generic [ref=e36] [cursor=pointer]: ▪ API Keys
+            - generic [ref=e37] [cursor=pointer]: ▪ Entra Sync
+            - generic [ref=e38] [cursor=pointer]: ▪ Audit
+            - generic [ref=e39] [cursor=pointer]: ▪ Config
+          - generic [ref=e40]:
+            - generic [ref=e41]:
+              - generic [ref=e42]: Developers
+              - generic [ref=e43]: Jun 1 – Jun 30, 2025 ▾
+            - generic [ref=e44]:
+              - generic [ref=e45]:
+                - generic [ref=e46]: Active devs
+                - generic [ref=e47]: "48"
+                - generic [ref=e48]: ↑ 6 via Entra sync
+              - generic [ref=e49]:
+                - generic [ref=e50]: Tokens used
+                - generic [ref=e51]: 2.1B
+                - generic [ref=e52]: of 4.8B allocated
+              - generic [ref=e53]:
+                - generic [ref=e54]: Suspended
+                - generic [ref=e55]: "3"
+                - generic [ref=e56]: Quota exceeded
+              - generic [ref=e57]:
+                - generic [ref=e58]: Pending
+                - generic [ref=e59]: "7"
+                - generic [ref=e60]: Quota requests
+            - generic [ref=e61]: Developer quota usage
+            - table [ref=e62]:
+              - rowgroup [ref=e63]:
+                - row "Developer Tokens Usage Quota source Status" [ref=e64]:
+                  - columnheader "Developer" [ref=e65]
+                  - columnheader "Tokens" [ref=e66]
+                  - columnheader "Usage" [ref=e67]
+                  - columnheader "Quota source" [ref=e68]
+                  - columnheader "Status" [ref=e69]
+              - rowgroup [ref=e70]:
+                - 'row "alex.chen ⬡ Entra 892.4M 89% Group: Platform Near limit" [ref=e71]':
+                  - cell "alex.chen ⬡ Entra" [ref=e72]
+                  - cell "892.4M" [ref=e73]
+                  - cell "89%" [ref=e74]:
+                    - generic [ref=e78]: 89%
+                  - 'cell "Group: Platform" [ref=e79]'
+                  - cell "Near limit" [ref=e80]:
+                    - generic [ref=e81]: Near limit
+                - row "sarah.kim ⬡ Entra 541.2M 54% User override Active" [ref=e82]:
+                  - cell "sarah.kim ⬡ Entra" [ref=e83]
+                  - cell "541.2M" [ref=e84]
+                  - cell "54%" [ref=e85]:
+                    - generic [ref=e89]: 54%
+                  - cell "User override" [ref=e90]
+                  - cell "Active" [ref=e91]:
+                    - generic [ref=e92]: Active
+                - row "marcus.j 1.0B 100% Default Suspended" [ref=e93]:
+                  - cell "marcus.j" [ref=e94]
+                  - cell "1.0B" [ref=e95]
+                  - cell "100%" [ref=e96]:
+                    - generic [ref=e100]: 100%
+                  - cell "Default" [ref=e101]
+                  - cell "Suspended" [ref=e102]:
+                    - generic [ref=e103]: Suspended
+                - 'row "priya.n ⬡ Entra 218.7M 22% Group: Infra Active" [ref=e104]':
+                  - cell "priya.n ⬡ Entra" [ref=e105]
+                  - cell "218.7M" [ref=e106]
+                  - cell "22%" [ref=e107]:
+                    - generic [ref=e111]: 22%
+                  - 'cell "Group: Infra" [ref=e112]'
+                  - cell "Active" [ref=e113]:
+                    - generic [ref=e114]: Active
+                - row "james.o 94.1M 9% Unlimited Active" [ref=e115]:
+                  - cell "james.o" [ref=e116]
+                  - cell "94.1M" [ref=e117]
+                  - cell "9%" [ref=e118]:
+                    - generic [ref=e122]: 9%
+                  - cell "Unlimited" [ref=e123]
+                  - cell "Active" [ref=e124]:
+                    - generic [ref=e125]: Active
