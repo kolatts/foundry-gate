@@ -58,3 +58,9 @@ TestResults/
 coverage/
 *.trx
 *.coveragexml
+
+# ─── Playwright / browser automation artifacts ───────────────
+.playwright-cli/
+landing*.png
+why-foundrygate.png
+example-site.png
