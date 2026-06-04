@@ -4,6 +4,9 @@ dist/
 src/assets/fonts/
 public/fonts/
 .playwright-cli/
-*.png
-*.jpg
+# Playwright screenshots — not brand assets
+homepage*.png
+fork-guide.png
+cli-setup.png
+architecture.png
 package-lock.json
