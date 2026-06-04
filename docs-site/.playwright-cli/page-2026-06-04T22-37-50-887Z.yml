@@ -1,0 +1,424 @@
+- generic [active] [ref=e1]:
+  - link "Skip to content" [ref=e2] [cursor=pointer]:
+    - /url: "#_top"
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - generic [ref=e5]:
+        - link "FoundryGate FoundryGate" [ref=e7] [cursor=pointer]:
+          - /url: /foundry-gate/
+          - img "FoundryGate" [ref=e8]
+          - generic [ref=e9]: FoundryGate
+        - button "Search" [ref=e12] [cursor=pointer]:
+          - img [ref=e13]
+          - generic [ref=e15]: Search
+          - generic [ref=e16]:
+            - generic [ref=e17]: Ctrl
+            - generic [ref=e18]: K
+        - generic [ref=e19]:
+          - link "GitHub" [ref=e21] [cursor=pointer]:
+            - /url: https://github.com/kolatts/foundry-gate
+            - generic [ref=e22]: GitHub
+            - img [ref=e23]
+          - generic [ref=e26]:
+            - generic [ref=e27]: Select theme
+            - img
+            - combobox "Select theme" [ref=e28] [cursor=pointer]:
+              - option "Dark"
+              - option "Light"
+              - option "Auto" [selected]
+            - img
+    - navigation "Main":
+      - list [ref=e32]:
+        - listitem [ref=e33]:
+          - group [ref=e34]:
+            - generic "Getting Started" [ref=e35] [cursor=pointer]:
+              - generic [ref=e36]: Getting Started
+              - img [ref=e37]
+            - list [ref=e39]:
+              - listitem [ref=e40]:
+                - link "Fork Guide" [ref=e41] [cursor=pointer]:
+                  - /url: /foundry-gate/getting-started/fork-guide/
+              - listitem [ref=e42]:
+                - link "CLI Setup for Developers" [ref=e43] [cursor=pointer]:
+                  - /url: /foundry-gate/getting-started/cli-setup/
+        - listitem [ref=e44]:
+          - group [ref=e45]:
+            - generic "Architecture" [ref=e46] [cursor=pointer]:
+              - generic [ref=e47]: Architecture
+              - img [ref=e48]
+            - list [ref=e50]:
+              - listitem [ref=e51]:
+                - link "System Overview" [ref=e52] [cursor=pointer]:
+                  - /url: /foundry-gate/architecture/overview/
+        - listitem [ref=e53]:
+          - group [ref=e54]:
+            - generic "Reference" [ref=e55] [cursor=pointer]:
+              - generic [ref=e56]: Reference
+              - img [ref=e57]
+            - list [ref=e59]:
+              - listitem [ref=e60]:
+                - link "API Surface" [ref=e61] [cursor=pointer]:
+                  - /url: /foundry-gate/reference/api/
+              - listitem [ref=e62]:
+                - link "Configuration Reference" [ref=e63] [cursor=pointer]:
+                  - /url: /foundry-gate/reference/configuration/
+        - listitem [ref=e64]:
+          - link "Contributing" [ref=e65] [cursor=pointer]:
+            - /url: /foundry-gate/contributing
+    - generic [ref=e67]:
+      - complementary [ref=e68]:
+        - navigation "On this page" [ref=e73]:
+          - heading "On this page" [level=2] [ref=e74]
+          - list [ref=e75]:
+            - listitem [ref=e76]:
+              - link "Overview" [ref=e77] [cursor=pointer]:
+                - /url: "#_top"
+            - listitem [ref=e78]:
+              - link "Prerequisites" [ref=e79] [cursor=pointer]:
+                - /url: "#prerequisites"
+              - list [ref=e80]:
+                - listitem [ref=e81]:
+                  - link "Fork and clone the repo" [ref=e82] [cursor=pointer]:
+                    - /url: "#fork-and-clone-the-repo"
+                - listitem [ref=e83]:
+                  - link "Register an Entra App" [ref=e84] [cursor=pointer]:
+                    - /url: "#register-an-entra-app"
+                - listitem [ref=e85]:
+                  - link "Configure APIM" [ref=e86] [cursor=pointer]:
+                    - /url: "#configure-apim"
+                - listitem [ref=e87]:
+                  - link "Set Bicep parameters" [ref=e88] [cursor=pointer]:
+                    - /url: "#set-bicep-parameters"
+                - listitem [ref=e89]:
+                  - link "Configure GitHub OIDC" [ref=e90] [cursor=pointer]:
+                    - /url: "#configure-github-oidc"
+                - listitem [ref=e91]:
+                  - link "Add GitHub Actions secrets and variables" [ref=e92] [cursor=pointer]:
+                    - /url: "#add-github-actions-secrets-and-variables"
+                - listitem [ref=e93]:
+                  - link "Deploy infrastructure" [ref=e94] [cursor=pointer]:
+                    - /url: "#deploy-infrastructure"
+                - listitem [ref=e95]:
+                  - link "Push to main" [ref=e96] [cursor=pointer]:
+                    - /url: "#push-to-main"
+                - listitem [ref=e97]:
+                  - link "Verify" [ref=e98] [cursor=pointer]:
+                    - /url: "#verify"
+            - listitem [ref=e99]:
+              - link "Troubleshooting" [ref=e100] [cursor=pointer]:
+                - /url: "#troubleshooting"
+      - main [ref=e102]:
+        - heading "Fork Guide" [level=1] [ref=e105]
+        - generic [ref=e107]:
+          - generic [ref=e108]:
+            - paragraph [ref=e109]: "import { Steps, Aside, Code } from ‘@astrojs/starlight/components’;"
+            - paragraph [ref=e110]: This guide takes you from a blank Azure subscription to a running FoundryGate deployment. Budget two hours if you’re comfortable with Azure; longer if this is your first time with Bicep or APIM.
+            - heading "Prerequisites" [level=2] [ref=e111]
+            - list [ref=e112]:
+              - listitem [ref=e113]:
+                - text: Azure CLI (
+                - code [ref=e114]: az
+                - text: ) ≥ 2.60
+              - listitem [ref=e115]:
+                - text: Bicep CLI (
+                - code [ref=e116]: az bicep install
+                - text: )
+              - listitem [ref=e117]: .NET 10 SDK
+              - listitem [ref=e118]:
+                - text: GitHub CLI (
+                - code [ref=e119]: gh
+                - text: ) ≥ 2.40
+              - listitem [ref=e120]:
+                - text: An existing
+                - strong [ref=e121]: Azure API Management
+                - text: instance
+              - listitem [ref=e122]:
+                - text: An existing
+                - strong [ref=e123]: Azure AI Foundry
+                - text: account with at least one model deployment
+            - separator [ref=e124]
+            - list [ref=e126]:
+              - listitem [ref=e127]:
+                - heading "Fork and clone the repo" [level=3] [ref=e128]
+                - figure "Terminal window" [ref=e130]:
+                  - generic [ref=e133]: Terminal window
+                  - code [ref=e135]:
+                    - generic [ref=e137]: gh repo fork kolatts/foundry-gate --clone
+                    - generic [ref=e139]: cd foundry-gate
+                  - button "Copy to clipboard" [ref=e141] [cursor=pointer]
+              - listitem [ref=e143]:
+                - heading "Register an Entra App" [level=3] [ref=e144]
+                - figure "Terminal window" [ref=e146]:
+                  - generic [ref=e149]: Terminal window
+                  - code [ref=e151]:
+                    - generic [ref=e153]: az ad app create \
+                    - generic [ref=e155]: "--display-name \"FoundryGate\" \\"
+                    - generic [ref=e157]: "--sign-in-audience AzureADMyOrg"
+                  - button "Copy to clipboard" [ref=e159] [cursor=pointer]
+                - paragraph [ref=e161]:
+                  - text: Note the
+                  - code [ref=e162]: appId
+                  - text: — you’ll need it as
+                  - code [ref=e163]: entraClientId
+                  - text: in the Bicep params.
+                - paragraph [ref=e164]:
+                  - strong [ref=e165]: Add the Admin app role
+                  - text: "in the Azure portal under your app registration → App roles → Create:"
+                - list [ref=e166]:
+                  - listitem [ref=e167]:
+                    - text: "Display name:"
+                    - code [ref=e168]: FoundryGate Admin
+                  - listitem [ref=e169]:
+                    - text: "Value:"
+                    - code [ref=e170]: FoundryGate.Admin
+                  - listitem [ref=e171]: "Allowed member types: Users/Groups"
+                - paragraph [ref=e172]:
+                  - strong [ref=e173]: Add Graph API permissions
+                  - text: "(Application, with admin consent):"
+                - list [ref=e174]:
+                  - listitem [ref=e175]:
+                    - code [ref=e176]: User.Read.All
+                  - listitem [ref=e177]:
+                    - code [ref=e178]: Group.Read.All
+                  - listitem [ref=e179]:
+                    - code [ref=e180]: GroupMember.Read.All
+              - listitem [ref=e181]:
+                - heading "Configure APIM" [level=3] [ref=e182]
+                - complementary [ref=e183]: This is the most common failure point for forks. Take your time here.
+                - paragraph [ref=e184]: "In your APIM instance:"
+                - paragraph [ref=e185]:
+                  - strong [ref=e186]: a. Create a product
+                  - text: named
+                  - code [ref=e187]: foundrygate
+                  - text: (or your preferred name — record it as
+                  - code [ref=e188]: apimProductId
+                  - text: ).
+                - paragraph [ref=e189]:
+                  - strong [ref=e190]: b. Add an API
+                  - text: "that backends to your Foundry endpoint:"
+                - list [ref=e191]:
+                  - listitem [ref=e192]:
+                    - text: "Backend URL:"
+                    - code [ref=e193]: "https://{your-foundry-name}.openai.azure.com/"
+                  - listitem [ref=e194]: "URL scheme: HTTPS"
+                  - listitem [ref=e195]:
+                    - text: Add this API to the
+                    - code [ref=e196]: foundrygate
+                    - text: product.
+                - paragraph [ref=e197]:
+                  - strong [ref=e198]: c. Apply the token metric policy
+                  - text: "on the API (All operations):"
+                - figure [ref=e200]:
+                  - code [ref=e202]:
+                    - generic [ref=e205]: <policies>
+                    - generic [ref=e208]: <inbound>
+                    - generic [ref=e211]: <base />
+                    - generic [ref=e214]: <llm-emit-token-metric
+                    - generic [ref=e216]: namespace="foundrygate"
+                    - generic [ref=e218]: output-type="SubscriptionId" />
+                    - generic [ref=e221]: </inbound>
+                    - generic [ref=e224]: </policies>
+                  - button "Copy to clipboard" [ref=e226] [cursor=pointer]
+                - paragraph [ref=e228]:
+                  - strong [ref=e229]: d. Apply the token limit policy
+                  - text: "(optional but recommended for rate safety):"
+                - figure [ref=e231]:
+                  - code [ref=e233]:
+                    - generic [ref=e236]: <azure-openai-token-limit
+                    - generic [ref=e238]: tokens-per-minute="500000"
+                    - generic [ref=e240]: counter-key="@(context.Subscription.Id)"
+                    - generic [ref=e242]: estimate-prompt-tokens="true" />
+                  - button "Copy to clipboard" [ref=e244] [cursor=pointer]
+                - paragraph [ref=e246]:
+                  - strong [ref=e247]: "e. Grant APIM access to Foundry:"
+                - figure "Terminal window" [ref=e249]:
+                  - generic [ref=e252]: Terminal window
+                  - code [ref=e254]:
+                    - generic [ref=e256]: az role assignment create \
+                    - generic [ref=e258]: "--role \"Cognitive Services User\" \\"
+                    - generic [ref=e260]: "--assignee <apim-managed-identity-principal-id> \\"
+                    - generic [ref=e262]: "--scope <foundry-resource-id>"
+                  - button "Copy to clipboard" [ref=e264] [cursor=pointer]
+              - listitem [ref=e266]:
+                - heading "Set Bicep parameters" [level=3] [ref=e267]
+                - paragraph [ref=e268]:
+                  - text: Copy
+                  - code [ref=e269]: infra/parameters/dev.bicepparam
+                  - text: "and fill in your values:"
+                - figure [ref=e271]:
+                  - code [ref=e273]:
+                    - generic [ref=e275]: param location = 'eastus2'
+                    - generic [ref=e277]: param environmentName = 'dev'
+                    - generic [ref=e279]: param entraClientId = '<your-app-registration-client-id>'
+                    - generic [ref=e281]: param entraTenantId = '<your-tenant-id>'
+                    - generic [ref=e283]: param apimResourceId = '/subscriptions/.../Microsoft.ApiManagement/service/...'
+                    - generic [ref=e285]: param apimProductId = 'foundrygate'
+                    - generic [ref=e287]: param foundryResourceId = '/subscriptions/.../Microsoft.CognitiveServices/accounts/...'
+                  - button "Copy to clipboard" [ref=e289] [cursor=pointer]
+              - listitem [ref=e291]:
+                - heading "Configure GitHub OIDC" [level=3] [ref=e292]
+                - paragraph [ref=e293]: "Create a federated credential in the Entra App for each environment:"
+                - figure "Terminal window" [ref=e295]:
+                  - generic [ref=e298]: Terminal window
+                  - code [ref=e300]:
+                    - generic [ref=e302]: "# For the dev environment"
+                    - generic [ref=e304]: az ad app federated-credential create \
+                    - generic [ref=e306]: "--id <appId> \\"
+                    - generic [ref=e308]: "--parameters '{"
+                    - generic [ref=e310]: "\"name\": \"foundrygate-dev\","
+                    - generic [ref=e313]: "\"issuer\": \"https://token.actions.githubusercontent.com\","
+                    - generic [ref=e316]: "\"subject\": \"repo:YOUR_ORG/foundry-gate:environment:dev\","
+                    - generic [ref=e319]: "\"audiences\": [\"api://AzureADTokenExchange\"]"
+                    - generic [ref=e322]: "}'"
+                  - button "Copy to clipboard" [ref=e325] [cursor=pointer]
+                - paragraph [ref=e327]:
+                  - text: Repeat for
+                  - code [ref=e328]: environment:production
+                  - text: ","
+                  - code [ref=e329]: environment:dev-destroy
+                  - text: ","
+                  - code [ref=e330]: environment:prod-destroy
+                  - text: .
+              - listitem [ref=e331]:
+                - heading "Add GitHub Actions secrets and variables" [level=3] [ref=e332]
+                - paragraph [ref=e333]:
+                  - strong [ref=e334]: Secrets
+                  - text: "(repo-level):"
+                - table [ref=e335]:
+                  - rowgroup [ref=e336]:
+                    - row "Name Value" [ref=e337]:
+                      - columnheader "Name" [ref=e338]
+                      - columnheader "Value" [ref=e339]
+                  - rowgroup [ref=e340]:
+                    - row "SQL_ADMIN_PASSWORD A strong password for the SQL admin account" [ref=e341]:
+                      - cell "SQL_ADMIN_PASSWORD" [ref=e342]:
+                        - code [ref=e343]: SQL_ADMIN_PASSWORD
+                      - cell "A strong password for the SQL admin account" [ref=e344]
+                    - row "GRAPH_CLIENT_SECRET The Entra App client secret for Graph sync" [ref=e345]:
+                      - cell "GRAPH_CLIENT_SECRET" [ref=e346]:
+                        - code [ref=e347]: GRAPH_CLIENT_SECRET
+                      - cell "The Entra App client secret for Graph sync" [ref=e348]
+                - paragraph [ref=e349]:
+                  - strong [ref=e350]: Variables
+                  - text: "(per GitHub Environment — set in repo Settings → Environments):"
+                - table [ref=e351]:
+                  - rowgroup [ref=e352]:
+                    - row "Name dev prod" [ref=e353]:
+                      - columnheader "Name" [ref=e354]
+                      - columnheader "dev" [ref=e355]
+                      - columnheader "prod" [ref=e356]
+                  - rowgroup [ref=e357]:
+                    - row "AZURE_CLIENT_ID <appId> <appId>" [ref=e358]:
+                      - cell "AZURE_CLIENT_ID" [ref=e359]:
+                        - code [ref=e360]: AZURE_CLIENT_ID
+                      - cell "<appId>" [ref=e361]:
+                        - code [ref=e362]: <appId>
+                      - cell "<appId>" [ref=e363]:
+                        - code [ref=e364]: <appId>
+                    - row "AZURE_TENANT_ID <tenantId> <tenantId>" [ref=e365]:
+                      - cell "AZURE_TENANT_ID" [ref=e366]:
+                        - code [ref=e367]: AZURE_TENANT_ID
+                      - cell "<tenantId>" [ref=e368]:
+                        - code [ref=e369]: <tenantId>
+                      - cell "<tenantId>" [ref=e370]:
+                        - code [ref=e371]: <tenantId>
+                    - row "AZURE_SUBSCRIPTION_ID <subscriptionId> <subscriptionId>" [ref=e372]:
+                      - cell "AZURE_SUBSCRIPTION_ID" [ref=e373]:
+                        - code [ref=e374]: AZURE_SUBSCRIPTION_ID
+                      - cell "<subscriptionId>" [ref=e375]:
+                        - code [ref=e376]: <subscriptionId>
+                      - cell "<subscriptionId>" [ref=e377]:
+                        - code [ref=e378]: <subscriptionId>
+                    - row "RESOURCE_GROUP rg-foundrygate-dev rg-foundrygate-prod" [ref=e379]:
+                      - cell "RESOURCE_GROUP" [ref=e380]:
+                        - code [ref=e381]: RESOURCE_GROUP
+                      - cell "rg-foundrygate-dev" [ref=e382]:
+                        - code [ref=e383]: rg-foundrygate-dev
+                      - cell "rg-foundrygate-prod" [ref=e384]:
+                        - code [ref=e385]: rg-foundrygate-prod
+                    - row "LOCATION eastus2 eastus2" [ref=e386]:
+                      - cell "LOCATION" [ref=e387]:
+                        - code [ref=e388]: LOCATION
+                      - cell "eastus2" [ref=e389]:
+                        - code [ref=e390]: eastus2
+                      - cell "eastus2" [ref=e391]:
+                        - code [ref=e392]: eastus2
+              - listitem [ref=e393]:
+                - heading "Deploy infrastructure" [level=3] [ref=e394]
+                - figure "Terminal window" [ref=e396]:
+                  - generic [ref=e399]: Terminal window
+                  - code [ref=e401]:
+                    - generic [ref=e403]: az deployment sub create \
+                    - generic [ref=e405]: "--template-file infra/main.bicep \\"
+                    - generic [ref=e407]: "--parameters infra/parameters/dev.bicepparam \\"
+                    - generic [ref=e409]: "--parameters sqlAdminPassword=$SQL_ADMIN_PASSWORD"
+                  - button "Copy to clipboard" [ref=e411] [cursor=pointer]
+                - paragraph [ref=e413]: "Expected duration: 8–12 minutes."
+              - listitem [ref=e414]:
+                - heading "Push to main" [level=3] [ref=e415]
+                - figure "Terminal window" [ref=e417]:
+                  - generic [ref=e420]: Terminal window
+                  - code [ref=e422]:
+                    - generic [ref=e424]: git push origin main
+                  - button "Copy to clipboard" [ref=e426] [cursor=pointer]
+                - paragraph [ref=e428]:
+                  - text: This triggers
+                  - code [ref=e429]: api-deploy.yml
+                  - text: ","
+                  - code [ref=e430]: functions-deploy.yml
+                  - text: ", and"
+                  - code [ref=e431]: ui-deploy.yml
+                  - text: . Watch the Actions tab. First run takes ~5 minutes as the Docker image builds cold.
+              - listitem [ref=e432]:
+                - heading "Verify" [level=3] [ref=e433]
+                - list [ref=e434]:
+                  - listitem [ref=e435]:
+                    - text: Navigate to the Static Web App URL (from
+                    - code [ref=e436]: infra
+                    - text: output or Azure portal).
+                  - listitem [ref=e437]: Sign in with an Entra account.
+                  - listitem [ref=e438]:
+                    - text: You should land on
+                    - code [ref=e439]: /me
+                    - text: with a fresh
+                    - code [ref=e440]: QuotaAllocation
+                    - text: and a provisioned APIM key.
+                  - listitem [ref=e441]:
+                    - text: Assign yourself the
+                    - code [ref=e442]: FoundryGate.Admin
+                    - text: app role in Entra and refresh — the admin nav appears.
+            - heading "Troubleshooting" [level=2] [ref=e443]
+            - paragraph [ref=e444]:
+              - strong [ref=e445]: APIM returns 401 on first AI call
+              - text: Check that the
+              - code [ref=e446]: foundrygate
+              - text: product is published and your APIM subscription is in
+              - code [ref=e447]: active
+              - text: state. Run
+              - code [ref=e448]: GET /keys/me
+              - text: to confirm the key was provisioned.
+            - paragraph [ref=e449]:
+              - strong [ref=e450]: Graph sync fails with 403
+              - text: Admin consent has not been granted for the Graph API permissions. Go to Entra → Enterprise Applications → your app → Permissions → Grant admin consent.
+            - paragraph [ref=e451]:
+              - strong [ref=e452]: Container App shows “no healthy upstream”
+              - text: The API is still starting or the migration hasn’t run. Check the Container App log stream and verify the SQL connection string Key Vault reference resolved correctly.
+          - link "Next CLI Setup for Developers" [ref=e455] [cursor=pointer]:
+            - /url: /foundry-gate/getting-started/cli-setup/
+            - img [ref=e456]
+            - generic [ref=e458]:
+              - text: Next
+              - text: CLI Setup for Developers
+  - generic [ref=e461]:
+    - button "Menu" [ref=e462]:
+      - img [ref=e464]
+      - generic: Menu
+    - button "Inspect" [ref=e468]:
+      - img [ref=e470]
+      - generic: Inspect
+    - button "Audit" [ref=e472]:
+      - img [ref=e474]
+      - generic: Audit
+    - button "Settings" [ref=e477]:
+      - img [ref=e479]
+      - generic: Settings

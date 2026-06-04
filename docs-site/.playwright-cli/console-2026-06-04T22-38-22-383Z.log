@@ -1,0 +1,3 @@
+[      62ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:4321/foundry-gate/fonts/Inter-Regular.woff2:0
+[      68ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:4321/foundry-gate/fonts/Inter-SemiBold.woff2:0
+[      76ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:4321/foundry-gate/fonts/MonaspaceArgon-Regular.woff2:0

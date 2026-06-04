@@ -13,43 +13,30 @@ export default defineConfig({
         replacesTitle: true,
       },
       favicon: '/favicon.svg',
+      defaultColorScheme: 'dark',
       customCss: [
         './src/styles/tokens.css',
         './src/styles/typography.css',
         './src/styles/starlight-theme.css',
         './src/styles/motion.css',
       ],
-      social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/kolatts/foundry-gate' },
-      ],
+      social: {
+        github: 'https://github.com/kolatts/foundry-gate',
+      },
       sidebar: [
         {
           label: 'Getting Started',
-          items: [
-            { label: 'What is FoundryGate?', slug: 'index' },
-            { label: 'Fork Guide', slug: 'getting-started/fork-guide' },
-            { label: 'CLI Setup for Developers', slug: 'getting-started/cli-setup' },
-          ],
+          autogenerate: { directory: 'getting-started' },
         },
         {
           label: 'Architecture',
-          items: [
-            { label: 'System Overview', slug: 'architecture/overview' },
-          ],
+          autogenerate: { directory: 'architecture' },
         },
         {
           label: 'Reference',
-          items: [
-            { label: 'Configuration Keys', slug: 'reference/configuration' },
-            { label: 'API Surface', slug: 'reference/api' },
-          ],
+          autogenerate: { directory: 'reference' },
         },
-        {
-          label: 'Contributing',
-          items: [
-            { label: 'Contributing', slug: 'contributing' },
-          ],
-        },
+        { label: 'Contributing', link: 'contributing' },
       ],
       head: [
         {

@@ -1,0 +1,273 @@
+- generic [active] [ref=e1]:
+  - link "Skip to content" [ref=e2] [cursor=pointer]:
+    - /url: "#_top"
+  - generic [ref=e3]:
+    - banner [ref=e4]:
+      - generic [ref=e5]:
+        - link "FoundryGate FoundryGate" [ref=e7] [cursor=pointer]:
+          - /url: /foundry-gate/
+          - img "FoundryGate" [ref=e8]
+          - generic [ref=e9]: FoundryGate
+        - button "Search" [ref=e12] [cursor=pointer]:
+          - img [ref=e13]
+          - generic [ref=e15]: Search
+          - generic [ref=e16]:
+            - generic [ref=e17]: Ctrl
+            - generic [ref=e18]: K
+        - generic [ref=e19]:
+          - link "GitHub" [ref=e21] [cursor=pointer]:
+            - /url: https://github.com/kolatts/foundry-gate
+            - generic [ref=e22]: GitHub
+            - img [ref=e23]
+          - generic [ref=e26]:
+            - generic [ref=e27]: Select theme
+            - img
+            - combobox "Select theme" [ref=e28] [cursor=pointer]:
+              - option "Dark"
+              - option "Light"
+              - option "Auto" [selected]
+            - img
+    - navigation "Main":
+      - list [ref=e32]:
+        - listitem [ref=e33]:
+          - group [ref=e34]:
+            - generic "Getting Started" [ref=e35] [cursor=pointer]:
+              - generic [ref=e36]: Getting Started
+              - img [ref=e37]
+            - list [ref=e39]:
+              - listitem [ref=e40]:
+                - link "Fork Guide" [ref=e41] [cursor=pointer]:
+                  - /url: /foundry-gate/getting-started/fork-guide/
+              - listitem [ref=e42]:
+                - link "CLI Setup for Developers" [ref=e43] [cursor=pointer]:
+                  - /url: /foundry-gate/getting-started/cli-setup/
+        - listitem [ref=e44]:
+          - group [ref=e45]:
+            - generic "Architecture" [ref=e46] [cursor=pointer]:
+              - generic [ref=e47]: Architecture
+              - img [ref=e48]
+            - list [ref=e50]:
+              - listitem [ref=e51]:
+                - link "System Overview" [ref=e52] [cursor=pointer]:
+                  - /url: /foundry-gate/architecture/overview/
+        - listitem [ref=e53]:
+          - group [ref=e54]:
+            - generic "Reference" [ref=e55] [cursor=pointer]:
+              - generic [ref=e56]: Reference
+              - img [ref=e57]
+            - list [ref=e59]:
+              - listitem [ref=e60]:
+                - link "API Surface" [ref=e61] [cursor=pointer]:
+                  - /url: /foundry-gate/reference/api/
+              - listitem [ref=e62]:
+                - link "Configuration Reference" [ref=e63] [cursor=pointer]:
+                  - /url: /foundry-gate/reference/configuration/
+        - listitem [ref=e64]:
+          - link "Contributing" [ref=e65] [cursor=pointer]:
+            - /url: /foundry-gate/contributing
+    - generic [ref=e67]:
+      - complementary [ref=e68]:
+        - navigation "On this page" [ref=e73]:
+          - heading "On this page" [level=2] [ref=e74]
+          - list [ref=e75]:
+            - listitem [ref=e76]:
+              - link "Overview" [ref=e77] [cursor=pointer]:
+                - /url: "#_top"
+            - listitem [ref=e78]:
+              - link "What you need" [ref=e79] [cursor=pointer]:
+                - /url: "#what-you-need"
+            - listitem [ref=e80]:
+              - link "Verify your key" [ref=e81] [cursor=pointer]:
+                - /url: "#verify-your-key"
+            - listitem [ref=e82]:
+              - link "Configure your tool" [ref=e83] [cursor=pointer]:
+                - /url: "#configure-your-tool"
+            - listitem [ref=e84]:
+              - link "Manage your quota" [ref=e85] [cursor=pointer]:
+                - /url: "#manage-your-quota"
+            - listitem [ref=e86]:
+              - link "Quota exhausted?" [ref=e87] [cursor=pointer]:
+                - /url: "#quota-exhausted"
+      - main [ref=e89]:
+        - heading "CLI Setup for Developers" [level=1] [ref=e92]
+        - generic [ref=e94]:
+          - generic [ref=e95]:
+            - paragraph [ref=e96]: "import { Steps, Aside, Tabs, TabItem } from ‘@astrojs/starlight/components’;"
+            - paragraph [ref=e97]: You’ve been granted access by your FoundryGate admin. This guide shows you how to connect Claude Code, Codex CLI, or any OpenAI-compatible client to the gateway in under five minutes.
+            - heading "What you need" [level=2] [ref=e98]
+            - list [ref=e99]:
+              - listitem [ref=e100]:
+                - text: Your
+                - strong [ref=e101]: APIM subscription key
+                - text: — visible on the FoundryGate
+                - code [ref=e102]: /me
+                - text: page
+              - listitem [ref=e103]:
+                - text: Your
+                - strong [ref=e104]: APIM gateway URL
+                - text: — shown in the “Configure your AI CLI” panel on
+                - code [ref=e105]: /me
+              - listitem [ref=e106]:
+                - text: The
+                - strong [ref=e107]: model deployment name
+                - text: you want to use — listed in the same panel
+            - complementary [ref=e108]: "If you don't see a key on `/me`, ask your admin to provision one for your account."
+            - separator [ref=e109]
+            - heading "Verify your key" [level=2] [ref=e110]
+            - paragraph [ref=e111]: "Before configuring any tool, confirm the key works:"
+            - figure "Terminal window" [ref=e113]:
+              - generic [ref=e116]: Terminal window
+              - code [ref=e118]:
+                - generic [ref=e120]: curl https://<your-gateway-url>/openai/deployments/<model-name>/chat/completions?api-version=2024-02-01 \
+                - generic [ref=e122]: "-H \"api-key: <your-key>\" \\"
+                - generic [ref=e124]: "-H \"Content-Type: application/json\" \\"
+                - generic [ref=e126]: "-d '{\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":5}'"
+              - button "Copy to clipboard" [ref=e128] [cursor=pointer]
+            - paragraph [ref=e130]:
+              - text: "Expected: a JSON response with a"
+              - code [ref=e131]: choices
+              - text: array. A
+              - code [ref=e132]: "401"
+              - text: means the key is wrong or the subscription is suspended (quota exhausted — contact your admin).
+            - separator [ref=e133]
+            - heading "Configure your tool" [level=2] [ref=e134]
+            - generic [ref=e135]:
+              - generic [ref=e136]:
+                - paragraph [ref=e137]:
+                  - text: Claude Code supports any OpenAI-compatible endpoint via the
+                  - code [ref=e138]: apiBaseUrl
+                  - text: "config key:"
+                - figure "Terminal window" [ref=e140]:
+                  - generic [ref=e143]: Terminal window
+                  - code [ref=e145]:
+                    - generic [ref=e147]: claude config set apiBaseUrl https://<your-gateway-url>/openai
+                    - generic [ref=e149]: claude config set apiKey <your-key>
+                  - button "Copy to clipboard" [ref=e151] [cursor=pointer]
+                - paragraph [ref=e153]: "Then set your model:"
+                - figure "Terminal window" [ref=e155]:
+                  - generic [ref=e158]: Terminal window
+                  - code [ref=e160]:
+                    - generic [ref=e162]: "# Use the deployment name shown on your /me page"
+                    - generic [ref=e164]: claude config set model <deployment-name>
+                  - button "Copy to clipboard" [ref=e166] [cursor=pointer]
+                - paragraph [ref=e168]: "Test it:"
+                - figure "Terminal window" [ref=e170]:
+                  - generic [ref=e173]: Terminal window
+                  - code [ref=e175]:
+                    - generic [ref=e177]: claude "Say hello from FoundryGate"
+                  - button "Copy to clipboard" [ref=e179] [cursor=pointer]
+              - generic [ref=e181]:
+                - paragraph [ref=e182]:
+                  - text: Codex CLI uses
+                  - code [ref=e183]: OPENAI_BASE_URL
+                  - text: and
+                  - code [ref=e184]: OPENAI_API_KEY
+                  - text: ":"
+                - figure "Terminal window" [ref=e186]:
+                  - generic [ref=e189]: Terminal window
+                  - code [ref=e191]:
+                    - generic [ref=e193]: export OPENAI_BASE_URL=https://<your-gateway-url>/openai
+                    - generic [ref=e195]: export OPENAI_API_KEY=<your-key>
+                    - generic [ref=e197]: export OPENAI_MODEL=<deployment-name>
+                  - button "Copy to clipboard" [ref=e199] [cursor=pointer]
+                - paragraph [ref=e201]:
+                  - text: Add these to your shell profile (
+                  - code [ref=e202]: ~/.zshrc
+                  - text: ","
+                  - code [ref=e203]: ~/.bashrc
+                  - text: ) to persist across sessions.
+                - paragraph [ref=e204]: "Test it:"
+                - figure "Terminal window" [ref=e206]:
+                  - generic [ref=e209]: Terminal window
+                  - code [ref=e211]:
+                    - generic [ref=e213]: codex "Say hello from FoundryGate"
+                  - button "Copy to clipboard" [ref=e215] [cursor=pointer]
+              - figure [ref=e219]:
+                - code [ref=e221]:
+                  - generic [ref=e223]: from openai import AzureOpenAI
+                  - generic [ref=e227]: client = AzureOpenAI(
+                  - generic [ref=e229]: azure_endpoint="https://<your-gateway-url>",
+                  - generic [ref=e231]: api_key="<your-key>",
+                  - generic [ref=e233]: api_version="2024-02-01",
+                  - generic [ref=e235]: )
+                  - generic [ref=e239]: response = client.chat.completions.create(
+                  - generic [ref=e241]: model="<deployment-name>",
+                  - generic [ref=e243]: "messages=[{\"role\": \"user\", \"content\": \"Hello from FoundryGate\"}],"
+                  - generic [ref=e245]: )
+                  - generic [ref=e247]: print(response.choices[0].message.content)
+                - button "Copy to clipboard" [ref=e249] [cursor=pointer]
+              - generic [ref=e251]:
+                - paragraph [ref=e252]: "Any OpenAI-compatible client works. The key headers are:"
+                - table [ref=e253]:
+                  - rowgroup [ref=e254]:
+                    - row "Header Value" [ref=e255]:
+                      - columnheader "Header" [ref=e256]
+                      - columnheader "Value" [ref=e257]
+                  - rowgroup [ref=e258]:
+                    - row "api-key Your APIM subscription key" [ref=e259]:
+                      - cell "api-key" [ref=e260]:
+                        - code [ref=e261]: api-key
+                      - cell "Your APIM subscription key" [ref=e262]
+                    - row "Content-Type application/json" [ref=e263]:
+                      - cell "Content-Type" [ref=e264]:
+                        - code [ref=e265]: Content-Type
+                      - cell "application/json" [ref=e266]:
+                        - code [ref=e267]: application/json
+                - paragraph [ref=e268]: "Base URL pattern:"
+                - figure [ref=e270]:
+                  - code [ref=e272]:
+                    - generic [ref=e274]: https://<gateway-url>/openai/deployments/<deployment-name>/chat/completions?api-version=2024-02-01
+                  - button "Copy to clipboard" [ref=e276] [cursor=pointer]
+            - separator [ref=e278]
+            - heading "Manage your quota" [level=2] [ref=e279]
+            - paragraph [ref=e280]: "Your token budget resets on the 1st of each month. You can:"
+            - list [ref=e281]:
+              - listitem [ref=e282]:
+                - strong [ref=e283]: Check current usage
+                - text: on the
+                - code [ref=e284]: /me
+                - text: page (quota gauge shows tokens used / allocated).
+              - listitem [ref=e285]:
+                - strong [ref=e286]: Request a quota increase
+                - text: via the “Request Quota Increase” button on
+                - code [ref=e287]: /me
+                - text: .
+              - listitem [ref=e288]:
+                - strong [ref=e289]: Rotate your key
+                - text: from
+                - code [ref=e290]: /me
+                - text: if you suspect it’s been compromised.
+            - complementary [ref=e291]: Token counts reset at 00:01 UTC. If you're near your limit at month end, a small delay may restore access automatically.
+            - heading "Quota exhausted?" [level=2] [ref=e292]
+            - paragraph [ref=e293]:
+              - text: If your key returns
+              - code [ref=e294]: "401"
+              - text: mid-month, your allocation is exhausted and your APIM subscription has been suspended. Submit a quota increase request on
+              - code [ref=e295]: /me
+              - text: — your admin will receive a notification.
+          - generic [ref=e297]:
+            - link "Previous Fork Guide" [ref=e298] [cursor=pointer]:
+              - /url: /foundry-gate/getting-started/fork-guide/
+              - img [ref=e299]
+              - generic [ref=e301]:
+                - text: Previous
+                - text: Fork Guide
+            - link "Next System Overview" [ref=e302] [cursor=pointer]:
+              - /url: /foundry-gate/architecture/overview/
+              - img [ref=e303]
+              - generic [ref=e305]:
+                - text: Next
+                - text: System Overview
+  - generic [ref=e308]:
+    - button "Menu" [ref=e309]:
+      - img [ref=e311]
+      - generic: Menu
+    - button "Inspect" [ref=e315]:
+      - img [ref=e317]
+      - generic: Inspect
+    - button "Audit" [ref=e319]:
+      - img [ref=e321]
+      - generic: Audit
+    - button "Settings" [ref=e324]:
+      - img [ref=e326]
+      - generic: Settings
