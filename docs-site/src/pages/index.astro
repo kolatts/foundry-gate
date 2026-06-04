@@ -1,0 +1,684 @@
+---
+// FoundryGate — marketing landing page
+// Replaces the Starlight splash; Starlight still handles all /docs/* routes
+const base = import.meta.env.BASE_URL;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FoundryGate — Token budget management for Azure AI Foundry</title>
+  <meta name="description" content="FoundryGate sits between your teams and Microsoft Foundry — enforcing budgets, surfacing spend, and routing models without changing a line of application code." />
+  <meta property="og:title" content="FoundryGate" />
+  <meta property="og:description" content="Token budgets, APIM keys, and quota governance for Azure AI Foundry." />
+  <meta property="og:image" content={`${base}og-logo.png`} />
+  <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+  <link rel="stylesheet" href={`${base}_astro/landing.css`} />
+  <style>
+    /* ── Tokens ─────────────────────────────────────────── */
+    :root {
+      --fg-bg-base:     #080C12;
+      --fg-bg-surface:  #0D1520;
+      --fg-bg-raised:   #111927;
+      --fg-bg-overlay:  #162032;
+      --fg-border-subtle: #1E2D42;
+      --fg-border-strong: #2D4460;
+      --fg-azure-dim:   #0558A0;
+      --fg-azure:       #0078D4;
+      --fg-azure-hover: #3BA3E8;
+      --fg-azure-neon:  #4DCFFF;
+      --fg-ember-soft:  #FFB347;
+      --fg-ember:       #F58025;
+      --fg-ember-hot:   #FF5400;
+      --fg-text-primary:   #E8EEF5;
+      --fg-text-secondary: #A0B0C0;
+      --fg-text-muted:     #6B7E94;
+      --fg-success: #22C55E;
+      --fg-info:    #38BDF8;
+      --fg-font-ui:   'Inter', system-ui, -apple-system, sans-serif;
+      --fg-font-mono: 'Monaspace Argon', 'Fira Code', monospace;
+    }
+
+    /* ── Reset ──────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--fg-bg-base);
+      color: var(--fg-text-primary);
+      font-family: var(--fg-font-ui);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { text-decoration: none; color: inherit; }
+
+    /* ── Nav ────────────────────────────────────────────── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2.5rem;
+      height: 56px;
+      border-bottom: 1px solid var(--fg-border-subtle);
+      position: sticky;
+      top: 0;
+      background: var(--fg-bg-base);
+      z-index: 50;
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .nav-logo img {
+      height: 28px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .nav-links a {
+      padding: 0.4rem 0.75rem;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--fg-text-secondary);
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .nav-links a:hover {
+      color: var(--fg-text-primary);
+      background: var(--fg-bg-surface);
+    }
+
+    .nav-signin {
+      margin-left: 0.5rem;
+      padding: 0.4rem 1rem !important;
+      background: var(--fg-bg-surface) !important;
+      border: 1px solid var(--fg-border-strong) !important;
+      color: var(--fg-text-primary) !important;
+      border-radius: 6px;
+    }
+
+    .nav-signin:hover {
+      border-color: var(--fg-azure) !important;
+      color: var(--fg-azure-neon) !important;
+    }
+
+    /* ── Hero ───────────────────────────────────────────── */
+    .hero {
+      display: grid;
+      grid-template-columns: 1fr 1.15fr;
+      gap: 3rem;
+      align-items: center;
+      min-height: calc(100vh - 56px);
+      padding: 3rem 2.5rem 3rem 3.5rem;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .hero-left {
+      display: flex;
+      flex-direction: column;
+      gap: 2rem;
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--fg-azure-neon);
+      background: color-mix(in srgb, var(--fg-azure) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--fg-azure) 30%, transparent);
+      padding: 0.3rem 0.75rem;
+      border-radius: 100px;
+      width: fit-content;
+    }
+
+    h1 {
+      font-size: clamp(2.8rem, 4.5vw, 4.2rem);
+      font-weight: 700;
+      line-height: 1.08;
+      letter-spacing: -0.03em;
+      color: var(--fg-text-primary);
+    }
+
+    h1 .accent {
+      color: var(--fg-azure-neon);
+    }
+
+    .hero-sub {
+      font-size: 1rem;
+      line-height: 1.65;
+      color: var(--fg-text-secondary);
+      max-width: 38ch;
+    }
+
+    .cta-group {
+      display: flex;
+      align-items: center;
+      gap: 0.875rem;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.65rem 1.4rem;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      background: var(--fg-azure);
+      color: #fff;
+      transition: background 0.2s, box-shadow 0.25s;
+    }
+
+    .btn-primary:hover {
+      background: var(--fg-azure-hover);
+      box-shadow: 0 0 20px 2px color-mix(in srgb, var(--fg-azure-neon) 30%, transparent);
+    }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.65rem 1.4rem;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      border: 1px solid var(--fg-border-strong);
+      color: var(--fg-text-secondary);
+      transition: border-color 0.2s, color 0.2s;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--fg-azure);
+      color: var(--fg-text-primary);
+    }
+
+    .hero-icons {
+      display: flex;
+      align-items: center;
+      gap: 1.25rem;
+      padding-top: 0.5rem;
+    }
+
+    .hero-icons img {
+      height: 18px;
+      opacity: 0.35;
+      filter: invert(1);
+    }
+
+    /* ── Dashboard mockup ───────────────────────────────── */
+    .dashboard-wrap {
+      position: relative;
+    }
+
+    .dashboard-wrap::before {
+      content: '';
+      position: absolute;
+      inset: -40px;
+      background: radial-gradient(ellipse at 60% 50%,
+        color-mix(in srgb, var(--fg-azure) 8%, transparent) 0%,
+        transparent 70%);
+      pointer-events: none;
+    }
+
+    .dashboard {
+      background: var(--fg-bg-surface);
+      border: 1px solid var(--fg-border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      font-size: 11.5px;
+      box-shadow:
+        0 0 0 1px var(--fg-border-subtle),
+        0 24px 64px color-mix(in srgb, #000 60%, transparent);
+      position: relative;
+    }
+
+    /* Window chrome */
+    .db-chrome {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.6rem 0.875rem;
+      border-bottom: 1px solid var(--fg-border-subtle);
+      background: var(--fg-bg-raised);
+    }
+
+    .db-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+    }
+
+    .db-dot.red    { background: #FF5F57; }
+    .db-dot.yellow { background: #FEBC2E; }
+    .db-dot.green  { background: #28C840; }
+
+    .db-url {
+      margin-left: 0.75rem;
+      font-size: 10.5px;
+      color: var(--fg-text-muted);
+      font-family: var(--fg-font-mono);
+    }
+
+    /* App layout */
+    .db-body {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      height: 420px;
+    }
+
+    /* Sidebar */
+    .db-sidebar {
+      background: var(--fg-bg-raised);
+      border-right: 1px solid var(--fg-border-subtle);
+      padding: 0.75rem 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+
+    .db-sidebar-logo {
+      padding: 0.5rem 0.875rem 0.875rem;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--fg-text-primary);
+      letter-spacing: -0.01em;
+      border-bottom: 1px solid var(--fg-border-subtle);
+      margin-bottom: 0.4rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .db-sidebar-logo span {
+      color: var(--fg-azure-neon);
+    }
+
+    .db-nav-item {
+      padding: 0.35rem 0.875rem;
+      color: var(--fg-text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .db-nav-item.active {
+      color: var(--fg-text-primary);
+      background: color-mix(in srgb, var(--fg-azure) 10%, transparent);
+      border-left: 2px solid var(--fg-azure);
+    }
+
+    .db-nav-item:hover:not(.active) {
+      color: var(--fg-text-secondary);
+      background: color-mix(in srgb, var(--fg-azure) 5%, transparent);
+    }
+
+    /* Main content */
+    .db-main {
+      padding: 0.875rem;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .db-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .db-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--fg-text-primary);
+    }
+
+    .db-period {
+      font-size: 10px;
+      color: var(--fg-text-muted);
+      font-family: var(--fg-font-mono);
+      background: var(--fg-bg-overlay);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    /* Stat cards */
+    .db-cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.5rem;
+    }
+
+    .db-card {
+      background: var(--fg-bg-overlay);
+      border: 1px solid var(--fg-border-subtle);
+      border-radius: 6px;
+      padding: 0.6rem 0.75rem;
+    }
+
+    .db-card-label {
+      font-size: 9.5px;
+      color: var(--fg-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.25rem;
+    }
+
+    .db-card-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--fg-text-primary);
+      font-family: var(--fg-font-mono);
+      letter-spacing: -0.02em;
+    }
+
+    .db-card-sub {
+      font-size: 9px;
+      color: var(--fg-text-muted);
+      margin-top: 0.15rem;
+    }
+
+    .db-card-sub.up   { color: var(--fg-success); }
+    .db-card-sub.warn { color: var(--fg-ember-soft); }
+
+    /* Table */
+    .db-table-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--fg-text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .db-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .db-table th {
+      text-align: left;
+      font-size: 9.5px;
+      font-weight: 600;
+      color: var(--fg-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.3rem 0.5rem;
+      border-bottom: 1px solid var(--fg-border-subtle);
+    }
+
+    .db-table td {
+      padding: 0.35rem 0.5rem;
+      font-size: 11px;
+      color: var(--fg-text-secondary);
+      border-bottom: 1px solid color-mix(in srgb, var(--fg-border-subtle) 50%, transparent);
+    }
+
+    .db-table td:first-child { color: var(--fg-text-primary); font-weight: 500; }
+    .db-table td.mono { font-family: var(--fg-font-mono); font-size: 10.5px; }
+
+    .db-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .db-bar {
+      flex: 1;
+      height: 4px;
+      background: var(--fg-bg-overlay);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .db-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      background: var(--fg-azure);
+    }
+
+    .db-bar-fill.warn { background: var(--fg-ember-soft); }
+    .db-bar-fill.crit { background: var(--fg-ember-hot); }
+
+    .db-badge {
+      display: inline-block;
+      font-size: 9px;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+      font-weight: 600;
+    }
+
+    .db-badge.ok     { background: color-mix(in srgb,var(--fg-success) 15%,transparent); color: var(--fg-success); }
+    .db-badge.warn   { background: color-mix(in srgb,var(--fg-ember-soft) 15%,transparent); color: var(--fg-ember-soft); }
+    .db-badge.paused { background: color-mix(in srgb,var(--fg-text-muted) 15%,transparent); color: var(--fg-text-muted); }
+
+    /* ── Animations ─────────────────────────────────────── */
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero-eyebrow { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.05s both; }
+    h1            { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.12s both; }
+    .hero-sub     { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.20s both; }
+    .cta-group    { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.28s both; }
+    .hero-icons   { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.36s both; }
+    .dashboard-wrap { animation: rise 0.6s cubic-bezier(0.16,1,0.3,1) 0.18s both; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ─── Nav ─────────────────────────────────────────────── -->
+<nav>
+  <a href={base} class="nav-logo">
+    <img src={`${base}logo.png`} alt="FoundryGate" />
+  </a>
+  <div class="nav-links">
+    <a href={`${base}getting-started/fork-guide/`}>Docs</a>
+    <a href={`${base}reference/api/`}>API</a>
+    <a href="https://github.com/kolatts/foundry-gate" target="_blank" rel="noopener">GitHub</a>
+    <a href={`${base}getting-started/fork-guide/`} class="nav-signin">Get started →</a>
+  </div>
+</nav>
+
+<!-- ─── Hero ─────────────────────────────────────────────── -->
+<main>
+  <section class="hero">
+
+    <!-- Left: copy -->
+    <div class="hero-left">
+      <span class="hero-eyebrow">Open source · Azure AI Foundry</span>
+
+      <h1>
+        Every token.<br />
+        Every team.<br />
+        Under <span class="accent">control.</span>
+      </h1>
+
+      <p class="hero-sub">
+        FoundryGate sits between your teams and Microsoft Foundry — enforcing
+        budgets, surfacing spend, and routing models without changing a line of
+        application code.
+      </p>
+
+      <div class="cta-group">
+        <a href={`${base}getting-started/fork-guide/`} class="btn-primary">
+          → Get started
+        </a>
+        <a href="https://github.com/kolatts/foundry-gate" class="btn-secondary" target="_blank" rel="noopener">
+          &lt;/&gt; View on GitHub
+        </a>
+      </div>
+
+      <div class="hero-icons">
+        <img src={`${base}icons.png`} alt="FoundryGate UI icons" style="height:22px;opacity:0.25;filter:invert(1) brightness(2);" />
+      </div>
+    </div>
+
+    <!-- Right: dashboard mockup -->
+    <div class="dashboard-wrap">
+      <div class="dashboard">
+
+        <!-- Window chrome -->
+        <div class="db-chrome">
+          <div class="db-dot red"></div>
+          <div class="db-dot yellow"></div>
+          <div class="db-dot green"></div>
+          <span class="db-url">foundrygate.yourtenant.com / admin / overview</span>
+        </div>
+
+        <!-- App body -->
+        <div class="db-body">
+
+          <!-- Sidebar -->
+          <aside class="db-sidebar">
+            <div class="db-sidebar-logo">fg<span>|</span>admin</div>
+            <div class="db-nav-item active">▪ Overview</div>
+            <div class="db-nav-item">▪ Teams</div>
+            <div class="db-nav-item">▪ Budgets</div>
+            <div class="db-nav-item">▪ Models</div>
+            <div class="db-nav-item">▪ Requests</div>
+            <div class="db-nav-item">▪ Approvals</div>
+            <div class="db-nav-item">▪ Alerts</div>
+            <div class="db-nav-item">▪ Settings</div>
+            <div class="db-nav-item">▪ API Keys</div>
+          </aside>
+
+          <!-- Main -->
+          <div class="db-main">
+            <div class="db-header-row">
+              <span class="db-title">Overview</span>
+              <span class="db-period">May 1 – May 31, 2025  ▾  Filter</span>
+            </div>
+
+            <!-- Stat cards -->
+            <div class="db-cards">
+              <div class="db-card">
+                <div class="db-card-label">Total tokens</div>
+                <div class="db-card-value">577.9M</div>
+                <div class="db-card-sub up">↑ 8% vs Apr</div>
+              </div>
+              <div class="db-card">
+                <div class="db-card-label">Active users</div>
+                <div class="db-card-value">216</div>
+                <div class="db-card-sub">12 teams</div>
+              </div>
+              <div class="db-card">
+                <div class="db-card-label">Hard stopped</div>
+                <div class="db-card-value">4</div>
+                <div class="db-card-sub warn">Quota exceeded</div>
+              </div>
+              <div class="db-card">
+                <div class="db-card-label">Pending requests</div>
+                <div class="db-card-value">12</div>
+                <div class="db-card-sub warn">Needs review</div>
+              </div>
+            </div>
+
+            <!-- Table -->
+            <div class="db-table-label">Token spend by team</div>
+            <table class="db-table">
+              <thead>
+                <tr>
+                  <th>Team</th>
+                  <th>Tokens</th>
+                  <th>Usage</th>
+                  <th>Spend</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Platform</td>
+                  <td class="mono">138.7M</td>
+                  <td>
+                    <div class="db-bar-wrap">
+                      <div class="db-bar"><div class="db-bar-fill" style="width:93%"></div></div>
+                      <span>93%</span>
+                    </div>
+                  </td>
+                  <td class="mono">$2,107</td>
+                  <td><span class="db-badge warn">Near limit</span></td>
+                </tr>
+                <tr>
+                  <td>Product</td>
+                  <td class="mono">98.5M</td>
+                  <td>
+                    <div class="db-bar-wrap">
+                      <div class="db-bar"><div class="db-bar-fill" style="width:66%"></div></div>
+                      <span>66%</span>
+                    </div>
+                  </td>
+                  <td class="mono">$1,498</td>
+                  <td><span class="db-badge ok">OK</span></td>
+                </tr>
+                <tr>
+                  <td>Analytics</td>
+                  <td class="mono">72.1M</td>
+                  <td>
+                    <div class="db-bar-wrap">
+                      <div class="db-bar"><div class="db-bar-fill" style="width:48%"></div></div>
+                      <span>48%</span>
+                    </div>
+                  </td>
+                  <td class="mono">$1,097</td>
+                  <td><span class="db-badge ok">OK</span></td>
+                </tr>
+                <tr>
+                  <td>DevEx</td>
+                  <td class="mono">55.9M</td>
+                  <td>
+                    <div class="db-bar-wrap">
+                      <div class="db-bar"><div class="db-bar-fill crit" style="width:100%"></div></div>
+                      <span>100%</span>
+                    </div>
+                  </td>
+                  <td class="mono">$850</td>
+                  <td><span class="db-badge paused">Suspended</span></td>
+                </tr>
+                <tr>
+                  <td>Security</td>
+                  <td class="mono">41.2M</td>
+                  <td>
+                    <div class="db-bar-wrap">
+                      <div class="db-bar"><div class="db-bar-fill" style="width:27%"></div></div>
+                      <span>27%</span>
+                    </div>
+                  </td>
+                  <td class="mono">$627</td>
+                  <td><span class="db-badge ok">OK</span></td>
+                </tr>
+              </tbody>
+            </table>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+</body>
+</html>

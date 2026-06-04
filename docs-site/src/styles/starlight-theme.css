@@ -1,7 +1,11 @@
 /* Map --fg-* design tokens onto Starlight's --sl-* variables.
-   This file is the only place Starlight internals are touched. */
+   Force dark by targeting both the theme attribute and bare :root. */
+
+/* Force dark on first paint — prevents light flash */
+:root { color-scheme: dark; }
 
 :root[data-theme='dark'],
+:root[data-theme='light'],
 :root {
   /* Accent — Azure scale */
   --sl-color-accent-low:  var(--fg-azure-dim);

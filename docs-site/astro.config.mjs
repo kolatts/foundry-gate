@@ -13,7 +13,6 @@ export default defineConfig({
         replacesTitle: true,
       },
       favicon: '/favicon.svg',
-      defaultColorScheme: 'dark',
       customCss: [
         './src/styles/tokens.css',
         './src/styles/typography.css',
