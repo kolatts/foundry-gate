@@ -19,7 +19,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Web/Components/ApiKeyDisplay.razor`
 
 ### Build /me/request quota increase form with validation and submission feedback (#50)
-Create `Pages/Me/Request.razor` (route `/me/request`, requires `Developer` role). The form has two fields: `RequestedTokenLimit` (numeric input, must be greater than current allocation, validated client-side) and `Justification` (textarea, 500-char max with a live counter). On submit, call `POST /requests` and handle the response: on success, show a success toast and navigate back to `/me`; on `400` (invalid amount), display inline field errors; on `409` (pending request already exists), show a warning toast explaining they must wait for the current request to be decided. Use `EditForm` with `DataAnnotationsValidator` for client-side validation backed by the shared request DTO from `FoundryGate.Contracts`.
+Create `Pages/Me/Request.razor` (route `/me/request`, requires `Developer` role). The form has two fields: `RequestedTokenLimit` (numeric input, must be greater than current allocation, validated client-side) and `Justification` (textarea, 500-char max with a live counter). On submit, call `POST /requests` and handle the response: on success, show a success toast and navigate back to `/me`; on `400` (invalid amount), display inline field errors; on `409` (pending request already exists), show a warning toast explaining they must wait for the current request to be decided. Use `EditForm` with `DataAnnotationsValidator` for client-side validation backed by the shared request DTO from `FoundryGate.Domain`.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Me/Request.razor`

@@ -30,7 +30,7 @@ foundrygate/
 ├── src/
 │   ├── FoundryGate.Api/             # .NET 9 Web API (ASP.NET Core)
 │   ├── FoundryGate.Data/            # EF Core + Azure SQL
-│   ├── FoundryGate.Shared/          # DTOs, enums shared between API and UI
+│   ├── FoundryGate.Domain/          # DTOs, enums shared between API and UI
 │   └── FoundryGate.Web/             # Blazor WASM frontend
 ├── docs/
 │   ├── architecture.md
@@ -530,7 +530,7 @@ Implement in this sequence to maintain a working state at each step:
 ```
 Step 1  — Repo scaffold: solution, projects, folder structure, .gitignore, README stub
 Step 2  — FoundryGate.Data: EF models, DbContext, migrations, seed data (SystemConfiguration defaults)
-Step 3  — FoundryGate.Shared: DTOs, enums, request/response models
+Step 3  — FoundryGate.Domain: DTOs, enums, request/response models
 Step 4  — FoundryGate.Api: project setup, Entra auth, EF wiring, health endpoint
 Step 5  — API: Users endpoints + Entra auto-provision on /users/me
 Step 6  — API: Groups endpoints

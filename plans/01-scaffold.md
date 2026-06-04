@@ -10,14 +10,14 @@ This epic establishes the repository skeleton and .NET 10 solution that every su
 ## Approach
 
 ### Initialize .NET 10 solution with four projects and folder structure (#20)
-Create the solution file at the repo root (`FoundryGate.sln`) and scaffold the four projects under `src/`: `FoundryGate.Api` (ASP.NET Core Web API), `FoundryGate.Data` (class library for EF Core entities and DbContext), `FoundryGate.Contracts` (class library for shared DTOs and enums), and `FoundryGate.Web` (Blazor WASM). Add project references so that `Api` depends on `Data` and `Contracts`, and `Web` depends on `Contracts`. Use `global.json` to pin the .NET 10 SDK version. Verify `dotnet build` succeeds with zero warnings.
+Create the solution file at the repo root (`FoundryGate.sln`) and scaffold the four projects under `src/`: `FoundryGate.Api` (ASP.NET Core Web API), `FoundryGate.Data` (class library for EF Core entities and DbContext), `FoundryGate.Domain` (class library for shared DTOs and enums), and `FoundryGate.Web` (Blazor WASM). Add project references so that `Api` depends on `Data` and `Contracts`, and `Web` depends on `Contracts`. Use `global.json` to pin the .NET 10 SDK version. Verify `dotnet build` succeeds with zero warnings.
 
 Files expected to be created or modified:
 - `global.json`
 - `FoundryGate.sln`
 - `src/FoundryGate.Api/FoundryGate.Api.csproj`
 - `src/FoundryGate.Data/FoundryGate.Data.csproj`
-- `src/FoundryGate.Contracts/FoundryGate.Contracts.csproj`
+- `src/FoundryGate.Domain/FoundryGate.Domain.csproj`
 - `src/FoundryGate.Web/FoundryGate.Web.csproj`
 
 ### Add .gitignore, EditorConfig, and solution-level NuGet config (#21)
