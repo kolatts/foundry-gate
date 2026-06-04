@@ -3,3 +3,7 @@ dist/
 .astro/
 src/assets/fonts/
 public/fonts/
+.playwright-cli/
+*.png
+*.jpg
+package-lock.json
