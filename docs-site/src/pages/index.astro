@@ -512,14 +512,14 @@ const base = import.meta.env.BASE_URL;
 
       <h1>
         Every token.<br />
-        Every team.<br />
+        Every developer.<br />
         Under <span class="accent">control.</span>
       </h1>
 
       <p class="hero-sub">
-        FoundryGate sits between your teams and Microsoft Foundry — enforcing
-        budgets, surfacing spend, and routing models without changing a line of
-        application code.
+        Azure AI Foundry has no concept of per-developer budgets. FoundryGate adds them —
+        individual APIM keys, monthly token quotas, Entra-synced provisioning, and a
+        self-service dashboard. All on top of your existing Foundry deployment.
       </p>
 
       <div class="cta-group">
@@ -554,120 +554,128 @@ const base = import.meta.env.BASE_URL;
           <!-- Sidebar -->
           <aside class="db-sidebar">
             <div class="db-sidebar-logo">fg<span>|</span>admin</div>
-            <div class="db-nav-item active">▪ Overview</div>
-            <div class="db-nav-item">▪ Teams</div>
-            <div class="db-nav-item">▪ Budgets</div>
-            <div class="db-nav-item">▪ Models</div>
+            <div class="db-nav-item active">▪ Developers</div>
+            <div class="db-nav-item">▪ Groups</div>
             <div class="db-nav-item">▪ Requests</div>
-            <div class="db-nav-item">▪ Approvals</div>
-            <div class="db-nav-item">▪ Alerts</div>
-            <div class="db-nav-item">▪ Settings</div>
+            <div class="db-nav-item">▪ Models</div>
             <div class="db-nav-item">▪ API Keys</div>
+            <div class="db-nav-item">▪ Entra Sync</div>
+            <div class="db-nav-item">▪ Audit</div>
+            <div class="db-nav-item">▪ Config</div>
           </aside>
 
           <!-- Main -->
           <div class="db-main">
             <div class="db-header-row">
-              <span class="db-title">Overview</span>
-              <span class="db-period">May 1 – May 31, 2025  ▾  Filter</span>
+              <span class="db-title">Developers</span>
+              <span class="db-period">Jun 1 – Jun 30, 2025  ▾</span>
             </div>
 
             <!-- Stat cards -->
             <div class="db-cards">
               <div class="db-card">
-                <div class="db-card-label">Total tokens</div>
-                <div class="db-card-value">577.9M</div>
-                <div class="db-card-sub up">↑ 8% vs Apr</div>
+                <div class="db-card-label">Active devs</div>
+                <div class="db-card-value">48</div>
+                <div class="db-card-sub up">↑ 6 via Entra sync</div>
               </div>
               <div class="db-card">
-                <div class="db-card-label">Active users</div>
-                <div class="db-card-value">216</div>
-                <div class="db-card-sub">12 teams</div>
+                <div class="db-card-label">Tokens used</div>
+                <div class="db-card-value">2.1B</div>
+                <div class="db-card-sub">of 4.8B allocated</div>
               </div>
               <div class="db-card">
-                <div class="db-card-label">Hard stopped</div>
-                <div class="db-card-value">4</div>
+                <div class="db-card-label">Suspended</div>
+                <div class="db-card-value">3</div>
                 <div class="db-card-sub warn">Quota exceeded</div>
               </div>
               <div class="db-card">
-                <div class="db-card-label">Pending requests</div>
-                <div class="db-card-value">12</div>
-                <div class="db-card-sub warn">Needs review</div>
+                <div class="db-card-label">Pending</div>
+                <div class="db-card-value">7</div>
+                <div class="db-card-sub warn">Quota requests</div>
               </div>
             </div>
 
             <!-- Table -->
-            <div class="db-table-label">Token spend by team</div>
+            <div class="db-table-label">Developer quota usage</div>
             <table class="db-table">
               <thead>
                 <tr>
-                  <th>Team</th>
+                  <th>Developer</th>
                   <th>Tokens</th>
                   <th>Usage</th>
-                  <th>Spend</th>
+                  <th>Quota source</th>
                   <th>Status</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td>Platform</td>
-                  <td class="mono">138.7M</td>
+                  <td>
+                    alex.chen
+                    <span style="font-size:8px;color:var(--fg-azure-neon);margin-left:4px">⬡ Entra</span>
+                  </td>
+                  <td class="mono">892.4M</td>
                   <td>
                     <div class="db-bar-wrap">
-                      <div class="db-bar"><div class="db-bar-fill" style="width:93%"></div></div>
-                      <span>93%</span>
+                      <div class="db-bar"><div class="db-bar-fill warn" style="width:89%"></div></div>
+                      <span>89%</span>
                     </div>
                   </td>
-                  <td class="mono">$2,107</td>
+                  <td style="color:var(--fg-text-muted)">Group: Platform</td>
                   <td><span class="db-badge warn">Near limit</span></td>
                 </tr>
                 <tr>
-                  <td>Product</td>
-                  <td class="mono">98.5M</td>
+                  <td>
+                    sarah.kim
+                    <span style="font-size:8px;color:var(--fg-azure-neon);margin-left:4px">⬡ Entra</span>
+                  </td>
+                  <td class="mono">541.2M</td>
                   <td>
                     <div class="db-bar-wrap">
-                      <div class="db-bar"><div class="db-bar-fill" style="width:66%"></div></div>
-                      <span>66%</span>
+                      <div class="db-bar"><div class="db-bar-fill" style="width:54%"></div></div>
+                      <span>54%</span>
                     </div>
                   </td>
-                  <td class="mono">$1,498</td>
-                  <td><span class="db-badge ok">OK</span></td>
+                  <td style="color:var(--fg-text-muted)">User override</td>
+                  <td><span class="db-badge ok">Active</span></td>
                 </tr>
                 <tr>
-                  <td>Analytics</td>
-                  <td class="mono">72.1M</td>
-                  <td>
-                    <div class="db-bar-wrap">
-                      <div class="db-bar"><div class="db-bar-fill" style="width:48%"></div></div>
-                      <span>48%</span>
-                    </div>
-                  </td>
-                  <td class="mono">$1,097</td>
-                  <td><span class="db-badge ok">OK</span></td>
-                </tr>
-                <tr>
-                  <td>DevEx</td>
-                  <td class="mono">55.9M</td>
+                  <td>marcus.j</td>
+                  <td class="mono">1.0B</td>
                   <td>
                     <div class="db-bar-wrap">
                       <div class="db-bar"><div class="db-bar-fill crit" style="width:100%"></div></div>
                       <span>100%</span>
                     </div>
                   </td>
-                  <td class="mono">$850</td>
+                  <td style="color:var(--fg-text-muted)">Default</td>
                   <td><span class="db-badge paused">Suspended</span></td>
                 </tr>
                 <tr>
-                  <td>Security</td>
-                  <td class="mono">41.2M</td>
+                  <td>
+                    priya.n
+                    <span style="font-size:8px;color:var(--fg-azure-neon);margin-left:4px">⬡ Entra</span>
+                  </td>
+                  <td class="mono">218.7M</td>
                   <td>
                     <div class="db-bar-wrap">
-                      <div class="db-bar"><div class="db-bar-fill" style="width:27%"></div></div>
-                      <span>27%</span>
+                      <div class="db-bar"><div class="db-bar-fill" style="width:22%"></div></div>
+                      <span>22%</span>
                     </div>
                   </td>
-                  <td class="mono">$627</td>
-                  <td><span class="db-badge ok">OK</span></td>
+                  <td style="color:var(--fg-text-muted)">Group: Infra</td>
+                  <td><span class="db-badge ok">Active</span></td>
+                </tr>
+                <tr>
+                  <td>james.o</td>
+                  <td class="mono">94.1M</td>
+                  <td>
+                    <div class="db-bar-wrap">
+                      <div class="db-bar"><div class="db-bar-fill" style="width:9%"></div></div>
+                      <span>9%</span>
+                    </div>
+                  </td>
+                  <td style="color:var(--fg-text-muted)">Unlimited</td>
+                  <td><span class="db-badge ok">Active</span></td>
                 </tr>
               </tbody>
             </table>

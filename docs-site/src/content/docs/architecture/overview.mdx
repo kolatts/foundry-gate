@@ -1,99 +1,160 @@
 ---
 title: System Overview
-description: How FoundryGate's components fit together — quota resolution, APIM enforcement, and usage sync.
+description: How FoundryGate's components fit together — quota resolution, APIM enforcement, Entra sync, and usage tracking.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
+FoundryGate is a governance and access-management layer that sits in front of your existing Azure AI Foundry deployment. It does not replace APIM or Foundry — it adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
+
 ## Component diagram
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Developer                            │
-│          Claude Code / Codex / OpenAI SDK                   │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ api-key header
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Azure API Management (existing)                │
-│  • foundrygate product (subscription key auth)              │
-│  • llm-emit-token-metric → Application Insights             │
-│  • llm-token-limit (rate safety ceiling)                    │
-│  • Backend: Azure AI Foundry                                │
-└───────────┬──────────────────────────┬──────────────────────┘
-            │ forwards request         │ emits token metrics
-            ▼                          ▼
-┌──────────────────────┐   ┌───────────────────────────────┐
-│ Azure AI Foundry     │   │ Application Insights / Log    │
-│ (model deployments)  │   │ Analytics Workspace           │
-└──────────────────────┘   └───────────────┬───────────────┘
-                                           │ Azure Monitor Query
-                                           │ (every 15 min)
-                            ┌──────────────▼───────────────┐
-                            │   FoundryGate.Functions       │
-                            │   • UsageSyncFunction        │
-                            │   • MonthlyResetFunction     │
-                            └──────────────┬───────────────┘
-                                           │ EF Core
-┌─────────────────────────────────────────▼───────────────────┐
-│                        Azure SQL                            │
-│  Users · Groups · QuotaAllocations · AuditLog · ...        │
-└─────────────────────────────────────────┬───────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Developer (alex@company.com)                                │
+│  Claude Code · Codex · OpenAI SDK                           │
+│  api-key: fg-sub-alex-xxxx  (personal APIM subscription)    │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ HTTPS + api-key header
+                               ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Azure API Management                                        │
+│  Product: foundrygate  (scopes all Foundry routes)          │
+│  ├─ llm-emit-token-metric  → Application Insights           │
+│  └─ Backend: Azure AI Foundry                               │
+└──────────────┬───────────────────────────┬───────────────────┘
+               │ forwards to Foundry        │ emits per-subscription
+               ▼                           │ token counts
+┌──────────────────────┐                   ▼
+│ Azure AI Foundry     │   ┌──────────────────────────────────┐
+│ (model deployments)  │   │ Application Insights             │
+└──────────────────────┘   │ Log Analytics Workspace          │
+                           └──────────────┬───────────────────┘
+                                          │ Azure Monitor Query
+                                          │ every 15 minutes
+                           ┌──────────────▼───────────────────┐
+                           │ FoundryGate.Functions            │
+                           │  UsageSyncFunction  (15 min)     │
+                           │  MonthlyResetFunction (1st/month)│
+                           └──────────────┬───────────────────┘
+                                          │ EF Core (read/write)
+          ┌───────────────────────────────▼──────────────────────────┐
+          │  Azure SQL — FoundryGate database                        │
+          │  Users · QuotaAllocations · Groups · AuditLog · ...      │
+          └───────────────────────────────┬──────────────────────────┘
                                           │ EF Core
-┌─────────────────────────────────────────▼───────────────────┐
-│                  FoundryGate.Api (Container App)            │
-│  REST API · Entra auth · IQuotaResolutionService           │
-│  IUserLifecycleService · IApimKeyService · IAuditService   │
-└───────────────────────────┬─────────────────────────────────┘
-                            │ Blazor WASM HTTP calls
-                            ▼
-┌─────────────────────────────────────────────────────────────┐
-│           FoundryGate.Web (Static Web Apps)                 │
-│   /me · /requests · /users · /groups · /foundry · /audit   │
-└─────────────────────────────────────────────────────────────┘
+          ┌───────────────────────────────▼──────────────────────────┐
+          │  FoundryGate.Api  (Azure Container App)                  │
+          │  ASP.NET Core · Entra ID bearer auth                     │
+          │  IUserLifecycleService  →  APIM Management API          │
+          │  IQuotaResolutionService                                 │
+          │  IEntraUserSyncService  →  Microsoft Graph               │
+          │  IAuditService                                           │
+          └───────────────────────────────┬──────────────────────────┘
+                                          │ REST API calls
+          ┌───────────────────────────────▼──────────────────────────┐
+          │  FoundryGate.Web  (Blazor WASM · Azure Static Web Apps)  │
+          │  /me  /requests  /users  /groups  /foundry  /audit       │
+          └──────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Entra ID sync — how access follows your org chart
+
+FoundryGate uses the Microsoft Graph API (app-only credentials stored in Key Vault) to keep developer access in sync with your Entra directory. This is how access governance works without any manual admin work after initial setup.
+
+### First login — automatic provisioning
+
+When a developer signs in through the Blazor UI for the first time, `GET /users/me` triggers the full provision pipeline:
+
+```
+1. Extract Entra object ID (oid claim) from the bearer token
+2. Look up developer in the FoundryGate database
+3. If not found → call Graph GET /users/{oid}
+     → fetch displayName, mail, employeeId
+     → INSERT User row
+     → resolve monthly token quota (5-level resolution below)
+     → call APIM Management: POST /subscriptions
+         name: foundrygate-{userId}
+         scope: /products/foundrygate
+     → store encrypted APIM key in SQL (Key Vault key-wrapping)
+     → INSERT QuotaAllocation for current period
+4. Return UserProfileDto with masked key and current quota
+```
+
+The developer never needs to contact an admin. Their key is ready the moment they first open the app.
+
+### Entra group sync — bulk provisioning and deprovisioning
+
+Admins can link a FoundryGate group to an Entra group ID. Running `POST /groups/{id}/sync-entra` (or triggering from the UI) calls:
+
+```
+Graph GET /groups/{entraGroupId}/members
+  → For each member in Entra:
+      if not in FoundryGate DB → INSERT User
+                                 (no APIM key yet — key on first login)
+      if already exists        → update display fields
+  → For members no longer in the Entra group:
+      APIM Management: DELETE /subscriptions/{sid}
+      User.IsActive = false
+      QuotaAllocation.IsHardStopped = true
+```
+
+<Aside type="caution">
+**Departures are hard**: when a developer leaves the Entra group, their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional. Quota exhaustion only suspends; Entra departure permanently revokes.
+</Aside>
+
+### Bulk user sync
+
+`POST /users/sync` pages through all users assigned to the FoundryGate service principal via Graph and upserts them. New users get a record with the default quota; departed users are deactivated. Useful for an initial import of your entire org before any developer has logged in.
 
 ---
 
 ## Five-level quota resolution
 
-When a developer's allocation is created or updated, `IQuotaResolutionService` walks this chain — highest priority wins:
+When a developer's allocation is created or updated, `IQuotaResolutionService` walks this chain — first match wins:
 
 ```
-1. User.IsUnlimited = true          → unlimited (skip all)
-2. User.MonthlyTokenQuota is set    → use that value
-3. Any group has IsUnlimited = true → unlimited
-4. Max(Group.MonthlyTokenQuota)     → use the highest group quota
-5. SystemConfiguration["DefaultMonthlyTokenQuota"]  → system default
+1. User.IsUnlimited = true               → unlimited (skip everything)
+2. User.MonthlyTokenQuota is set         → use the user-specific value
+3. Any group the user belongs to has
+   IsUnlimited = true                    → unlimited
+4. Max(Group.MonthlyTokenQuota) across
+   all the user's groups                 → use the highest group quota
+5. SystemConfiguration
+   ["DefaultMonthlyTokenQuota"]          → system-wide default (e.g. 1M)
 ```
 
-The resolved value is written to `QuotaAllocation` for the current period **and** pushed to the APIM subscription's cache key so the `azure-openai-token-limit` policy has a per-user ceiling.
+The resolved value is written to `QuotaAllocation` for the current period. Admins can see which level resolved each developer's quota in the user detail view.
 
 ---
 
-## APIM enforcement model
+## APIM enforcement — how limits actually block traffic
 
-FoundryGate does not rely on a DB flag poll to block traffic. The enforcement chain is:
+FoundryGate doesn't rely on a database flag being checked on every request. The enforcement is APIM-native:
 
 ```
-UsageSyncFunction (every 15 min)
-  └── reads TokensUsed from Log Analytics (period totals by subscription ID)
-  └── updates QuotaAllocation.TokensUsed in SQL
-  └── if TokensUsed >= AllocatedTokens:
-        └── APIM Management: PATCH subscription → state: suspended
-        └── QuotaAllocation.IsHardStopped = true
+UsageSyncFunction  (runs every 15 minutes)
+  ├── Queries Log Analytics: token totals per APIM subscription ID
+  │   for the current billing period
+  ├── Updates QuotaAllocation.TokensUsed in SQL
+  └── For each developer where TokensUsed ≥ AllocatedTokens:
+        APIM Management: PATCH /subscriptions/{sid}?state=suspended
+        QuotaAllocation.IsHardStopped = true
 
-  Result: APIM returns 401 immediately — no gateway traffic passes
+Result: APIM returns 401 immediately. No Foundry traffic passes.
 ```
 
-At monthly reset:
+There is up to a 15-minute window between hitting the limit and enforcement. This is intentional — querying Log Analytics on every request would add latency to every AI call.
+
 ```
-MonthlyResetFunction (00:01 UTC, 1st of month)
-  └── for each active user:
-        └── resolve quota for new period → INSERT QuotaAllocation
-        └── if subscription was suspended → PATCH → state: active
-        └── IsHardStopped = false
-  └── write audit log: quota.monthly-reset
+MonthlyResetFunction  (00:01 UTC on the 1st of each month)
+  ├── For each active developer:
+  │     Resolve quota for new period → INSERT QuotaAllocation
+  │     If subscription was suspended → PATCH → state: active
+  │     IsHardStopped = false
+  └── Write audit log: quota.monthly-reset
 ```
 
 ---
@@ -104,24 +165,25 @@ MonthlyResetFunction (00:01 UTC, 1st of month)
                     ┌─────────────────┐
                     │   No key yet    │
                     └────────┬────────┘
-                             │ first login / admin provision
+                             │ first login  OR  admin provisions
                              ▼
                     ┌─────────────────┐
-                    │     Active      │◄──── monthly reset re-enables
+                    │     Active      │ ◄── monthly reset re-enables
                     └────┬───────┬───┘
                          │       │
-           quota hit     │       │ admin deactivate
+        quota exhausted  │       │  admin deactivates / Entra departure
                          ▼       ▼
                ┌──────────┐  ┌──────────┐
                │ Suspended│  │ Deleted  │
-               │(quota)   │  │(inactive)│
+               │ (quota)  │  │(inactive)│
                └──────────┘  └──────────┘
-                             re-activate → full provision
-                             (new key, new allocation)
+                  Resets      Re-activation runs full provision pipeline
+                  on 1st      (new key, new allocation)
 ```
 
-**Suspend** (quota exhaustion): APIM subscription state → `suspended`. Key exists, can be re-enabled.  
-**Delete** (admin deactivation / Entra departure): APIM subscription deleted. Re-activation requires a new `POST /keys/{userId}/provision`.
+**Suspend** — quota exhaustion: APIM subscription state → `suspended`. Key exists. Automatically re-enabled at monthly reset.
+
+**Delete** — admin deactivation or Entra departure: APIM subscription deleted entirely. Key stops working immediately and cannot be restored without a full re-provision.
 
 ---
 
@@ -129,10 +191,10 @@ MonthlyResetFunction (00:01 UTC, 1st of month)
 
 | Project | Role |
 |---|---|
-| `FoundryGate.Api` | REST API, served by Azure Container App |
+| `FoundryGate.Api` | REST API, Azure Container App, Entra auth |
 | `FoundryGate.Data` | EF Core entities, DbContext, migrations |
 | `FoundryGate.Domain` | Shared DTOs and enums — no framework deps |
-| `FoundryGate.Functions` | Timer-triggered Azure Functions (reset + sync) |
-| `FoundryGate.Web` | Blazor WASM frontend (MudBlazor) |
-| `FoundryGate.Database` | SQL Server project, builds dacpac |
-| `FoundryGate.Cli` | `foundrygate` dotnet tool (compare, deploy, seed) |
+| `FoundryGate.Functions` | Timer-triggered Azure Functions (reset + usage sync) |
+| `FoundryGate.Web` | Blazor WASM frontend (MudBlazor), Azure Static Web Apps |
+| `FoundryGate.Database` | SQL Server project (.sqlproj) — builds dacpac for CI/CD |
+| `FoundryGate.Cli` | `foundrygate` dotnet tool — schema compare, deploy, seed |

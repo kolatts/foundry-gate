@@ -1,0 +1,83 @@
+---
+title: Why FoundryGate?
+description: What Azure AI Foundry doesn't give you out of the box — and how FoundryGate fills the gap.
+sidebar:
+  order: 0
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+Azure AI Foundry is excellent at what it does: hosting model deployments and exposing them through Azure API Management. But when you move from a single team's prototype to an org-wide AI platform, you hit a wall — Foundry was designed for deployment management, not developer access governance.
+
+## What Foundry gives you out of the box
+
+When you set up Azure AI Foundry with APIM today, you get:
+
+- **Deployment-level TPM/RPM limits** — throttling that applies to *all callers combined*, not per user
+- **Azure RBAC** — coarse-grained roles: Cognitive Services User gets access to everything, or nothing
+- **A shared API key or Entra auth** — either one key that all developers share (no attribution), or RBAC that grants blanket access with no quota
+- **Azure Monitor metrics** — aggregate token consumption across the deployment, not broken down by who consumed what
+
+That works fine when you have three engineers sharing a dev environment. It breaks when you have 200 developers across 12 teams, each expecting a fair share of a limited TPM budget.
+
+## The gaps FoundryGate fills
+
+<CardGrid>
+  <Card title="Per-developer token budgets" icon="bars">
+    Azure AI Foundry has no concept of "alex@company.com gets 1 million tokens in June." FoundryGate assigns each developer their own monthly quota — enforced at the APIM subscription level, not as a soft warning.
+  </Card>
+  <Card title="Individual APIM subscription keys" icon="key">
+    Instead of a shared key or RBAC access, every developer gets their own APIM subscription key. Usage is attributed per person. Keys can be rotated or revoked per person without affecting anyone else.
+  </Card>
+  <Card title="Entra-synced provisioning" icon="setting">
+    When a developer joins a FoundryGate-linked Entra group, they're automatically provisioned: user record created, key issued, quota resolved. When they leave, the key is revoked. No manual admin work.
+  </Card>
+  <Card title="Self-service for developers" icon="list-format">
+    Developers sign in with their Entra account, see their current quota and usage, rotate their own key, and request a quota increase with a justification — all without contacting IT.
+  </Card>
+</CardGrid>
+
+## The comparison
+
+| Capability | Azure AI Foundry alone | With FoundryGate |
+|---|---|---|
+| Per-developer token budget | ❌ Deployment-level only | ✅ Per user, per month |
+| Individual API keys | ❌ Shared key or RBAC | ✅ One APIM subscription per developer |
+| Hard quota enforcement | ❌ No blocking mechanism | ✅ APIM subscription suspended at limit |
+| Entra-based auto-provisioning | ❌ Manual RBAC assignment | ✅ Group sync → key + quota |
+| Automatic deprovisioning | ❌ Manual RBAC removal | ✅ Departure detected → key deleted |
+| Monthly reset | ❌ Manual | ✅ Azure Function fires at 00:01 UTC on the 1st |
+| Quota increase workflow | ❌ None | ✅ Submit → admin approves → quota applied |
+| Per-developer usage visibility | ❌ Aggregate only | ✅ Dashboard + audit log per user |
+| Model deployment management | ❌ Portal only | ✅ Admin UI in FoundryGate |
+
+## How it works
+
+FoundryGate sits in front of your existing Azure AI Foundry deployment. It does not replace APIM or Foundry — it *governs* access to them.
+
+```
+Developer → APIM (with their personal key) → Azure AI Foundry
+                ↓
+         FoundryGate tracks usage,
+         enforces budgets,
+         manages the key lifecycle
+```
+
+**Key provisioning**: When a developer first signs in, FoundryGate calls the APIM Management API to create an APIM subscription scoped to the FoundryGate product. The key is issued to the developer. Foundry never knows about individual developers — APIM does.
+
+**Quota enforcement**: An Azure Function reads token consumption from Application Insights every 15 minutes. When a developer's `TokensUsed` reaches their `AllocatedTokens`, FoundryGate suspends their APIM subscription. APIM immediately starts returning 401. No traffic passes. At month-end, the Function resets all allocations and re-enables suspended subscriptions.
+
+**Entra sync**: FoundryGate uses the Microsoft Graph API (app-only credentials) to read your Entra directory. Developers in a linked Entra group are auto-provisioned. Developers who leave the group are auto-deprovisioned. The sync runs on demand or can be triggered automatically.
+
+<Aside type="tip">
+FoundryGate is open-source and designed to be forked. It connects to **your** APIM, **your** Foundry account, and **your** Entra tenant. No data leaves your Azure subscription.
+</Aside>
+
+## Who it's for
+
+FoundryGate is for platform and infrastructure teams who want to:
+
+- Roll out Azure AI Foundry access to the whole organisation without a quota free-for-all
+- Give individual developers accountability over their AI usage
+- Automate the access lifecycle instead of managing RBAC spreadsheets
+- Let developers self-serve without opening up the Azure portal to everyone
