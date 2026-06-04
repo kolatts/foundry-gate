@@ -1,0 +1,94 @@
+/* Foundry Gate — typography tokens
+   Fonts: Inter (UI) + Monaspace Argon (code/numbers)
+   Place .woff2 files in wwwroot/fonts/
+   ------------------------------------------------- */
+
+@font-face {
+    font-family: 'Inter';
+    src: url('/fonts/Inter-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Inter';
+    src: url('/fonts/Inter-Medium.woff2') format('woff2');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Inter';
+    src: url('/fonts/Inter-SemiBold.woff2') format('woff2');
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Monaspace Argon';
+    src: url('/fonts/MonaspaceArgon-Regular.woff2') format('woff2');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: 'Monaspace Argon';
+    src: url('/fonts/MonaspaceArgon-Medium.woff2') format('woff2');
+    font-weight: 500;
+    font-style: normal;
+    font-display: swap;
+}
+
+:root {
+    --fg-font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+    --fg-font-mono: 'Monaspace Argon', 'Fira Code', 'Cascadia Code', monospace;
+
+    --fg-text-display: 32px;
+    --fg-text-heading: 20px;
+    --fg-text-subheading: 14px;
+    --fg-text-body: 14px;
+    --fg-text-small: 12px;
+    --fg-text-label: 11px;
+    --fg-text-mono: 13px;
+    --fg-text-mono-sm: 11px;
+
+    --fg-weight-normal: 400;
+    --fg-weight-medium: 500;
+    --fg-weight-bold: 600;
+
+    --fg-leading-tight: 1.25;
+    --fg-leading-normal: 1.5;
+    --fg-leading-loose: 1.7;
+}
+
+body {
+    font-family: var(--fg-font-ui);
+    font-size: var(--fg-text-body);
+    font-weight: var(--fg-weight-normal);
+    line-height: var(--fg-leading-normal);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.fg-mono {
+    font-family: var(--fg-font-mono);
+    font-size: var(--fg-text-mono);
+    font-variant-ligatures: contextual;
+}
+
+.fg-mono-raw {
+    font-family: var(--fg-font-mono);
+    font-size: var(--fg-text-mono-sm);
+    font-variant-ligatures: none;
+}
+
+.fg-label {
+    font-size: var(--fg-text-label);
+    font-weight: 500;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+}

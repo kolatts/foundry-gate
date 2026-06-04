@@ -12,13 +12,46 @@ This epic bootstraps `FoundryGate.Web` as a production-ready Blazor WebAssembly 
 ### Scaffold FoundryGate.Web with MSAL auth, role guards, and typed API client (#48)
 Configure `Microsoft.Authentication.WebAssembly.Msal` in `Program.cs` with the Entra tenant ID, client ID, and scopes read from `wwwroot/appsettings.json`. Add a `RedirectToLogin` component and an `AuthorizeRouteView` in `App.razor` that redirects unauthenticated users and shows an `AccessDenied` component for unauthorised roles. Define two role constants (`Admin`, `Developer`) in `FoundryGate.Domain` and apply `[Authorize(Roles = ...)]` on page components. Register a typed `FoundryGateApiClient` using `IHttpClientFactory` with `AuthorizationMessageHandler` to attach Bearer tokens automatically.
 
-Install `MudBlazor` and register `services.AddMudServices()` and the required CSS/JS in `index.html`. Replace the default Blazor shell with a `MudLayout` containing a `MudAppBar` (showing the signed-in user's display name and a sign-out icon button), a `MudDrawer` for the nav sidebar, and `MudNavMenu` / `MudNavLink` items grouped into Developer and Admin sections — the Admin group is hidden via `AuthorizeView`. Use `MudSnackbar` (injected `ISnackbar`) as the notification service throughout the app, replacing any need for a custom `ToastService`.
+Install `MudBlazor` and register `services.AddMudServices()` and the required CSS/JS in `index.html`. Replace the default Blazor shell with a `MudLayout` containing a `MudAppBar` (showing the signed-in user's display name and a sign-out icon button), a `MudDrawer` for the nav sidebar, and `MudNavMenu` / `MudNavLink` items grouped into Developer and Admin sections — the Admin group is hidden via `AuthorizeView`. Use `MudSnackbar` (injected `ISnackbar`) as the notification service throughout the app.
+
+**Brand theme wiring (source: `content/`):**
+
+Configure a `MudTheme` in `Program.cs` that maps the `--fg-*` design tokens to MudBlazor's palette:
+```csharp
+var theme = new MudTheme {
+    PaletteDark = new PaletteDark {
+        Primary         = "#0078D4",   // --fg-azure
+        PrimaryLighten  = "#4DCFFF",   // --fg-azure-neon
+        PrimaryDarken   = "#0558A0",   // --fg-azure-dim
+        Warning         = "#FFB347",   // --fg-ember-soft
+        Error           = "#FF5400",   // --fg-ember-hot
+        Success         = "#22C55E",   // --fg-success
+        Info            = "#38BDF8",   // --fg-info
+        Background      = "#080C12",   // --fg-bg-base
+        Surface         = "#0D1520",   // --fg-bg-surface
+        DrawerBackground = "#0D1520",
+        AppbarBackground = "#080C12",
+        TextPrimary     = "#E8EEF5",   // --fg-text-primary
+        TextSecondary   = "#A0B0C0",   // --fg-text-secondary
+    },
+    Typography = new Typography {
+        Default = new Default { FontFamily = ["Inter", "system-ui", "-apple-system", "sans-serif"] },
+    },
+};
+```
+
+Register `services.AddMudServices(config => { config.SnackbarConfiguration.PositionClass = Defaults.Classes.Position.BottomRight; })`.
+
+Add `content/typography.css` to `wwwroot/css/typography.css` (adjust `@font-face` src URLs to `/fonts/` for the Blazor static file base). Place Inter and Monaspace Argon `.woff2` files in `wwwroot/fonts/` (not committed — fetched during CI via Fontsource or download script). Reference from `index.html`. Use `class="fg-mono"` on all token counts, quota numbers, and API key display fields so they render in Monaspace Argon. Add `content/tokens.md`'s CSS variables as `wwwroot/css/tokens.css` and link in `index.html` — this gives Blazor components access to the full `--fg-*` palette for any custom CSS that MudBlazor doesn't cover.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Web/FoundryGate.Web.csproj`
 - `src/FoundryGate.Web/Program.cs`
 - `src/FoundryGate.Web/wwwroot/appsettings.json`
 - `src/FoundryGate.Web/wwwroot/index.html`
+- `src/FoundryGate.Web/wwwroot/css/tokens.css` (from `content/tokens.md` color values)
+- `src/FoundryGate.Web/wwwroot/css/typography.css` (from `content/typography.css`)
+- `src/FoundryGate.Web/wwwroot/fonts/README.md` (download instructions)
 - `src/FoundryGate.Web/App.razor`
 - `src/FoundryGate.Web/Shared/MainLayout.razor`
 - `src/FoundryGate.Web/Shared/NavMenu.razor`
