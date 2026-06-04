@@ -10,7 +10,12 @@ This epic adds two admin-triggered sync endpoints that reconcile FoundryGate's l
 ## Approach
 
 ### Implement bulk Entra user sync via Microsoft Graph SDK (POST /users/sync) (#40)
-Add `POST /users/sync` (admin-only) to `UsersController`. Use `GraphServiceClient` with `client_credentials` to call `GET /applications/{appId}/appRoleAssignedTo` (or the group-assignment equivalent) to fetch all Entra users assigned to the FoundryGate service principal. For each returned user, upsert a `User` row (insert if `EntraObjectId` is new, update display name and email if changed). Use `ExecutePageIteratorAsync` to handle Graph paging transparently. Return a summary response with `Created`, `Updated`, and `Skipped` counts. Write a bulk audit log entry for the sync run.
+Add `POST /users/sync` (admin-only). Call Graph `GET /applications/{appId}/appRoleAssignedTo` to fetch all assigned Entra users. For each:
+- **Present in both** → upsert display fields, update `LastSyncedAt`
+- **New in Entra, not in DB** → INSERT User with default quota (`IsActive = true`); do NOT provision an APIM key (key only provisioned on first actual login or explicit admin action)
+- **In DB but absent from Entra** → call `IUserLifecycleService.DeprovisionAsync(trigger: EntraDeparture, userId)`: **deletes** APIM subscription (not just suspends), sets `IsActive = false`, hard-stops current allocation, cancels Pending requests (see **plan #21**). Do NOT delete the User row — preserve audit history.
+
+Use `ExecutePageIteratorAsync` for Graph paging. Return `{ added, updated, deactivated }`. Write a `sync.bulk-users` audit log entry.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/UsersController.cs`

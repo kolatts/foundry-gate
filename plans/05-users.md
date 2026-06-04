@@ -10,7 +10,7 @@ This epic delivers the full users surface of the API: a developer-facing `GET /u
 ## Approach
 
 ### Implement GET /users/me with first-login auto-provisioning flow (#28)
-Read the `oid` (object ID) and `preferred_username` claims from the validated JWT using `HttpContext.User`. Query the `Users` table by `EntraObjectId`. If no record exists, create one with `Status = Active`, `CreatedAt = UtcNow`, and default quota settings derived from the active SystemConfiguration defaults, then write a `UserProvisioned` audit log entry. Return a `UserResponse` DTO including the user's current `QuotaAllocation` for the running period. Wrap the provisioning logic in a scoped `IUserProvisioningService` to keep the controller thin and the logic testable. The endpoint requires the `RequireDeveloper` policy.
+Read the `oid` claim from the validated JWT. Query `Users` by `EntraObjectId`. If found, update display fields and return. If not found, call `IUserLifecycleService.ProvisionAsync(trigger: FirstLogin, entraClaims)` which runs the full provision pipeline (see **plan #21** for the authoritative sequence): Graph lookup → INSERT User → resolve quota → APIM subscription create → write audit log. The service handles APIM failure compensation (rolls back the User INSERT if APIM fails). Return a `UserProfileDto` with the masked key hint and current allocation.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/UsersController.cs`
@@ -18,7 +18,13 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/Services/UserProvisioningService.cs`
 
 ### Implement admin user management endpoints: list, detail, quota, activate/deactivate (#29)
-Add admin-only endpoints under the same `UsersController`: `GET /users` (paginated list with optional search by name/email, using `PagedResult<UserResponse>`), `GET /users/{id}` (full detail including group memberships and current quota allocation), `GET /users/{id}/quota` (quota breakdown showing which level resolved the allocation), `POST /users/{id}/activate` and `POST /users/{id}/deactivate` (toggle `UserStatus`, write audit log). All admin endpoints require the `RequireAdmin` policy. Use `IQueryable` with `AsNoTracking` for list queries and explicit `Include` for detail queries.
+Add admin-only endpoints: `GET /users` (paginated, searchable), `GET /users/{id}` (full detail), `GET /users/{id}/quota` (quota breakdown with resolved level).
+
+`POST /users/{id}/deactivate` → calls `IUserLifecycleService.DeprovisionAsync(trigger: AdminDeactivation, userId)`: **deletes** the APIM subscription, nulls out key fields on User, sets `IsActive = false`, hard-stops current QuotaAllocation, cancels any Pending increase requests (see **plan #21** for full sequence).
+
+`POST /users/{id}/activate` → calls `IUserLifecycleService.ReactivateAsync(userId)`: sets `IsActive = true` then runs the full provision pipeline (quota resolution + APIM subscription create). If an orphan APIM subscription named `foundrygate-{userId}` already exists, reuse it rather than creating a duplicate.
+
+All admin endpoints require `RequireAdmin` policy. Use `AsNoTracking` for list queries, explicit `Include` for detail.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/UsersController.cs`
