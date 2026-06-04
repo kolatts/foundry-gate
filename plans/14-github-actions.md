@@ -1,42 +1,60 @@
-# GitHub Actions CI/CD — API, UI, Functions, docs, and infra workflows
+# GitHub Actions CI/CD — overview
 
 > GitHub: #14  
 > Milestone: v0.3 — Infrastructure  
 > Labels: epic, infra
 
 ## Overview
-Five GitHub Actions workflows automate the full build, test, and deploy lifecycle using OIDC federation — no long-lived credentials stored in GitHub. `api.yml` builds/tests/deploys the API Container App. `functions.yml` builds and deploys the Azure Functions app. `ui.yml` publishes and deploys the Blazor WASM frontend. `docs.yml` builds the Astro docs site and deploys to GitHub Pages. `infra.yml` runs Bicep what-if on PRs and full deploy on merge to main.
+All CI/CD is defined in `.github/workflows/`. Infra and code pipelines are strictly separated. Every deploy to a live environment requires a GitHub Environment gate. Destruction pipelines are `workflow_dispatch`-only with typed confirmation. See **plan #22** for the complete pipeline reference including all job steps, secrets, variables, and environment configuration.
+
+**Pipeline inventory:**
+
+| File | Trigger | Purpose |
+|---|---|---|
+| `infra-deploy.yml` | push/PR `infra/**`, `workflow_dispatch` | Bicep what-if on PRs; deploy to dev then prod |
+| `infra-destroy.yml` | `workflow_dispatch` only | Tear down an entire environment's resource group |
+| `api-deploy.yml` | push/PR `src/FoundryGate.Api/**` | Build → test → Docker → Container App |
+| `functions-deploy.yml` | push/PR `src/FoundryGate.Functions/**` | Build → test → publish → Functions deploy |
+| `ui-deploy.yml` | push/PR `src/FoundryGate.Web/**` | Build → publish → Static Web Apps |
+| `docs-deploy.yml` | push/PR `docs-site/**` | Astro build → GitHub Pages |
+| `deploy-all.yml` | `workflow_dispatch` | Full-stack deploy in dependency order |
 
 ## Approach
 
-### Write api.yml: dotnet build/test, Docker push to ACR, and Container App deploy (#45)
-Create `.github/workflows/api.yml` triggered on `push` to `main` (paths: `src/FoundryGate.Api/**`, `src/FoundryGate.Data/**`, `src/FoundryGate.Domain/**`) and on `pull_request`. Two jobs: `build-test` runs `dotnet restore`, `dotnet build -c Release`, `dotnet test --no-build`. The `deploy` job (main only) uses OIDC `azure/login`, runs `docker build` and `docker push` to ACR, then `az containerapp update --image` to roll out the new tag. Store ACR name, Container App name, and resource group as GitHub Actions variables (not secrets).
+### Configure GitHub Environments with protection rules (#68)
+Create four environments in repo Settings → Environments: `dev` (no protection), `production` (required reviewer), `dev-destroy` (required reviewer + 5 min wait timer), `prod-destroy` (2+ required reviewers + 30 min wait timer). Set environment-scoped variables (`RESOURCE_GROUP`, `CONTAINER_APP_NAME`, etc.) and OIDC-specific variables (`AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`) per environment so workflow files have no hardcoded values.
 
 Files expected to be created or modified:
-- `.github/workflows/api.yml`
+- GitHub repo Settings → Environments (configured in UI, not a file)
+- `docs/fork-guide.md` — environment setup instructions
+
+### Write infra-deploy.yml: what-if on PRs, deploy dev then prod (#69)
+Three jobs: `validate` (bicep build + lint), `what-if` (posts diff as PR comment; always runs), `deploy-dev` (environment: dev; runs on push to main), `deploy-prod` (environment: production; runs on `workflow_dispatch` with env=prod; requires successful dev deploy). See plan #22 for full job definitions.
+
+Files expected to be created or modified:
+- `.github/workflows/infra-deploy.yml`
+
+### Write infra-destroy.yml: typed confirmation guard + environment approval (#70)
+`workflow_dispatch` only. Inputs: `environment` (dev|prod) and `confirmation` (must equal `DESTROY-{environment}`). Jobs: `validate-confirmation` (fails fast if mismatch), `list-resources` (prints what will be deleted), then `destroy-dev` or `destroy-prod` behind the appropriate destroy environment gate. See plan #22 for full job definitions.
+
+Files expected to be created or modified:
+- `.github/workflows/infra-destroy.yml`
+
+### Write api-deploy.yml, functions-deploy.yml, ui-deploy.yml, docs-deploy.yml (#71 #72 #73 #74)
+Four separate files, each with a `build-test` job (always runs, including on PRs) and a `deploy` job (main/dispatch only, gated by GitHub Environment). PRs get build validation + SWA preview URLs where applicable. See plan #22 for per-pipeline details.
+
+Files expected to be created or modified:
+- `.github/workflows/api-deploy.yml`
+- `.github/workflows/functions-deploy.yml`
+- `.github/workflows/ui-deploy.yml`
+- `.github/workflows/docs-deploy.yml`
 - `src/FoundryGate.Api/Dockerfile`
 
-### Write functions.yml: dotnet publish and Azure Functions deploy (#59)
-Create `.github/workflows/functions.yml` triggered on `push` to `main` (paths: `src/FoundryGate.Functions/**`, `src/FoundryGate.Data/**`) and on `pull_request` (build only). The `build-test` job runs `dotnet build -c Release` on the Functions project. The `deploy` job (main only) runs `dotnet publish -c Release -o publish/functions`, then uses `Azure/functions-action@v1` with OIDC to deploy the publish output to the Function App. The Function App name is stored as a GitHub Actions variable.
+### Write deploy-all.yml: full-stack deploy via workflow_call (#75)
+Manual `workflow_dispatch` with environment input. Calls each deployment workflow in dependency order (infra first, then api/functions/ui in parallel, docs independently). Used to rebuild a fresh environment after a destroy. See plan #22.
 
 Files expected to be created or modified:
-- `.github/workflows/functions.yml`
-
-### Write ui.yml: Blazor WASM publish and Static Web Apps deploy (#46)
-Create `.github/workflows/ui.yml` triggered on `push` to `main` (paths: `src/FoundryGate.Web/**`, `src/FoundryGate.Domain/**`) and on `pull_request`. Use `actions/setup-dotnet@v4` pinned to .NET 10, run `dotnet publish -c Release -o publish/web`, then `Azure/static-web-apps-deploy@v1` with the deployment token to deploy `publish/web/wwwroot`. On pull requests, Static Web Apps automatically creates a preview environment and posts the URL as a PR comment.
-
-Files expected to be created or modified:
-- `.github/workflows/ui.yml`
-
-### Write infra.yml: Bicep what-if on PRs and deploy on merge to main (#47)
-Create `.github/workflows/infra.yml` triggered on `push` to `main` (paths: `infra/**`) and `pull_request`. On PRs: OIDC login → `az deployment sub what-if` → post output as PR comment via `actions/github-script`. On merge: `az deployment sub create` with `prod.bicepparam`, gated by a GitHub Environment (`production`) requiring manual approval. No long-lived credentials — OIDC only.
-
-Files expected to be created or modified:
-- `.github/workflows/infra.yml`
+- `.github/workflows/deploy-all.yml`
 
 ## Verification
-- [ ] `api.yml` green on a clean branch; Docker image pushed and Container App updated
-- [ ] `functions.yml` deploys Functions app and both timer functions appear in Azure portal
-- [ ] `ui.yml` deploys Blazor WASM; Static Web Apps preview URL posted on PRs
-- [ ] `infra.yml` posts what-if diff as a PR comment
-- [ ] No long-lived Azure credentials stored anywhere in GitHub secrets
+- [ ] See plan #22 verification checklist
