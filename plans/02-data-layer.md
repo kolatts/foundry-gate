@@ -26,8 +26,21 @@ Files expected to be created or modified:
 - `src/FoundryGate.Data/FoundryGateDbContext.cs`
 - `src/FoundryGate.Data/DesignTimeDbContextFactory.cs`
 
-### Create initial EF migration and seed the seven SystemConfiguration defaults (#23)
-Run `dotnet ef migrations add InitialCreate` against `FoundryGate.Data` using the design-time factory. Review the generated migration for correctness (indexes, FK constraints, column types). Add a data seeder (or use `modelBuilder.HasData`) to insert the seven SystemConfiguration rows: `DefaultUserQuota`, `DefaultGroupQuota`, `DefaultTenantQuota`, `QuotaResetDay`, `MaxKeysPerUser`, `ApiVersion`, and `MaintenanceMode`. Wire the migration and seeder to run on startup in `Program.cs` (development only) or via a separate CLI tool.
+### Create initial EF migration and seed the eight SystemConfiguration defaults (#23)
+Run `dotnet ef migrations add InitialCreate` against `FoundryGate.Data` using the design-time factory. Review the generated migration for correctness (indexes, FK constraints, column types). Add a data seeder (or `modelBuilder.HasData`) to insert these `SystemConfiguration` rows — all values are placeholder strings that fork operators must replace via the admin `/config` page:
+
+| Key | Default | Purpose |
+|---|---|---|
+| `DefaultMonthlyTokenQuota` | `"1000000"` | Per-user fallback monthly token budget |
+| `ApimResourceId` | `""` | ARM resource ID of the APIM instance |
+| `ApimGatewayUrl` | `""` | APIM gateway base URL shown to developers on `/me` |
+| `ApimProductId` | `"foundrygate"` | APIM product name covering Foundry routes |
+| `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account |
+| `EntraTenantId` | `""` | Azure AD tenant ID for Graph sync |
+| `EntraGroupSyncEnabled` | `"false"` | Whether Entra group sync is active |
+| `ResetDayOfMonth` | `"1"` | Day the monthly reset fires (always 1 for v1) |
+
+Wire the migration and seeder to run on startup in `Program.cs` (development only) or via a separate CLI tool.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Data/Migrations/` (generated migration files)

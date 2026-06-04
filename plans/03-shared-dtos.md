@@ -26,6 +26,8 @@ Files expected to be created or modified:
 - `src/FoundryGate.Domain/Config/SystemConfigResponse.cs`
 - `src/FoundryGate.Domain/Config/UpdateSystemConfigRequest.cs`
 
+> **Note:** `FoundryGate.Domain/Foundry/` (FoundryDeploymentResponse, CreateFoundryDeploymentRequest, FoundryModelResponse) is added as part of epic #20, not here. It follows the same record/DataAnnotations pattern.
+
 ### Define enums, shared constants, and paged-result wrapper (#25)
 Add an `Enums/` folder with `UserStatus`, `RequestStatus`, `KeyStatus`, `AuditAction`, and `QuotaLevel`. Add a `Common/` folder with a generic `PagedResult<T>` record (items list, total count, page, page size) and a `ProblemDetails`-compatible error envelope for consistent API error shapes. Add a `Constants.cs` class with string constants for role names (`Roles.Admin`, `Roles.Developer`) and policy names.
 

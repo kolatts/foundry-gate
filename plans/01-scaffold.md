@@ -9,8 +9,8 @@ This epic establishes the repository skeleton and .NET 10 solution that every su
 
 ## Approach
 
-### Initialize .NET 10 solution with four projects and folder structure (#20)
-Create the solution file at the repo root (`FoundryGate.sln`) and scaffold the four projects under `src/`: `FoundryGate.Api` (ASP.NET Core Web API), `FoundryGate.Data` (class library for EF Core entities and DbContext), `FoundryGate.Domain` (class library for shared DTOs and enums), and `FoundryGate.Web` (Blazor WASM). Add project references so that `Api` depends on `Data` and `Contracts`, and `Web` depends on `Contracts`. Use `global.json` to pin the .NET 10 SDK version. Verify `dotnet build` succeeds with zero warnings.
+### Initialize .NET 10 solution with five projects and folder structure (#20)
+Create the solution file at the repo root (`FoundryGate.sln`) and scaffold five projects under `src/`: `FoundryGate.Api` (ASP.NET Core Web API), `FoundryGate.Data` (class library for EF Core entities and DbContext), `FoundryGate.Domain` (class library for shared DTOs and enums — no ASP.NET Core or EF Core dependencies), `FoundryGate.Functions` (.NET 10 isolated-process Azure Functions), and `FoundryGate.Web` (Blazor WASM). Project references: `Api` → `Data` + `Domain`; `Functions` → `Data` + `Domain`; `Web` → `Domain` only. Use `global.json` to pin the .NET 10 SDK version. Verify `dotnet build` succeeds with zero warnings across all five projects.
 
 Files expected to be created or modified:
 - `global.json`
@@ -18,6 +18,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/FoundryGate.Api.csproj`
 - `src/FoundryGate.Data/FoundryGate.Data.csproj`
 - `src/FoundryGate.Domain/FoundryGate.Domain.csproj`
+- `src/FoundryGate.Functions/FoundryGate.Functions.csproj`
 - `src/FoundryGate.Web/FoundryGate.Web.csproj`
 
 ### Add .gitignore, EditorConfig, and solution-level NuGet config (#21)
@@ -31,6 +32,7 @@ Files expected to be created or modified:
 
 ## Verification
 - [ ] `dotnet build` passes with zero errors and zero warnings
-- [ ] All four projects appear in the solution explorer
+- [ ] All five projects appear in the solution explorer
 - [ ] `global.json` pins a .NET 10 SDK version
 - [ ] `.editorconfig` rules are respected in the IDE
+- [ ] `FoundryGate.Domain` has no reference to `Microsoft.EntityFrameworkCore` or `Microsoft.AspNetCore.*`

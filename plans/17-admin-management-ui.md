@@ -38,6 +38,13 @@ Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Admin/Requests/Index.razor`
 - `src/FoundryGate.Web/Pages/Admin/Requests/Index.razor.cs`
 
+### Build /users/sync admin page — trigger Entra sync and view results (#63)
+Create `Pages/Admin/Users/Sync.razor` (route `/users/sync`, Admin role). The page has a single "Run Entra sync" `MudButton` that calls `POST /users/sync` and streams the result into a `MudAlert` showing `{ added, updated, deactivated }` counts. Below the button, show the timestamp and result of the last sync run (stored in `SystemConfiguration["LastUserSyncAt"]` and `"LastUserSyncResult"`). Add a `MudNavLink` to `/users/sync` in the admin nav under the Users group. This page covers the spec §8.1 route that was not tracked in any earlier plan.
+
+Files expected to be created or modified:
+- `src/FoundryGate.Web/Pages/Admin/Users/Sync.razor`
+- `src/FoundryGate.Web/Shared/NavMenu.razor`
+
 ## Verification
 - [ ] `dotnet build` passes
 - [ ] User table search and server-side pagination work correctly

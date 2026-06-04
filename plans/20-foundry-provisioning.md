@@ -10,9 +10,10 @@ FoundryGate admins can list, create, and delete Azure AI Foundry model deploymen
 ## Approach
 
 ### Implement /foundry/deployments API endpoints using Azure SDK (#61)
-Create `FoundryDeploymentsController` with three admin-only endpoints:
+Create `FoundryDeploymentsController` with three admin-only endpoints and one any-authenticated-user endpoint:
 
-- `GET /foundry/deployments` — calls `CognitiveServicesAccountDeploymentCollection.GetAllAsync()` on the configured Foundry resource and returns a list of `FoundryDeploymentDto` (name, model name, model version, SKU name, capacity units, provisioning state).
+- `GET /foundry/models` — **any authenticated user** — returns the same deployment list with only the fields a developer needs to configure their CLI: deployment name, model name, model version, and provisioning state. This is what the `/me` page uses to populate the CLI setup section.
+- `GET /foundry/deployments` — **admin only** — full deployment list including SKU name, capacity units, and provisioning state.
 - `POST /foundry/deployments` — accepts a `CreateFoundryDeploymentRequest` (deployment name, model name, model version, SKU, capacity) and calls `CreateOrUpdateAsync` on the deployment collection. Returns the created deployment. Validates that the deployment name is unique before calling the SDK to give a clean error rather than a raw Azure SDK exception.
 - `DELETE /foundry/deployments/{name}` — calls `DeleteAsync` on the named deployment resource. Returns `204 No Content`. Write an audit log entry for create and delete actions.
 

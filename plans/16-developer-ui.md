@@ -9,10 +9,16 @@ This epic builds the two pages developers interact with daily: the `/me` dashboa
 
 ## Approach
 
-### Build /me page: quota gauge, APIM key display/rotate, and request history (#49)
-Create `Pages/Me/Index.razor` (route `/me`, requires authenticated user). On `OnInitializedAsync`, call `GET /quota/allocations/me` and `GET /keys/me` in parallel. Render a `MudProgressLinear` showing `TokensUsed / AllocatedTokens` with colour coding: green below 80%, `MudBlazor.Color.Warning` amber at 80–95%, `MudBlazor.Color.Error` red above 95%. Show an "Unlimited" `MudChip` when `AllocatedTokens` is null.
+### Build /me page: quota gauge, API key, endpoint setup, and request history (#49)
+Create `Pages/Me/Index.razor` (route `/me`, requires authenticated user). On `OnInitializedAsync`, call `GET /quota/allocations/me`, `GET /keys/me`, and `GET /foundry/models` in parallel. Render a `MudProgressLinear` showing `TokensUsed / AllocatedTokens` with colour coding: green below 80%, `MudBlazor.Color.Warning` amber at 80–95%, `MudBlazor.Color.Error` red above 95%. Show an "Unlimited" `MudChip` when `AllocatedTokens` is null.
 
-For the key panel: show the masked key in a `MudTextField` (read-only, `InputType.Password`), a "Reveal" `MudIconButton` that calls a separate endpoint and temporarily switches `InputType` to `Text` in component state only — never stored beyond the current render cycle. A "Rotate Key" `MudButton` opens a `MudDialog` confirmation; on confirm, call `POST /keys/me/rotate` and display the new key revealed once in the same panel. Below, render request history in a `MudTable` with status `MudChip` colour-coded by `RequestStatus`. Surface all API errors via `ISnackbar`.
+For the key panel: show the masked key in a `MudTextField` (read-only, `InputType.Password`), a "Reveal" `MudIconButton` that calls a separate endpoint and temporarily switches `InputType` to `Text` in component state only — never stored beyond the current render cycle. A "Rotate Key" `MudButton` opens a `MudDialog` confirmation; on confirm, call `POST /keys/me/rotate` and display the new key revealed once in the same panel.
+
+**CLI setup section** — this is what makes the page complete for Codex/Claude Code users: render a `MudExpansionPanel` labelled "Configure your AI CLI" showing the APIM gateway base URL (from a new `GET /config/gateway-url` endpoint or surfaced as a fixed `SystemConfiguration["ApimGatewayUrl"]` value) and the available model deployment names from `GET /foundry/models`. Show pre-filled copy-paste snippets for common tools:
+- Claude Code: `claude config set apiBaseUrl <gateway-url>` and the model name to set in `ANTHROPIC_MODEL`
+- Codex CLI: `export OPENAI_BASE_URL=<gateway-url>` and `export OPENAI_API_KEY=<your-key>`
+
+Below, render request history in a `MudTable` with status `MudChip` colour-coded by `RequestStatus`. Surface all API errors via `ISnackbar`.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Me/Index.razor`
@@ -32,6 +38,9 @@ Files expected to be created or modified:
 - [ ] Quota gauge renders at correct colour thresholds (0%, 80%, 95%, 100%)
 - [ ] "Unlimited" chip shows when allocation has no token cap
 - [ ] Rotating a key opens confirmation dialog, then shows the new key revealed once
+- [ ] CLI setup section shows the correct APIM gateway URL from `SystemConfiguration`
+- [ ] CLI setup section lists available model deployment names
+- [ ] Copy-paste snippets render the user's actual key (revealed) and correct gateway URL
 - [ ] Request form disables submit while in-flight and re-enables on response
 - [ ] Duplicate pending request attempt shows MudSnackbar warning without navigating away
 - [ ] Successful submission navigates back to `/me`

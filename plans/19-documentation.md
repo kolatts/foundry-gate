@@ -19,10 +19,21 @@ Files expected to be created or modified:
 - `.github/workflows/docs.yml`
 
 ### Write fork guide as Astro content — step-by-step setup for a new Azure tenant (#56)
-Create `docs-site/src/content/docs/getting-started/fork-guide.md`. Checklist-driven: Prerequisites (Azure CLI, Bicep CLI, .NET 10 SDK, `gh` CLI); Step 1 — Entra App Registration (app roles, Graph API permissions, redirect URI); Step 2 — APIM product setup; Step 3 — GitHub OIDC federated credentials; Step 4 — GitHub Actions variables and secrets; Step 5 — `az deployment sub create` with `dev.bicepparam`; Step 6 — Push to main for first CI/CD run. Each step includes exact CLI commands, expected output, and a troubleshooting note for the most common failure mode. The guide is completable in under two hours by someone familiar with Azure but new to this project.
+Create `docs-site/src/content/docs/getting-started/fork-guide.md`. Checklist-driven: Prerequisites (Azure CLI, Bicep CLI, .NET 10 SDK, `gh` CLI); Step 1 — Entra App Registration (app roles, Graph API permissions, redirect URI); Step 2 — **APIM product and API setup** (this is the most common point of failure for forks and must be covered in full):
+  - Create an APIM product named `foundrygate` (or your configured name)
+  - Add an API in APIM that backends to your Azure AI Foundry endpoint (`https://{foundry-name}.openai.azure.com/`) with appropriate path prefix
+  - Apply the `llm-emit-token-metric` policy on the API — this is how token usage reaches Application Insights
+  - Apply the `azure-openai-token-limit` policy with a large safe ceiling and `counter-key="@(context.Subscription.Id)"` — APIM will manage per-user counters; FoundryGate suspends subscriptions when the DB-tracked quota is exceeded
+  - Grant the APIM identity `Cognitive Services User` on the Foundry resource so APIM can forward requests
+  - Add the API to the `foundrygate` product
+
+Step 3 — GitHub OIDC federated credentials; Step 4 — GitHub Actions variables and secrets; Step 5 — `az deployment sub create` with `dev.bicepparam`; Step 6 — Push to main for first CI/CD run. Each step includes exact CLI commands, expected output, and a troubleshooting note.
 
 Files expected to be created or modified:
 - `docs-site/src/content/docs/getting-started/fork-guide.md`
+
+### Write developer CLI quickstart page (#57-cli)
+> This content is part of sub-issue #57 — add a page at `docs-site/src/content/docs/getting-started/cli-setup.md`. Target audience: a developer who has just received their APIM subscription key from the admin and wants to point Codex or Claude Code at the Foundry gateway. Cover: finding your APIM gateway URL (visible on the `/me` page), verifying the key works with a `curl` one-liner, then per-tool configuration snippets for Claude Code (`claude config set ...`), Codex CLI (`export OPENAI_BASE_URL=...`), and a generic OpenAI-compatible client. Include a section on available model names and how to check them from the `/me` page.
 
 ### Write architecture, configuration reference, and finalize README (#57)
 Create `docs-site/src/content/docs/architecture/overview.md` with a Mermaid system-context diagram, explanation of the four solution projects, the five-level quota resolution flowchart, the APIM key lifecycle state machine, and the Azure Functions data flow (timer triggers → DB → Application Insights). Create `docs-site/src/content/docs/reference/configuration.md` documenting every `SystemConfiguration` DB key and every `appsettings.json` / environment variable. Finalize `README.md` at the repo root with a one-paragraph description, a features bullet list, a link to the live GitHub Pages site, and build/license badges.

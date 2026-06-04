@@ -10,7 +10,7 @@ This epic wires FoundryGate to Azure API Management so that approved developers 
 ## Approach
 
 ### Implement APIM key provisioning using Azure SDK and Managed Identity (#36)
-Create an `IApimKeyService` backed by `ApiManagementSubscriptionResource` from `Azure.ResourceManager.ApiManagement`. On `POST /keys/provision` (developer-only, one active key per user limit enforced), the service calls `CreateOrUpdateAsync` on the APIM management plane to create a subscription scoped to the user's APIM user ID, then stores the resulting APIM `subscriptionId` and masked key hint in the `ApiKey` table. The actual key value is returned once in the response body and never persisted. Use `DefaultAzureCredential` (resolves to Managed Identity in production, developer credentials locally). Read APIM resource details (`ResourceGroupName`, `ServiceName`, `ProductId`) from `IConfiguration`.
+Create an `IApimKeyService` backed by `ApiManagementSubscriptionResource` from `Azure.ResourceManager.ApiManagement`. On `POST /keys/provision` (developer-only, one active key per user limit enforced), the service calls `CreateOrUpdateAsync` on the APIM management plane to create a subscription named `foundrygate-{userId}` scoped to the configured product, then stores the APIM `subscriptionId` and a masked key hint in `User.ApimSubscriptionId` / `User.ApimSubscriptionKey`. The actual key value is returned once in the response body and never persisted in plaintext. After provisioning, call `IQuotaResolutionService` to write the initial `QuotaAllocation` and push the user's resolved limit into the APIM cache key `quota-{subscriptionId}`. The subscription starts in `active` state. Use `DefaultAzureCredential`. Read APIM resource details from `IConfiguration`.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/KeysController.cs`
@@ -20,7 +20,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/FoundryGate.Api.csproj` (Azure.ResourceManager.ApiManagement package)
 
 ### Implement key rotation (self-service and admin) and revocation (#37)
-Add `POST /keys/{id}/rotate` (self-service: user can only rotate their own active key; generates a new APIM key via `RegeneratePrimaryKeyAsync`, updates `RotatedAt` in the `ApiKey` table, writes audit log, returns new key value once). Add `POST /admin/keys/{id}/rotate` (admin can rotate any user's key). Add `POST /keys/{id}/revoke` (self-service or admin) which calls the APIM management plane to deactivate the subscription, sets `ApiKey.Status = Revoked` and `RevokedAt`, and writes an audit log entry. Revoked keys cannot be rotated or re-provisioned until explicitly re-activated by an admin.
+`POST /keys/me/rotate` and `POST /keys/{userId}/rotate` (admin): call `RegeneratePrimaryKeyAsync` on the APIM subscription, re-encrypt the new key via Key Vault, update `User.ApimSubscriptionKey`, write audit log, return new key value once. `DELETE /keys/{userId}` (admin) and the user deactivation path: call APIM to **delete** the subscription entirely (not suspend — deletion means the key stops working immediately and cannot be re-enabled). Set `User.ApimSubscriptionId` and `User.ApimSubscriptionKey` to null, `User.IsActive = false`, `QuotaAllocation.IsHardStopped = true`. Suspension (for quota exhaustion) is distinct from deletion (for account deactivation): suspended subscriptions can be re-enabled; deleted ones require a new `POST /keys/{userId}/provision`.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/KeysController.cs`
