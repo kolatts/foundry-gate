@@ -63,7 +63,10 @@ Files expected to be created or modified:
 - **EF Core 10** + Azure SQL (single database, no sharding)
 - **Blazor WebAssembly** (.NET 10)
 - **MudBlazor** component library for all UI
+- **Astro + Starlight** for the docs site (GitHub Pages)
 - **Microsoft Entra ID** via `Microsoft.Identity.Web`
 - **Azure SDK** for APIM management (`Azure.ResourceManager.ApiManagement`)
+- **Azure SDK** for AI Foundry model deployment (`Azure.ResourceManager.CognitiveServices`)
 - **Microsoft Graph SDK** for Entra sync
+- **Azure Functions** (.NET 10 isolated worker) for scheduled background jobs
 - **Bicep** for all IaC

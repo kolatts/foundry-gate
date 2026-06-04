@@ -51,8 +51,11 @@ foundrygate/
 | API | ASP.NET Core 10 Web API, hosted on Azure Container Apps |
 | Database | Azure SQL, accessed via Entity Framework Core 10 |
 | Auth | Microsoft Entra ID (MSAL, Microsoft.Identity.Web) |
+| Background jobs | Azure Functions (.NET 10 isolated worker, Flex Consumption) |
+| Docs site | Astro + Starlight, deployed to GitHub Pages |
 | Infra-as-Code | Bicep + GitHub Actions (OIDC, no long-lived secrets) |
 | APIM integration | Azure SDK for .NET (`Azure.ResourceManager.ApiManagement`) |
+| Foundry provisioning | Azure SDK for .NET (`Azure.ResourceManager.CognitiveServices`) |
 | Entra sync | Microsoft Graph SDK (`Microsoft.Graph`) |
 
 ---

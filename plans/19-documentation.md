@@ -1,31 +1,41 @@
-# Documentation — fork guide, architecture, and configuration reference
+# Documentation — Astro/Starlight docs site on GitHub Pages
 
 > GitHub: #19  
 > Milestone: v0.4 — Frontend  
 > Labels: epic, docs
 
 ## Overview
-This epic produces the documentation that makes FoundryGate forkable and operable by a team that was not involved in building it. Three documents are needed: a step-by-step fork guide for setting up a new Azure tenant from scratch, an architecture document explaining the system design and component interactions, and a configuration reference covering every `SystemConfiguration` key and every environment variable. The README is also finalised here with a concise project description and links to the three docs.
+Documentation lives in a `docs-site/` Astro project using the Starlight theme, deployed to GitHub Pages via a `docs.yml` workflow. Starlight gives FoundryGate a polished, searchable docs site with zero custom CSS needed — sidebar navigation, dark mode, and a built-in search index out of the box. The existing `docs/` markdown files become content pages in the Astro site. The README links to the live site rather than repeating docs inline.
 
 ## Approach
 
-### Write docs/fork-guide.md — step-by-step setup checklist for a new Azure tenant (#56)
-Write a checklist-driven guide that takes a reader from a blank Azure subscription to a running FoundryGate deployment. Sections: Prerequisites (Azure CLI, Bicep CLI, .NET 10 SDK, GitHub CLI), Step 1 — Register the Entra application and configure app roles (`FoundryGate.Admin`, `FoundryGate.Developer`), Step 2 — Create an APIM instance and a FoundryGate product, Step 3 — Set up GitHub OIDC federated credentials (one per environment), Step 4 — Create GitHub Actions variables and secrets, Step 5 — Run `az deployment sub create` with `dev.bicepparam`, Step 6 — Push to main to trigger the first CI/CD run. Each step lists the exact CLI commands to run, the expected output, and what to do if something goes wrong. The guide should be completable in under two hours by someone familiar with Azure but new to this project.
+### Scaffold Astro Starlight docs site and GitHub Pages deployment workflow (#58)
+Create `docs-site/` at the repo root using `npm create astro@latest -- --template starlight`. Configure `astro.config.mjs` with `site: 'https://kolatts.github.io/foundry-gate'`, `base: '/foundry-gate'`, and the Starlight sidebar with four top-level sections: **Getting Started** (index + fork guide), **Architecture** (system overview + component diagram), **Reference** (configuration keys + API surface), **Contributing**. Add `docs-site/` to `.gitignore` for `node_modules` and `dist/`. Create `.github/workflows/docs.yml` triggered on `push` to `main` (paths: `docs-site/**`) that runs `npm ci && npm run build` then deploys `dist/` using `actions/deploy-pages@v4` with `permissions: pages: write, id-token: write`.
 
 Files expected to be created or modified:
-- `docs/fork-guide.md`
+- `docs-site/astro.config.mjs`
+- `docs-site/package.json`
+- `docs-site/src/content/docs/index.mdx`
+- `.github/workflows/docs.yml`
 
-### Write docs/architecture.md, docs/configuration.md, and finalize README (#57)
-Write `docs/architecture.md` covering: system context diagram (described in Mermaid), the four solution projects and their responsibilities, the five-level quota resolution algorithm with a flowchart, the APIM key lifecycle state machine, and the data flow for usage sync from Application Insights back to `QuotaAllocation`. Write `docs/configuration.md` as a two-section reference: the seven `SystemConfiguration` database keys (name, default value, description, valid range) and all environment variables / appsettings keys consumed by the API at runtime (database connection string, Entra settings, APIM resource names, Application Insights workspace ID, internal sync secret). Finalise `README.md` with a one-paragraph project description, a "Features" bullet list, a "Getting started" section that links to the fork guide, and a badges row (build status, license).
+### Write fork guide as Astro content — step-by-step setup for a new Azure tenant (#56)
+Create `docs-site/src/content/docs/getting-started/fork-guide.md`. Checklist-driven: Prerequisites (Azure CLI, Bicep CLI, .NET 10 SDK, `gh` CLI); Step 1 — Entra App Registration (app roles, Graph API permissions, redirect URI); Step 2 — APIM product setup; Step 3 — GitHub OIDC federated credentials; Step 4 — GitHub Actions variables and secrets; Step 5 — `az deployment sub create` with `dev.bicepparam`; Step 6 — Push to main for first CI/CD run. Each step includes exact CLI commands, expected output, and a troubleshooting note for the most common failure mode. The guide is completable in under two hours by someone familiar with Azure but new to this project.
 
 Files expected to be created or modified:
-- `docs/architecture.md`
-- `docs/configuration.md`
+- `docs-site/src/content/docs/getting-started/fork-guide.md`
+
+### Write architecture, configuration reference, and finalize README (#57)
+Create `docs-site/src/content/docs/architecture/overview.md` with a Mermaid system-context diagram, explanation of the four solution projects, the five-level quota resolution flowchart, the APIM key lifecycle state machine, and the Azure Functions data flow (timer triggers → DB → Application Insights). Create `docs-site/src/content/docs/reference/configuration.md` documenting every `SystemConfiguration` DB key and every `appsettings.json` / environment variable. Finalize `README.md` at the repo root with a one-paragraph description, a features bullet list, a link to the live GitHub Pages site, and build/license badges.
+
+Files expected to be created or modified:
+- `docs-site/src/content/docs/architecture/overview.md`
+- `docs-site/src/content/docs/reference/configuration.md`
 - `README.md`
 
 ## Verification
+- [ ] `npm run build` in `docs-site/` produces a `dist/` with no errors
+- [ ] `docs.yml` deploys to GitHub Pages and the site is accessible at `kolatts.github.io/foundry-gate`
+- [ ] Starlight sidebar matches the configured structure
+- [ ] All Mermaid diagrams render in the Astro build
 - [ ] Fork guide is completable end-to-end against a real Azure subscription
-- [ ] All seven `SystemConfiguration` keys are documented with defaults
-- [ ] All environment variables in `appsettings.json` are documented
-- [ ] Architecture Mermaid diagrams render correctly on GitHub
-- [ ] README links to all three docs and the build badge reflects the `api.yml` workflow
+- [ ] All `SystemConfiguration` keys and environment variables are documented
