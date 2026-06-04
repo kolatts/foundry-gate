@@ -5,7 +5,7 @@
 > Labels: epic, backend
 
 ## Overview
-This epic defines the entire persistence model for FoundryGate using EF Core 10 against a single Azure SQL database. It covers all entities (User, Group, GroupMembership, QuotaPolicy, QuotaAllocation, QuotaIncreaseRequest, ApiKey, AuditLog, SystemConfiguration), the DbContext with all relationship configurations, the initial migration, and seed data for the seven SystemConfiguration defaults. A solid data layer here means all API epics can start against a real schema rather than building against a moving target.
+This epic defines the entire persistence model for FoundryGate using EF Core 10 against a single Azure SQL database. It covers all entities, the DbContext, the initial EF migration, and seed data for the `SystemConfiguration` defaults. EF migrations are the developer-facing iteration workflow; after applying a migration, run `foundrygate db compare` (epic #76) to sync the delta back into the `FoundryGate.Database` `.sqlproj` SQL files. Commit both the migration and the updated `.sql` file together — they must stay in sync.
 
 ## Approach
 
