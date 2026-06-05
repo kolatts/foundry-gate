@@ -5,7 +5,7 @@
 > Labels: epic, backend
 
 ## Overview
-This epic delivers the group management API, which lets admins organise users into named groups that can carry their own quota policies. Groups are the primary mechanism for giving a team a shared or elevated quota without touching individual user records. The epic covers full group CRUD, membership management (add/remove individual users), and a sync endpoint that pulls members from a corresponding Entra ID group via Microsoft Graph, keeping FoundryGate's groups aligned with the organisation's directory automatically.
+This epic delivers the group management API, which lets admins organise users into named groups that can carry their own quota policies. Groups are the primary mechanism for giving a team a shared or elevated quota without touching individual user records. The epic covers full group CRUD, membership management (add/remove individual users), and a sync endpoint that pulls members from a corresponding Entra ID group via Microsoft Graph, keeping Foundry Gate's groups aligned with the organisation's directory automatically.
 
 ## Approach
 
@@ -18,7 +18,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/Services/GroupService.cs`
 
 ### Implement group membership management and Entra group sync (#31)
-Add `POST /groups/{id}/members` (add a user by userId), `DELETE /groups/{id}/members/{userId}` (remove a user), and `GET /groups/{id}/members` (paginated member list with quota allocation summary). For Entra sync, add `POST /groups/{id}/sync-entra` which calls Microsoft Graph `GET /groups/{entraGroupId}/members` using the `GraphServiceClient` with `client_credentials` flow, then reconciles the result against the FoundryGate `GroupMembership` table (add new members, remove departed members). Write an audit log entry per member added or removed. Wrap Graph calls in a retry policy using `Polly` to handle transient Graph API errors.
+Add `POST /groups/{id}/members` (add a user by userId), `DELETE /groups/{id}/members/{userId}` (remove a user), and `GET /groups/{id}/members` (paginated member list with quota allocation summary). For Entra sync, add `POST /groups/{id}/sync-entra` which calls Microsoft Graph `GET /groups/{entraGroupId}/members` using the `GraphServiceClient` with `client_credentials` flow, then reconciles the result against the Foundry Gate `GroupMembership` table (add new members, remove departed members). Write an audit log entry per member added or removed. Wrap Graph calls in a retry policy using `Polly` to handle transient Graph API errors.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/GroupsController.cs`

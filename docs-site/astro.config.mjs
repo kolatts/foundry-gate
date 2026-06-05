@@ -6,10 +6,10 @@ export default defineConfig({
   base: '/foundry-gate',
   integrations: [
     starlight({
-      title: 'FoundryGate',
+      title: 'Foundry Gate',
       logo: {
-        src: './src/assets/logo.png',
-        alt: 'FoundryGate',
+        src: './src/assets/logo-cropped.png',
+        alt: 'Foundry Gate',
         replacesTitle: true,
       },
       favicon: '/favicon.svg',

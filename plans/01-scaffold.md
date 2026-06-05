@@ -20,7 +20,7 @@ Create the solution file at the repo root (`FoundryGate.sln`) and scaffold seven
 | `FoundryGate.Functions` | Azure Functions (.NET 10 isolated) | Timer-triggered background jobs |
 | `FoundryGate.Web` | Blazor WASM | MudBlazor frontend |
 | `FoundryGate.Database` | SQL Server project (.sqlproj) | Dacpac schema source of truth |
-| `FoundryGate.Cli` | Console / dotnet tool | `foundrygate` CLI for schema compare, deploy, seed |
+| `FoundryGate.Cli` | Console / dotnet tool | `Foundry Gate` CLI for schema compare, deploy, seed |
 
 Project references: `Api` → `Data` + `Domain`; `Functions` → `Data` + `Domain`; `Web` → `Domain`; `Cli` → `Data` + `Domain`. `FoundryGate.Database` has no C# references — it is a pure SQL project. Use `global.json` to pin the .NET 10 SDK version. Verify `dotnet build` succeeds with zero warnings across all seven projects.
 

@@ -5,7 +5,7 @@
 > Labels: epic, backend
 
 ## Overview
-FoundryGate admins can list, create, and delete Azure AI Foundry model deployments directly from the UI without touching the Azure portal. This uses `Azure.ResourceManager.CognitiveServices` with the Container App's Managed Identity (which holds `Cognitive Services Contributor` on the Foundry resource). Because APIM already covers all Foundry routes under the `foundrygate` product, a newly provisioned deployment is immediately accessible via existing user subscription keys — no APIM changes required. This keeps the entire LLM access lifecycle (models, keys, quotas) managed in one place.
+Foundry Gate admins can list, create, and delete Azure AI Foundry model deployments directly from the UI without touching the Azure portal. This uses `Azure.ResourceManager.CognitiveServices` with the Container App's Managed Identity (which holds `Cognitive Services Contributor` on the Foundry resource). Because APIM already covers all Foundry routes under the `Foundry Gate` product, a newly provisioned deployment is immediately accessible via existing user subscription keys — no APIM changes required. This keeps the entire LLM access lifecycle (models, keys, quotas) managed in one place.
 
 ## Approach
 

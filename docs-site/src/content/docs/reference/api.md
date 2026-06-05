@@ -1,6 +1,6 @@
 ---
 title: API Surface
-description: All FoundryGate REST endpoints, auth requirements, and response shapes.
+description: All Foundry Gate REST endpoints, auth requirements, and response shapes.
 ---
 
 Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin endpoints additionally require the `FoundryGate.Admin` app role.

@@ -1,4 +1,9 @@
-/* FoundryGate design tokens — generated from content/tokens.md */
+/* Foundry Gate design tokens — generated from content/tokens.md */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/monaspace-argon/400.css';
+@import '@fontsource/monaspace-argon/600.css';
 
 :root {
   /* Background scale (darkest → lightest) */

@@ -4,6 +4,10 @@
 /* Force dark on first paint — prevents light flash */
 :root { color-scheme: dark; }
 
+/* Always render as dark theme regardless of system preference */
+:root:not([data-theme='light']) { color-scheme: dark; }
+html { color-scheme: dark; }
+
 :root[data-theme='dark'],
 :root[data-theme='light'],
 :root {
@@ -38,7 +42,9 @@
 
 /* Tighten the site header */
 header.header {
-  background: var(--fg-bg-base);
+  background: color-mix(in srgb, var(--fg-bg-base) 80%, transparent);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
   border-bottom: 1px solid var(--fg-border-subtle);
 }
 
@@ -52,4 +58,49 @@ header.header {
 .expressive-code .frame {
   background: var(--fg-bg-raised) !important;
   border: 1px solid var(--fg-border-subtle) !important;
+}
+
+/* ── Ambient aurora behind the docs pages ────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 50% at 5% 15%,  rgba(0,120,212,0.07)  0%, transparent 60%),
+    radial-gradient(ellipse 50% 70% at 95% 70%, rgba(77,207,255,0.05) 0%, transparent 55%),
+    url('/foundry-gate/nebula.png') center / cover no-repeat;
+  opacity: 0.035;
+  pointer-events: none;
+  z-index: 0;
+  animation: docs-aurora 30s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
+}
+
+@keyframes docs-aurora {
+  from { opacity: 0.5; transform: scale(1)    translateX(0);    }
+  to   { opacity: 1;   transform: scale(1.03) translateX(10px); }
+}
+
+/* ── Dot grid texture ────────────────────────────────── */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(circle, rgba(160,176,192,0.04) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ── Logo sizing in header ──────────────────────────────── */
+.site-title img {
+  height: 48px !important;
+  width: auto !important;
+  max-width: none !important;
+  filter: brightness(1.15) drop-shadow(0 0 6px rgba(77,207,255,0.15));
+}
+
+/* Stack the header above the fixed aurora */
+header.header {
+  position: sticky;
+  z-index: 10;
 }

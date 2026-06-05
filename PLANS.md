@@ -1,4 +1,4 @@
-# FoundryGate — Planning Convention
+# Foundry Gate — Planning Convention
 
 All detailed implementation plans live in `/plans/`. GitHub Issues contain the "what" and "why"; plan files contain the "how".
 

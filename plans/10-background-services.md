@@ -10,7 +10,7 @@ Both scheduled jobs — monthly quota reset and token usage sync — live in a d
 ## Approach
 
 ### Implement monthly quota reset as an Azure Function Timer Trigger (#38)
-Create `FoundryGate.Functions` as a .NET 10 isolated-process Azure Functions project. Register `FoundryGateDbContext`, `IQuotaResolutionService`, and `IApimKeyService` in `Program.cs`. Create `MonthlyQuotaResetFunction` with `TimerTrigger` cron `0 1 1 * *` (00:01 UTC on the 1st). For each active user: call `IQuotaResolutionService.ResolveAsync` for the new period (upsert `QuotaAllocation` with `TokensUsed = 0`, `IsHardStopped = false`); then call `IApimKeyService.ReenableSubscriptionAsync` if the user's APIM subscription was suspended for quota exhaustion (PATCH `.../state=active` on the APIM Management plane). Write a single `quota.monthly-reset` audit log entry with the count of users processed and subscriptions re-enabled.
+Create `FoundryGate.Functions` as a .NET 10 isolated-process Azure Functions project. Register `Foundry GateDbContext`, `IQuotaResolutionService`, and `IApimKeyService` in `Program.cs`. Create `MonthlyQuotaResetFunction` with `TimerTrigger` cron `0 1 1 * *` (00:01 UTC on the 1st). For each active user: call `IQuotaResolutionService.ResolveAsync` for the new period (upsert `QuotaAllocation` with `TokensUsed = 0`, `IsHardStopped = false`); then call `IApimKeyService.ReenableSubscriptionAsync` if the user's APIM subscription was suspended for quota exhaustion (PATCH `.../state=active` on the APIM Management plane). Write a single `quota.monthly-reset` audit log entry with the count of users processed and subscriptions re-enabled.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Functions/FoundryGate.Functions.csproj`

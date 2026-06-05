@@ -32,7 +32,7 @@ These are set as Container App environment variables (sourced from Key Vault ref
 
 | Key | Source | Description |
 |---|---|---|
-| `ConnectionStrings__FoundryGate` | Key Vault secret | Azure SQL connection string |
+| `ConnectionStrings__Foundry Gate` | Key Vault secret | Azure SQL connection string |
 | `AzureAd__TenantId` | Config / env var | Entra tenant ID for bearer token validation |
 | `AzureAd__ClientId` | Config / env var | Entra App Registration client ID |
 | `AzureAd__Audience` | Config / env var | Token audience (usually `api://{clientId}`) |

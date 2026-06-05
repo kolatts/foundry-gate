@@ -1,6 +1,6 @@
-# FoundryGate — Claude Code Handoff Specification
+# Foundry Gate — Claude Code Handoff Specification
 
-> **FoundryGate** is an open-source token budget management system for Azure AI Foundry and
+> **Foundry Gate** is an open-source token budget management system for Azure AI Foundry and
 > Azure API Management. It provides per-developer and per-group monthly token quotas, Entra ID
 > user sync, quota increase approvals, APIM subscription key lifecycle management, and a
 > monthly hard reset. Designed to be forked and configured against any Azure tenant.
@@ -347,7 +347,7 @@ POST /users/sync
 POST /groups/sync-entra (for a specific group with EntraGroupId set)
 
 1. Call Graph GET /groups/{entraGroupId}/members
-2. Resolve to FoundryGate User records by EntraObjectId
+2. Resolve to Foundry Gate User records by EntraObjectId
 3. Add new members, remove departed members from GroupMember table
 4. Update group quota allocation for affected users
 ```
@@ -509,7 +509,7 @@ A fork operator needs to supply:
    - `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (OIDC)
    - `SQL_ADMIN_PASSWORD`
    - `GRAPH_CLIENT_SECRET`
-4. **APIM product** named `foundrygate` (or configured name) covering the Foundry API routes
+4. **APIM product** named `Foundry Gate` (or configured name) covering the Foundry API routes
 
 Full setup guide lives in `docs/fork-guide.md`.
 

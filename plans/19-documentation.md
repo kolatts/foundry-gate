@@ -5,7 +5,7 @@
 > Labels: epic, docs
 
 ## Overview
-Documentation lives in a `docs-site/` Astro project using the Starlight theme, deployed to GitHub Pages. The site uses FoundryGate's own brand identity throughout — the portal-gate logo, Inter + Monaspace Argon typefaces, and the full `--fg-*` design token palette defined in `content/tokens.md`. Starlight's CSS variables are overridden to match those tokens so the docs feel like a first-party product surface, not a generic template. Brand source files live in `content/` at the repo root and are referenced into `docs-site/` during the scaffold step.
+Documentation lives in a `docs-site/` Astro project using the Starlight theme, deployed to GitHub Pages. The site uses Foundry Gate's own brand identity throughout — the portal-gate logo, Inter + Monaspace Argon typefaces, and the full `--fg-*` design token palette defined in `content/tokens.md`. Starlight's CSS variables are overridden to match those tokens so the docs feel like a first-party product surface, not a generic template. Brand source files live in `content/` at the repo root and are referenced into `docs-site/` during the scaffold step.
 
 ## Brand assets (source: `content/`)
 
@@ -28,10 +28,10 @@ Create `docs-site/` using `npm create astro@latest -- --template starlight`. The
 **1. Starlight config (`docs-site/astro.config.mjs`):**
 ```js
 starlight({
-  title: 'FoundryGate',
+  title: 'Foundry Gate',
   logo: {
     src: './src/assets/logo.png',
-    alt: 'FoundryGate',
+    alt: 'Foundry Gate',
     replacesTitle: true,
   },
   favicon: '/favicon.svg',           // derived from the gate-portal glyph

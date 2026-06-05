@@ -5,12 +5,12 @@
 > Labels: epic, backend
 
 ## Overview
-This epic defines the entire persistence model for FoundryGate using EF Core 10 against a single Azure SQL database. It covers all entities, the DbContext, the initial EF migration, and seed data for the `SystemConfiguration` defaults. EF migrations are the developer-facing iteration workflow; after applying a migration, run `foundrygate db compare` (epic #76) to sync the delta back into the `FoundryGate.Database` `.sqlproj` SQL files. Commit both the migration and the updated `.sql` file together — they must stay in sync.
+This epic defines the entire persistence model for Foundry Gate using EF Core 10 against a single Azure SQL database. It covers all entities, the DbContext, the initial EF migration, and seed data for the `SystemConfiguration` defaults. EF migrations are the developer-facing iteration workflow; after applying a migration, run `Foundry Gate db compare` (epic #76) to sync the delta back into the `FoundryGate.Database` `.sqlproj` SQL files. Commit both the migration and the updated `.sql` file together — they must stay in sync.
 
 ## Approach
 
 ### Define EF Core 10 entities and configure all relationships in DbContext (#22)
-Create one entity class per table under `src/FoundryGate.Data/Entities/`. Use data annotations for simple constraints and `IEntityTypeConfiguration<T>` classes (Fluent API) for relationship configuration, index definitions, and column-level settings. Key relationships: User→GroupMembership (many), Group→GroupMembership (many), User→QuotaAllocation (one-to-one per period), Group→QuotaPolicy (optional), User→ApiKey (one-to-many), User→AuditLog (one-to-many). Register all configurations via `modelBuilder.ApplyConfigurationsFromAssembly`. Add the `FoundryGateDbContext` class with a `DbContextOptions` constructor suitable for both runtime DI and design-time factory use.
+Create one entity class per table under `src/FoundryGate.Data/Entities/`. Use data annotations for simple constraints and `IEntityTypeConfiguration<T>` classes (Fluent API) for relationship configuration, index definitions, and column-level settings. Key relationships: User→GroupMembership (many), Group→GroupMembership (many), User→QuotaAllocation (one-to-one per period), Group→QuotaPolicy (optional), User→ApiKey (one-to-many), User→AuditLog (one-to-many). Register all configurations via `modelBuilder.ApplyConfigurationsFromAssembly`. Add the `Foundry GateDbContext` class with a `DbContextOptions` constructor suitable for both runtime DI and design-time factory use.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Data/Entities/User.cs`
@@ -23,7 +23,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Data/Entities/AuditLog.cs`
 - `src/FoundryGate.Data/Entities/SystemConfiguration.cs`
 - `src/FoundryGate.Data/Configuration/` (one file per entity)
-- `src/FoundryGate.Data/FoundryGateDbContext.cs`
+- `src/FoundryGate.Data/Foundry GateDbContext.cs`
 - `src/FoundryGate.Data/DesignTimeDbContextFactory.cs`
 
 ### Create initial EF migration and seed the eight SystemConfiguration defaults (#23)

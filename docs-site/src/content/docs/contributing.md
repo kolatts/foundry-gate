@@ -5,7 +5,7 @@ description: How to contribute to FoundryGate.
 
 import { Steps } from '@astrojs/starlight/components';
 
-FoundryGate is open-source and welcomes contributions. The project uses GitHub Issues for tracking work — every issue has a corresponding plan file in `/plans/` with implementation detail.
+Foundry Gate is open-source and welcomes contributions. The project uses GitHub Issues for tracking work — every issue has a corresponding plan file in `/plans/` with implementation detail.
 
 ## Before you start
 
@@ -20,14 +20,14 @@ FoundryGate is open-source and welcomes contributions. The project uses GitHub I
 
 1. **Prerequisites**: .NET 10 SDK, Docker Desktop, Node.js 20+, Azure CLI
 
-2. **Install the FoundryGate CLI** (once the CLI project is built):
+2. **Install the Foundry Gate CLI** (once the CLI project is built):
    ```sh
    dotnet tool install --global FoundryGate.Cli
    ```
 
 3. **Bootstrap local database**:
    ```sh
-   foundrygate local setup
+   Foundry Gate local setup
    ```
    This starts a SQL Server Docker container, runs EF migrations, and seeds `SystemConfiguration` defaults.
 
@@ -57,7 +57,7 @@ FoundryGate is open-source and welcomes contributions. The project uses GitHub I
 1. Modify the EF entity in `FoundryGate.Data/Entities/`
 2. `dotnet ef migrations add <Name> --project src/FoundryGate.Data --startup-project src/FoundryGate.Api`
 3. `dotnet ef database update ...`
-4. `foundrygate db compare` — syncs changes back to `FoundryGate.Database/.sqlproj`
+4. `Foundry Gate db compare` — syncs changes back to `FoundryGate.Database/.sqlproj`
 5. Commit both the migration file and the updated `.sql` file together.
 
 ## Commit convention

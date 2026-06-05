@@ -10,7 +10,7 @@ This epic bootstraps `FoundryGate.Api` so it is production-ready at the infrastr
 ## Approach
 
 ### Configure Entra ID bearer auth, CORS, and request middleware in Program.cs (#26)
-Call `AddMicrosoftIdentityWebApiAuthentication` with settings from `appsettings.json` (`AzureAd` section: `TenantId`, `ClientId`, `Audience`). Define two authorization policies: `RequireAdmin` (role claim `FoundryGate.Admin`) and `RequireDeveloper` (role claim `FoundryGate.Developer`). Configure CORS with a named policy (`FoundryGateCors`) that allows the Blazor WASM origin; read the origin from configuration so it can differ between dev and prod. Register `Serilog` (or `Microsoft.Extensions.Logging`) for structured request logging with a middleware that logs method, path, status code, and elapsed time. Register `FoundryGateDbContext` with a SQL Server connection string from configuration.
+Call `AddMicrosoftIdentityWebApiAuthentication` with settings from `appsettings.json` (`AzureAd` section: `TenantId`, `ClientId`, `Audience`). Define two authorization policies: `RequireAdmin` (role claim `FoundryGate.Admin`) and `RequireDeveloper` (role claim `FoundryGate.Developer`). Configure CORS with a named policy (`Foundry GateCors`) that allows the Blazor WASM origin; read the origin from configuration so it can differ between dev and prod. Register `Serilog` (or `Microsoft.Extensions.Logging`) for structured request logging with a middleware that logs method, path, status code, and elapsed time. Register `Foundry GateDbContext` with a SQL Server connection string from configuration.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Program.cs`
@@ -20,7 +20,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/FoundryGate.Api.csproj`
 
 ### Add health endpoint, OpenAPI doc with bearer support, and global error handler (#27)
-Register `services.AddHealthChecks()` with an EF Core health check against `FoundryGateDbContext` and map it to `GET /health`. Register OpenAPI generation (Swashbuckle or the built-in .NET 9+ `Microsoft.AspNetCore.OpenApi`) and add a `SecurityDefinition` for `Bearer` so the Swagger UI includes an Authorize button. Add a global exception-handling middleware (or use `app.UseExceptionHandler`) that catches unhandled exceptions and returns a `ProblemDetails` JSON body with a correlation ID header. Add a `404` catch-all that also returns `ProblemDetails`.
+Register `services.AddHealthChecks()` with an EF Core health check against `Foundry GateDbContext` and map it to `GET /health`. Register OpenAPI generation (Swashbuckle or the built-in .NET 9+ `Microsoft.AspNetCore.OpenApi`) and add a `SecurityDefinition` for `Bearer` so the Swagger UI includes an Authorize button. Add a global exception-handling middleware (or use `app.UseExceptionHandler`) that catches unhandled exceptions and returns a `ProblemDetails` JSON body with a correlation ID header. Add a `404` catch-all that also returns `ProblemDetails`.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Program.cs`

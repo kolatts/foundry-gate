@@ -5,7 +5,7 @@
 > Labels: epic, backend
 
 ## Overview
-This epic adds two admin-triggered sync endpoints that reconcile FoundryGate's local user and group-membership tables against Azure Entra ID (Microsoft Graph). Bulk user sync ensures every Entra user who has been assigned to the FoundryGate application has a corresponding `User` row, while group member sync keeps `GroupMembership` rows aligned with Entra group membership. Both operations are designed to be idempotent and safe to call repeatedly, making them suitable for periodic automated invocation as well as one-off admin actions.
+This epic adds two admin-triggered sync endpoints that reconcile Foundry Gate's local user and group-membership tables against Azure Entra ID (Microsoft Graph). Bulk user sync ensures every Entra user who has been assigned to the Foundry Gate application has a corresponding `User` row, while group member sync keeps `GroupMembership` rows aligned with Entra group membership. Both operations are designed to be idempotent and safe to call repeatedly, making them suitable for periodic automated invocation as well as one-off admin actions.
 
 ## Approach
 
@@ -23,7 +23,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/Services/EntraUserSyncService.cs`
 
 ### Implement Entra group member sync (POST /groups/sync-entra) (#41)
-Add `POST /groups/sync-entra` (admin-only, or per-group via `POST /groups/{id}/sync-entra` as defined in epic #6). For each `Group` that has a non-null `EntraGroupId`, call `GET /groups/{entraGroupId}/members` via Graph and reconcile against `GroupMembership` rows: insert missing memberships and remove memberships for users no longer in the Entra group. Only process users who already exist in the FoundryGate `Users` table (orphan Entra members are skipped with a warning, not errored). After reconciling memberships, trigger quota re-resolution for any user whose group membership changed, since their effective quota level may have shifted. Return a per-group summary.
+Add `POST /groups/sync-entra` (admin-only, or per-group via `POST /groups/{id}/sync-entra` as defined in epic #6). For each `Group` that has a non-null `EntraGroupId`, call `GET /groups/{entraGroupId}/members` via Graph and reconcile against `GroupMembership` rows: insert missing memberships and remove memberships for users no longer in the Entra group. Only process users who already exist in the Foundry Gate `Users` table (orphan Entra members are skipped with a warning, not errored). After reconciling memberships, trigger quota re-resolution for any user whose group membership changed, since their effective quota level may have shifted. Return a per-group summary.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/GroupsController.cs`

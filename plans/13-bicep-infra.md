@@ -5,7 +5,7 @@
 > Labels: epic, infra
 
 ## Overview
-This epic defines all Azure infrastructure for FoundryGate as Bicep modules, producing a fully repeatable deployment from a single `az deployment sub create` command. Modules cover: Azure SQL, Container Apps (API), Static Web Apps (Blazor UI), Azure Functions Flex Consumption (background jobs), Key Vault, and the role assignments that wire each Managed Identity to the resources it needs. Parameter files for `dev` and `prod` environments are included so the same modules deploy correctly in both.
+This epic defines all Azure infrastructure for Foundry Gate as Bicep modules, producing a fully repeatable deployment from a single `az deployment sub create` command. Modules cover: Azure SQL, Container Apps (API), Static Web Apps (Blazor UI), Azure Functions Flex Consumption (background jobs), Key Vault, and the role assignments that wire each Managed Identity to the resources it needs. Parameter files for `dev` and `prod` environments are included so the same modules deploy correctly in both.
 
 ## Approach
 

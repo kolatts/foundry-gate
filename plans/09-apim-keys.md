@@ -5,7 +5,7 @@
 > Labels: epic, backend
 
 ## Overview
-This epic wires FoundryGate to Azure API Management so that approved developers get a real APIM subscription key they can use to call the AI Foundry gateway. Key operations — provision, rotate (self-service and admin), and revoke — are all mediated through the FoundryGate API using the Azure Resource Manager SDK with Managed Identity, so no APIM credentials are stored in the application. The `ApiKey` table tracks key metadata (APIM subscription ID, status, created/rotated timestamps) but never stores the raw key value.
+This epic wires Foundry Gate to Azure API Management so that approved developers get a real APIM subscription key they can use to call the AI Foundry gateway. Key operations — provision, rotate (self-service and admin), and revoke — are all mediated through the Foundry Gate API using the Azure Resource Manager SDK with Managed Identity, so no APIM credentials are stored in the application. The `ApiKey` table tracks key metadata (APIM subscription ID, status, created/rotated timestamps) but never stores the raw key value.
 
 ## Approach
 
