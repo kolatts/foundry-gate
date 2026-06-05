@@ -15,17 +15,18 @@
 /* ─── Page load — staggered content reveal ───────────────────── */
 
 .sl-markdown-content > * {
-  animation: fg-rise 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: fg-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.sl-markdown-content > *:nth-child(1) { animation-delay: 0.04s; }
-.sl-markdown-content > *:nth-child(2) { animation-delay: 0.08s; }
-.sl-markdown-content > *:nth-child(3) { animation-delay: 0.12s; }
-.sl-markdown-content > *:nth-child(4) { animation-delay: 0.16s; }
-.sl-markdown-content > *:nth-child(5) { animation-delay: 0.20s; }
-.sl-markdown-content > *:nth-child(6) { animation-delay: 0.24s; }
-.sl-markdown-content > *:nth-child(7) { animation-delay: 0.28s; }
-.sl-markdown-content > *:nth-child(8) { animation-delay: 0.32s; }
+.sl-markdown-content > *:nth-child(1)  { animation-delay: 0.05s; }
+.sl-markdown-content > *:nth-child(2)  { animation-delay: 0.10s; }
+.sl-markdown-content > *:nth-child(3)  { animation-delay: 0.15s; }
+.sl-markdown-content > *:nth-child(4)  { animation-delay: 0.20s; }
+.sl-markdown-content > *:nth-child(5)  { animation-delay: 0.24s; }
+.sl-markdown-content > *:nth-child(6)  { animation-delay: 0.28s; }
+.sl-markdown-content > *:nth-child(7)  { animation-delay: 0.32s; }
+.sl-markdown-content > *:nth-child(8)  { animation-delay: 0.35s; }
+.sl-markdown-content > *:nth-child(n+9) { animation-delay: 0.38s; }
 
 /* Hero (index page) — slightly longer fade */
 .hero {
