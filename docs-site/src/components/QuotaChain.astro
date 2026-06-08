@@ -1,0 +1,170 @@
+---
+// No props — hardcoded five-level quota resolution waterfall
+interface Level {
+  num: number;
+  rule: string;
+  result: string;
+  resultVariant: 'unlimited' | 'user' | 'group-unlimited' | 'group' | 'system';
+}
+
+const levels: Level[] = [
+  {
+    num: 1,
+    rule: 'User.IsUnlimited = true',
+    result: 'Unlimited (no cap)',
+    resultVariant: 'unlimited',
+  },
+  {
+    num: 2,
+    rule: 'User.MonthlyTokenQuota is set',
+    result: 'User-specific value',
+    resultVariant: 'user',
+  },
+  {
+    num: 3,
+    rule: 'Any group the user belongs to has IsUnlimited = true',
+    result: 'Unlimited (via group)',
+    resultVariant: 'group-unlimited',
+  },
+  {
+    num: 4,
+    rule: 'Max(Group.MonthlyTokenQuota) across all user groups',
+    result: 'Highest group quota',
+    resultVariant: 'group',
+  },
+  {
+    num: 5,
+    rule: 'SystemConfiguration["DefaultMonthlyTokenQuota"]',
+    result: 'System-wide default (e.g. 1 M)',
+    resultVariant: 'system',
+  },
+];
+---
+
+<div class="qc-wrapper not-content">
+  <ol class="qc-list">
+    {levels.map((level) => (
+      <li class="qc-row">
+        <span class={`qc-badge qc-badge--${level.resultVariant}`}>{level.num}</span>
+        <code class="qc-rule">{level.rule}</code>
+        <span class={`qc-result qc-result--${level.resultVariant}`}>{level.result}</span>
+      </li>
+    ))}
+  </ol>
+  <p class="qc-note">
+    First match wins — evaluation stops at the first level that resolves.
+  </p>
+</div>
+
+<style>
+  .qc-wrapper {
+    margin: 1.25rem 0;
+    font-family: system-ui, sans-serif;
+  }
+
+  .qc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border: 1px solid var(--fg-border-subtle, #1E2D42);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .qc-row {
+    display: grid;
+    grid-template-columns: 2.4rem 1fr auto;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.65rem 1rem;
+    background: var(--fg-bg-surface, #0D1520);
+    border-bottom: 1px solid var(--fg-border-subtle, #1E2D42);
+  }
+
+  .qc-row:last-child {
+    border-bottom: none;
+  }
+
+  .qc-row:nth-child(odd) {
+    background: var(--fg-bg-raised, #111927);
+  }
+
+  .qc-badge {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background: var(--fg-azure-dim, #0558A0);
+    color: var(--fg-azure-neon, #4DCFFF);
+    font-size: 0.8rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .qc-rule {
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.8rem;
+    color: var(--fg-text-muted, #6B7E94);
+    background: none;
+    border: none;
+    padding: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  @media (max-width: 580px) {
+    .qc-row {
+      grid-template-columns: 2.4rem 1fr;
+      grid-template-rows: auto auto;
+    }
+    .qc-result {
+      grid-column: 2;
+    }
+  }
+
+  .qc-result {
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .qc-result--unlimited,
+  .qc-result--group-unlimited {
+    color: var(--fg-success, #22C55E);
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.25);
+  }
+
+  .qc-result--user {
+    color: var(--fg-azure-neon, #4DCFFF);
+    background: rgba(77, 207, 255, 0.1);
+    border: 1px solid rgba(77, 207, 255, 0.2);
+  }
+
+  .qc-result--group {
+    color: var(--fg-azure-hover, #3BA3E8);
+    background: rgba(59, 163, 232, 0.1);
+    border: 1px solid rgba(59, 163, 232, 0.2);
+  }
+
+  .qc-result--system {
+    color: var(--fg-ember, #F58025);
+    background: rgba(245, 128, 37, 0.1);
+    border: 1px solid rgba(245, 128, 37, 0.2);
+  }
+
+  .qc-note {
+    margin-top: 0.6rem;
+    font-size: 0.8rem;
+    color: var(--fg-text-muted, #6B7E94);
+    font-style: italic;
+  }
+</style>

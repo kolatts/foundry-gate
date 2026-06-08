@@ -1,0 +1,73 @@
+---
+// No props — hardcoded APIM key state machine diagram
+---
+
+<div class="arch-scroll not-content">
+  <svg
+    viewBox="0 0 580 340"
+    xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;max-width:580px;height:auto;display:block;margin:1.5rem auto;"
+    font-family="system-ui,sans-serif"
+  >
+    <defs>
+      <marker id="kl-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#64748b" />
+      </marker>
+      <marker id="kl-arrow-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#22C55E" />
+      </marker>
+    </defs>
+
+    <!-- ─── No key yet (top center, y=14..68) ─── -->
+    <rect x="205" y="14" width="170" height="54" rx="8"
+          fill="#111927" stroke="#2D4460" stroke-width="1.5" />
+    <text x="290" y="38" text-anchor="middle" fill="#A0B0C0" font-size="12" font-weight="600">No key yet</text>
+    <text x="290" y="56" text-anchor="middle" fill="#6B7E94" font-size="10">(initial state)</text>
+
+    <!-- No key → Active -->
+    <line x1="290" y1="68" x2="290" y2="136" stroke="#64748b" stroke-width="1.5" marker-end="url(#kl-arrow)" />
+    <text x="296" y="100" fill="#64748b" font-size="10">first login /</text>
+    <text x="296" y="114" fill="#64748b" font-size="10">admin provision</text>
+
+    <!-- ─── Active (center, y=138..192) ─── -->
+    <rect x="185" y="138" width="210" height="54" rx="8"
+          fill="#0a1f10" stroke="#22C55E" stroke-width="2" />
+    <text x="290" y="162" text-anchor="middle" fill="#22C55E" font-size="13" font-weight="700">Active</text>
+    <text x="290" y="180" text-anchor="middle" fill="#A0B0C0" font-size="10">APIM subscription active</text>
+
+    <!-- Active → Suspended (down-left) -->
+    <line x1="230" y1="192" x2="120" y2="256" stroke="#64748b" stroke-width="1.5" marker-end="url(#kl-arrow)" />
+    <text x="110" y="228" fill="#64748b" font-size="10" text-anchor="middle">quota exhausted</text>
+    <text x="110" y="241" fill="#64748b" font-size="10" text-anchor="middle">(UsageSyncFunction)</text>
+
+    <!-- Active → Deleted (down-right) -->
+    <line x1="350" y1="192" x2="460" y2="256" stroke="#64748b" stroke-width="1.5" marker-end="url(#kl-arrow)" />
+    <text x="470" y="228" fill="#64748b" font-size="10" text-anchor="middle">admin deactivates /</text>
+    <text x="470" y="241" fill="#64748b" font-size="10" text-anchor="middle">Entra departure</text>
+
+    <!-- ─── Suspended (bottom-left, y=258..312) ─── -->
+    <rect x="30" y="258" width="170" height="54" rx="8"
+          fill="#1a110a" stroke="#F58025" stroke-width="1.5" />
+    <text x="115" y="281" text-anchor="middle" fill="#F58025" font-size="12" font-weight="700">Suspended</text>
+    <text x="115" y="299" text-anchor="middle" fill="#A0B0C0" font-size="10">quota exhausted</text>
+
+    <!-- Suspended → Active curved return arrow (routes through bottom margin) -->
+    <path d="M 115,312 C 115,338 290,338 290,192" fill="none" stroke="#22C55E" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#kl-arrow-green)" />
+    <text x="196" y="336" fill="#22C55E" font-size="9.5" text-anchor="middle">monthly reset (1st of month)</text>
+
+    <!-- ─── Deleted (bottom-right, y=258..312) ─── -->
+    <rect x="380" y="258" width="170" height="54" rx="8"
+          fill="#1a0a0a" stroke="#EF4444" stroke-width="1.5" />
+    <text x="465" y="281" text-anchor="middle" fill="#EF4444" font-size="12" font-weight="700">Deleted</text>
+    <text x="465" y="299" text-anchor="middle" fill="#A0B0C0" font-size="10">key destroyed</text>
+
+    <!-- Deleted note -->
+    <text x="465" y="326" text-anchor="middle" fill="#6B7E94" font-size="9">re-activation = full provision pipeline</text>
+  </svg>
+</div>
+
+<style>
+  .arch-scroll {
+    overflow-x: auto;
+  }
+</style>

@@ -1,0 +1,143 @@
+---
+interface Step {
+  title: string;
+  detail?: string;
+  code?: string;
+}
+
+interface Props {
+  steps: Step[];
+  label?: string;
+}
+
+const { steps, label } = Astro.props;
+---
+
+<div class="pipeline-wrapper not-content">
+  {label && <div class="pipeline-label">{label}</div>}
+  <ol class="pipeline-list">
+    {steps.map((step, i) => (
+      <li class="pipeline-step">
+        <div class="pipeline-left">
+          <div class="pipeline-num">{i + 1}</div>
+          {i < steps.length - 1 && <div class="pipeline-stem" />}
+        </div>
+        <div class="pipeline-content">
+          <div class="pipeline-title">{step.title}</div>
+          {step.detail && <div class="pipeline-detail">{step.detail}</div>}
+          {step.code && (
+            <pre class="pipeline-code"><code>{step.code}</code></pre>
+          )}
+        </div>
+      </li>
+    ))}
+  </ol>
+</div>
+
+<style>
+  .pipeline-wrapper {
+    margin: 1.5rem 0;
+    font-family: system-ui, sans-serif;
+  }
+
+  .pipeline-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-text-muted, #6B7E94);
+    margin-bottom: 1rem;
+    padding-left: 0.25rem;
+  }
+
+  .pipeline-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .pipeline-step {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+
+  .pipeline-left {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+    width: 2rem;
+  }
+
+  .pipeline-num {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background: var(--fg-azure, #0078D4);
+    color: var(--fg-azure-neon, #4DCFFF);
+    font-size: 0.85rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 0 10px rgba(77, 207, 255, 0.35);
+    position: relative;
+    z-index: 1;
+  }
+
+  .pipeline-stem {
+    flex: 1;
+    width: 2px;
+    min-height: 1.5rem;
+    background: linear-gradient(
+      to bottom,
+      var(--fg-azure, #0078D4),
+      var(--fg-border-subtle, #1E2D42)
+    );
+    margin-top: 2px;
+  }
+
+  .pipeline-content {
+    padding-bottom: 1.5rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .pipeline-title {
+    color: var(--fg-text-primary, #E8EEF5);
+    font-weight: 600;
+    font-size: 0.95rem;
+    line-height: 2rem;
+  }
+
+  .pipeline-detail {
+    color: var(--fg-text-secondary, #A0B0C0);
+    font-size: 0.875rem;
+    margin-top: 0.25rem;
+    line-height: 1.5;
+  }
+
+  .pipeline-code {
+    margin-top: 0.5rem;
+    background: var(--fg-bg-surface, #0D1520);
+    border: 1px solid var(--fg-border-subtle, #1E2D42);
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.8rem;
+    color: var(--fg-text-muted, #6B7E94);
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.6;
+  }
+
+  .pipeline-code code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+    color: inherit;
+  }
+</style>

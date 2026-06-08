@@ -1,0 +1,105 @@
+---
+// No props — fully hardcoded architecture diagram for FoundryGate
+---
+
+<div class="arch-scroll not-content">
+  <svg
+    viewBox="0 0 720 660"
+    xmlns="http://www.w3.org/2000/svg"
+    style="width:100%;max-width:720px;height:auto;display:block;margin:1.5rem auto;"
+    font-family="system-ui,sans-serif"
+  >
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+        <path d="M0,0 L0,6 L8,3 z" fill="#64748b" />
+      </marker>
+    </defs>
+
+    <!-- ─── Developer (y=10..82) ─── -->
+    <rect x="185" y="10" width="350" height="72" rx="8"
+          fill="#111927" stroke="#2D4460" stroke-width="1.5" />
+    <text x="360" y="34" text-anchor="middle" fill="#E8EEF5" font-size="13" font-weight="600">Developer (alex@company.com)</text>
+    <text x="360" y="52" text-anchor="middle" fill="#A0B0C0" font-size="11">Claude Code · Codex · OpenAI SDK</text>
+    <text x="360" y="70" text-anchor="middle" fill="#6B7E94" font-size="10" font-family="ui-monospace,Consolas,monospace">api-key: fg-sub-alex-xxxx</text>
+
+    <!-- Developer → APIM -->
+    <line x1="360" y1="82" x2="360" y2="110" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)" />
+    <text x="366" y="100" fill="#64748b" font-size="10">HTTPS + api-key</text>
+
+    <!-- ─── Azure API Management (y=112..182) ─── -->
+    <rect x="80" y="112" width="560" height="70" rx="8"
+          fill="#0D1520" stroke="#0078D4" stroke-width="1.5" />
+    <text x="360" y="136" text-anchor="middle" fill="#E8EEF5" font-size="13" font-weight="600">Azure API Management</text>
+    <text x="360" y="154" text-anchor="middle" fill="#A0B0C0" font-size="11">Product: foundrygate</text>
+    <text x="360" y="172" text-anchor="middle" fill="#6B7E94" font-size="10">llm-emit-token-metric → App Insights · Backend: Azure AI Foundry</text>
+
+    <!-- APIM ↙ Foundry -->
+    <line x1="210" y1="182" x2="150" y2="240" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)" />
+    <text x="140" y="220" fill="#64748b" font-size="10">forwards</text>
+
+    <!-- APIM ↘ App Insights -->
+    <line x1="510" y1="182" x2="568" y2="240" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)" />
+    <text x="514" y="220" fill="#64748b" font-size="10">token metrics</text>
+
+    <!-- ─── Azure AI Foundry (y=242..302) ─── -->
+    <rect x="50" y="242" width="190" height="60" rx="8"
+          fill="#0D1520" stroke="#0078D4" stroke-width="1.5" />
+    <text x="145" y="268" text-anchor="middle" fill="#E8EEF5" font-size="12" font-weight="600">Azure AI Foundry</text>
+    <text x="145" y="288" text-anchor="middle" fill="#A0B0C0" font-size="10">model deployments</text>
+
+    <!-- ─── Application Insights (y=242..302) ─── -->
+    <rect x="468" y="242" width="202" height="60" rx="8"
+          fill="#0D1520" stroke="#0078D4" stroke-width="1.5" />
+    <text x="569" y="264" text-anchor="middle" fill="#E8EEF5" font-size="12" font-weight="600">Application Insights</text>
+    <text x="569" y="282" text-anchor="middle" fill="#A0B0C0" font-size="10">Log Analytics Workspace</text>
+    <text x="569" y="297" text-anchor="middle" fill="#6B7E94" font-size="10">token counts / subscription</text>
+
+    <!-- App Insights ↓ Functions -->
+    <line x1="569" y1="302" x2="569" y2="340" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)" />
+    <text x="574" y="326" fill="#64748b" font-size="10">Azure Monitor · 15 min</text>
+
+    <!-- ─── FoundryGate.Functions (y=342..412) ─── -->
+    <rect x="410" y="342" width="240" height="70" rx="8"
+          fill="#1a0a2e" stroke="#7C3AED" stroke-width="1.5" />
+    <text x="530" y="366" text-anchor="middle" fill="#E8EEF5" font-size="12" font-weight="600">FoundryGate.Functions</text>
+    <text x="530" y="384" text-anchor="middle" fill="#A0B0C0" font-size="10">UsageSyncFunction (15 min)</text>
+    <text x="530" y="402" text-anchor="middle" fill="#A0B0C0" font-size="10">MonthlyResetFunction (1st UTC)</text>
+
+    <!-- Functions ↙ SQL (diagonal) -->
+    <line x1="450" y1="412" x2="380" y2="456" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)" />
+    <text x="382" y="438" fill="#64748b" font-size="10">EF Core</text>
+
+    <!-- ─── Azure SQL (y=458..518) ─── -->
+    <rect x="80" y="458" width="560" height="60" rx="8"
+          fill="#0D1520" stroke="#0078D4" stroke-width="1.5" />
+    <text x="360" y="482" text-anchor="middle" fill="#E8EEF5" font-size="12" font-weight="600">Azure SQL — FoundryGate Database</text>
+    <text x="360" y="502" text-anchor="middle" fill="#A0B0C0" font-size="10">Users · QuotaAllocations · Groups · AuditLog · Keys</text>
+
+    <!-- SQL ↓ API -->
+    <line x1="360" y1="518" x2="360" y2="542" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)" />
+    <text x="366" y="534" fill="#64748b" font-size="10">EF Core</text>
+
+    <!-- ─── FoundryGate.Api (y=544..604) ─── -->
+    <rect x="80" y="544" width="560" height="60" rx="8"
+          fill="#1a0a2e" stroke="#7C3AED" stroke-width="1.5" />
+    <text x="360" y="566" text-anchor="middle" fill="#E8EEF5" font-size="12" font-weight="600">FoundryGate.Api</text>
+    <text x="360" y="584" text-anchor="middle" fill="#A0B0C0" font-size="10">ASP.NET Core · Entra auth · Azure Container App</text>
+    <text x="360" y="599" text-anchor="middle" fill="#6B7E94" font-size="9">IUserLifecycleService → APIM Mgmt API · IEntraUserSyncService → Microsoft Graph</text>
+
+    <!-- API ↓ Web -->
+    <line x1="360" y1="604" x2="360" y2="622" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)" />
+    <text x="366" y="616" fill="#64748b" font-size="10">REST</text>
+
+    <!-- ─── FoundryGate.Web (y=624..656) ─── -->
+    <rect x="80" y="624" width="560" height="32" rx="8"
+          fill="#1a0a2e" stroke="#7C3AED" stroke-width="1.5" />
+    <text x="360" y="638" text-anchor="middle" fill="#E8EEF5" font-size="12" font-weight="600">FoundryGate.Web</text>
+    <text x="360" y="651" text-anchor="middle" fill="#6B7E94" font-size="10">Blazor WASM · Azure Static Web Apps · /me /requests /users /groups /audit</text>
+  </svg>
+</div>
+
+<style>
+  .arch-scroll {
+    overflow-x: auto;
+  }
+</style>

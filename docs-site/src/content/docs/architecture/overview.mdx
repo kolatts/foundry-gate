@@ -4,59 +4,16 @@ description: How FoundryGate's components fit together — quota resolution, API
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import ArchDiagram from '../../../components/ArchDiagram.astro';
+import Pipeline from '../../../components/Pipeline.astro';
+import QuotaChain from '../../../components/QuotaChain.astro';
+import KeyLifecycle from '../../../components/KeyLifecycle.astro';
 
 FoundryGate is a governance and access-management layer that sits in front of your existing Azure AI Foundry deployment. It does not replace APIM or Foundry — it adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
 
 ## Component diagram
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Developer (alex@company.com)                                │
-│  Claude Code · Codex · OpenAI SDK                           │
-│  api-key: fg-sub-alex-xxxx  (personal APIM subscription)    │
-└──────────────────────────────┬───────────────────────────────┘
-                               │ HTTPS + api-key header
-                               ▼
-┌──────────────────────────────────────────────────────────────┐
-│  Azure API Management                                        │
-│  Product: foundrygate  (scopes all Foundry routes)          │
-│  ├─ llm-emit-token-metric  → Application Insights           │
-│  └─ Backend: Azure AI Foundry                               │
-└──────────────┬───────────────────────────┬───────────────────┘
-               │ forwards to Foundry        │ emits per-subscription
-               ▼                           │ token counts
-┌──────────────────────┐                   ▼
-│ Azure AI Foundry     │   ┌──────────────────────────────────┐
-│ (model deployments)  │   │ Application Insights             │
-└──────────────────────┘   │ Log Analytics Workspace          │
-                           └──────────────┬───────────────────┘
-                                          │ Azure Monitor Query
-                                          │ every 15 minutes
-                           ┌──────────────▼───────────────────┐
-                           │ FoundryGate.Functions            │
-                           │  UsageSyncFunction  (15 min)     │
-                           │  MonthlyResetFunction (1st/month)│
-                           └──────────────┬───────────────────┘
-                                          │ EF Core (read/write)
-          ┌───────────────────────────────▼──────────────────────────┐
-          │  Azure SQL — FoundryGate database                        │
-          │  Users · QuotaAllocations · Groups · AuditLog · ...      │
-          └───────────────────────────────┬──────────────────────────┘
-                                          │ EF Core
-          ┌───────────────────────────────▼──────────────────────────┐
-          │  FoundryGate.Api  (Azure Container App)                  │
-          │  ASP.NET Core · Entra ID bearer auth                     │
-          │  IUserLifecycleService  →  APIM Management API          │
-          │  IQuotaResolutionService                                 │
-          │  IEntraUserSyncService  →  Microsoft Graph               │
-          │  IAuditService                                           │
-          └───────────────────────────────┬──────────────────────────┘
-                                          │ REST API calls
-          ┌───────────────────────────────▼──────────────────────────┐
-          │  FoundryGate.Web  (Blazor WASM · Azure Static Web Apps)  │
-          │  /me  /requests  /users  /groups  /foundry  /audit       │
-          └──────────────────────────────────────────────────────────┘
-```
+<ArchDiagram />
 
 ---
 
@@ -68,20 +25,37 @@ FoundryGate uses the Microsoft Graph API (app-only credentials stored in Key Vau
 
 When a developer signs in through the Blazor UI for the first time, `GET /users/me` triggers the full provision pipeline:
 
-```
-1. Extract Entra object ID (oid claim) from the bearer token
-2. Look up developer in the FoundryGate database
-3. If not found → call Graph GET /users/{oid}
-     → fetch displayName, mail, employeeId
-     → INSERT User row
-     → resolve monthly token quota (5-level resolution below)
-     → call APIM Management: POST /subscriptions
-         name: foundrygate-{userId}
-         scope: /products/foundrygate
-     → store encrypted APIM key in SQL (Key Vault key-wrapping)
-     → INSERT QuotaAllocation for current period
-4. Return UserProfileDto with masked key and current quota
-```
+<Pipeline
+  label="First login — provision pipeline"
+  steps={[
+    {
+      title: "Extract Entra object ID from the bearer token",
+      detail: "The oid claim from the validated JWT identifies the developer uniquely.",
+    },
+    {
+      title: "Look up developer in the FoundryGate database",
+      detail: "Query Users table by Entra object ID.",
+    },
+    {
+      title: "If not found — fetch from Graph and create user record",
+      detail: "Call Graph GET /users/{oid} to fetch displayName, mail, employeeId. INSERT User row and resolve monthly token quota (five-level resolution).",
+      code: "Graph GET /users/{oid}\n  → INSERT User row\n  → resolve monthly token quota",
+    },
+    {
+      title: "Create APIM subscription via Management API",
+      detail: "Call APIM Management: POST /subscriptions, scoped to /products/foundrygate. Name: foundrygate-{userId}.",
+      code: "APIM Management API\n  POST /subscriptions\n    name:  foundrygate-{userId}\n    scope: /products/foundrygate",
+    },
+    {
+      title: "Store encrypted APIM key and create quota allocation",
+      detail: "Key is wrapped with a Key Vault key before writing to SQL. INSERT QuotaAllocation for the current billing period.",
+    },
+    {
+      title: "Return UserProfileDto",
+      detail: "Response includes the masked key and current quota usage. The developer is ready to call Foundry.",
+    },
+  ]}
+/>
 
 The developer never needs to contact an admin. Their key is ready the moment they first open the app.
 
@@ -89,17 +63,24 @@ The developer never needs to contact an admin. Their key is ready the moment the
 
 Admins can link a FoundryGate group to an Entra group ID. Running `POST /groups/{id}/sync-entra` (or triggering from the UI) calls:
 
-```
-Graph GET /groups/{entraGroupId}/members
-  → For each member in Entra:
-      if not in FoundryGate DB → INSERT User
-                                 (no APIM key yet — key on first login)
-      if already exists        → update display fields
-  → For members no longer in the Entra group:
-      APIM Management: DELETE /subscriptions/{sid}
-      User.IsActive = false
-      QuotaAllocation.IsHardStopped = true
-```
+<Pipeline
+  label="Entra group sync"
+  steps={[
+    {
+      title: "Fetch current group members from Microsoft Graph",
+      code: "Graph GET /groups/{entraGroupId}/members",
+    },
+    {
+      title: "Upsert members found in Entra",
+      detail: "For each member: if not in FoundryGate DB → INSERT User (no APIM key yet — key is issued on first login). If already exists → update display fields.",
+    },
+    {
+      title: "Deprovision members no longer in the Entra group",
+      detail: "For each departed member: delete their APIM subscription, set User.IsActive = false, set QuotaAllocation.IsHardStopped = true.",
+      code: "APIM Management: DELETE /subscriptions/{sid}\nUser.IsActive = false\nQuotaAllocation.IsHardStopped = true",
+    },
+  ]}
+/>
 
 <Aside type="caution">
 **Departures are hard**: when a developer leaves the Entra group, their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional. Quota exhaustion only suspends; Entra departure permanently revokes.
@@ -115,16 +96,7 @@ Graph GET /groups/{entraGroupId}/members
 
 When a developer's allocation is created or updated, `IQuotaResolutionService` walks this chain — first match wins:
 
-```
-1. User.IsUnlimited = true               → unlimited (skip everything)
-2. User.MonthlyTokenQuota is set         → use the user-specific value
-3. Any group the user belongs to has
-   IsUnlimited = true                    → unlimited
-4. Max(Group.MonthlyTokenQuota) across
-   all the user's groups                 → use the highest group quota
-5. SystemConfiguration
-   ["DefaultMonthlyTokenQuota"]          → system-wide default (e.g. 1M)
-```
+<QuotaChain />
 
 The resolved value is written to `QuotaAllocation` for the current period. Admins can see which level resolved each developer's quota in the user detail view.
 
@@ -134,52 +106,51 @@ The resolved value is written to `QuotaAllocation` for the current period. Admin
 
 FoundryGate doesn't rely on a database flag being checked on every request. The enforcement is APIM-native:
 
-```
-UsageSyncFunction  (runs every 15 minutes)
-  ├── Queries Log Analytics: token totals per APIM subscription ID
-  │   for the current billing period
-  ├── Updates QuotaAllocation.TokensUsed in SQL
-  └── For each developer where TokensUsed ≥ AllocatedTokens:
-        APIM Management: PATCH /subscriptions/{sid}?state=suspended
-        QuotaAllocation.IsHardStopped = true
-
-Result: APIM returns 401 immediately. No Foundry traffic passes.
-```
+<Pipeline
+  label="UsageSyncFunction — runs every 15 minutes"
+  steps={[
+    {
+      title: "Query Log Analytics for token totals per APIM subscription",
+      detail: "Aggregates token consumption for the current billing period across all APIM subscription IDs.",
+    },
+    {
+      title: "Update QuotaAllocation.TokensUsed in SQL",
+      detail: "Writes the latest consumption figures back to the database for UI display and audit.",
+    },
+    {
+      title: "Suspend over-quota developers",
+      detail: "For each developer where TokensUsed ≥ AllocatedTokens: call APIM Management PATCH to set subscription state to suspended, and set QuotaAllocation.IsHardStopped = true.",
+      code: "APIM Management: PATCH /subscriptions/{sid}?state=suspended\nQuotaAllocation.IsHardStopped = true\n\nResult: APIM returns 401 immediately. No Foundry traffic passes.",
+    },
+  ]}
+/>
 
 There is up to a 15-minute window between hitting the limit and enforcement. This is intentional — querying Log Analytics on every request would add latency to every AI call.
 
-```
-MonthlyResetFunction  (00:01 UTC on the 1st of each month)
-  ├── For each active developer:
-  │     Resolve quota for new period → INSERT QuotaAllocation
-  │     If subscription was suspended → PATCH → state: active
-  │     IsHardStopped = false
-  └── Write audit log: quota.monthly-reset
-```
+<Pipeline
+  label="MonthlyResetFunction — 00:01 UTC on the 1st of each month"
+  steps={[
+    {
+      title: "Resolve quota for new period and insert QuotaAllocation",
+      detail: "For each active developer, run the five-level quota resolution for the new month and INSERT a fresh QuotaAllocation row.",
+    },
+    {
+      title: "Re-enable suspended subscriptions",
+      detail: "For each developer whose subscription was suspended: call APIM Management PATCH → state: active. Set IsHardStopped = false.",
+      code: "APIM Management: PATCH /subscriptions/{sid}\n  state: active\nQuotaAllocation.IsHardStopped = false",
+    },
+    {
+      title: "Write audit log entry",
+      detail: "Records the reset event as quota.monthly-reset in the AuditLog table.",
+    },
+  ]}
+/>
 
 ---
 
 ## APIM key lifecycle
 
-```
-                    ┌─────────────────┐
-                    │   No key yet    │
-                    └────────┬────────┘
-                             │ first login  OR  admin provisions
-                             ▼
-                    ┌─────────────────┐
-                    │     Active      │ ◄── monthly reset re-enables
-                    └────┬───────┬───┘
-                         │       │
-        quota exhausted  │       │  admin deactivates / Entra departure
-                         ▼       ▼
-               ┌──────────┐  ┌──────────┐
-               │ Suspended│  │ Deleted  │
-               │ (quota)  │  │(inactive)│
-               └──────────┘  └──────────┘
-                  Resets      Re-activation runs full provision pipeline
-                  on 1st      (new key, new allocation)
-```
+<KeyLifecycle />
 
 **Suspend** — quota exhaustion: APIM subscription state → `suspended`. Key exists. Automatically re-enabled at monthly reset.
 

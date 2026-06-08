@@ -55,13 +55,118 @@ That works fine when you have three engineers sharing a dev environment. It brea
 
 FoundryGate sits in front of your existing Azure AI Foundry deployment. It does not replace APIM or Foundry — it *governs* access to them.
 
-```
-Developer → APIM (with their personal key) → Azure AI Foundry
-                ↓
-         FoundryGate tracks usage,
-         enforces budgets,
-         manages the key lifecycle
-```
+<div class="fg-flow not-content">
+  <div class="fg-flow-box fg-flow-box--dev">
+    <span class="fg-flow-icon">👤</span>
+    <strong>Developer</strong>
+    <span class="fg-flow-sub">personal APIM key</span>
+  </div>
+  <div class="fg-flow-arrow">
+    <span class="fg-flow-arrow-line"></span>
+    <span class="fg-flow-arrow-label">HTTPS + api-key</span>
+    <span class="fg-flow-arrow-head">▶</span>
+  </div>
+  <div class="fg-flow-box fg-flow-box--apim">
+    <span class="fg-flow-icon">🔀</span>
+    <strong>APIM</strong>
+    <span class="fg-flow-sub">FoundryGate product</span>
+  </div>
+  <div class="fg-flow-arrow">
+    <span class="fg-flow-arrow-line"></span>
+    <span class="fg-flow-arrow-label">forwards</span>
+    <span class="fg-flow-arrow-head">▶</span>
+  </div>
+  <div class="fg-flow-box fg-flow-box--foundry">
+    <span class="fg-flow-icon">🤖</span>
+    <strong>Azure AI Foundry</strong>
+    <span class="fg-flow-sub">model deployments</span>
+  </div>
+</div>
+<div class="fg-flow-note not-content">
+  FoundryGate tracks usage · enforces budgets · manages the key lifecycle
+</div>
+
+<style>{`
+  .fg-flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 1.5rem 0 0.5rem;
+    font-family: system-ui, sans-serif;
+  }
+  .fg-flow-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.75rem 1.2rem;
+    border-radius: 10px;
+    min-width: 130px;
+    text-align: center;
+    font-size: 0.9rem;
+    line-height: 1.3;
+  }
+  .fg-flow-box strong {
+    color: #E8EEF5;
+    font-size: 0.9rem;
+  }
+  .fg-flow-icon {
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+  .fg-flow-sub {
+    font-size: 0.72rem;
+    color: #6B7E94;
+    font-family: ui-monospace, Consolas, monospace;
+    margin-top: 0.1rem;
+  }
+  .fg-flow-box--dev {
+    background: #111927;
+    border: 1.5px solid #2D4460;
+  }
+  .fg-flow-box--apim {
+    background: #0D1520;
+    border: 1.5px solid #0078D4;
+  }
+  .fg-flow-box--foundry {
+    background: #0D1520;
+    border: 1.5px solid #0078D4;
+  }
+  .fg-flow-arrow {
+    display: flex;
+    align-items: center;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0 0.4rem;
+    min-width: 70px;
+  }
+  .fg-flow-arrow-line {
+    display: block;
+    width: 60px;
+    height: 1.5px;
+    background: #2D4460;
+  }
+  .fg-flow-arrow-label {
+    font-size: 0.68rem;
+    color: #6B7E94;
+    white-space: nowrap;
+  }
+  .fg-flow-arrow-head {
+    font-size: 0.75rem;
+    color: #2D4460;
+    margin-top: -0.5rem;
+  }
+  .fg-flow-note {
+    text-align: center;
+    font-size: 0.82rem;
+    color: #6B7E94;
+    margin-bottom: 1.25rem;
+    font-style: italic;
+    font-family: system-ui, sans-serif;
+  }
+`}</style>
 
 **Key provisioning**: When a developer first signs in, FoundryGate calls the APIM Management API to create an APIM subscription scoped to the FoundryGate product. The key is issued to the developer. Foundry never knows about individual developers — APIM does.
 
