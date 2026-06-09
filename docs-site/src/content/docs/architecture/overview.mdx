@@ -127,6 +127,10 @@ FoundryGate doesn't rely on a database flag being checked on every request. The 
 
 There is up to a 15-minute window between hitting the limit and enforcement. This is intentional — querying Log Analytics on every request would add latency to every AI call.
 
+<Aside type="caution">
+**FoundryGate quota enforcement and Azure Foundry rate limits are independent.** FoundryGate controls monthly token budgets per developer; it has no effect on Azure AI Foundry's deployment-level rate limits. Azure enforces its own hard ceilings on every deployment — tokens per minute (TPM), requests per minute (RPM), and a 300 concurrent request cap for Foundry models (including Claude). These limits are shared across all callers simultaneously. A developer within their FoundryGate budget still receives `429 Too Many Requests` from Foundry when the deployment is saturated. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/) for how these limits constrain the total number of concurrently active developers per deployment.
+</Aside>
+
 <Pipeline
   label="MonthlyResetFunction — 00:01 UTC on the 1st of each month"
   steps={[
