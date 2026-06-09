@@ -7,6 +7,10 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Foundry Gate',
+      components: {
+        ThemeSelect:   './src/components/ThemeSelect.astro',
+        ThemeProvider: './src/components/ThemeProvider.astro',
+      },
       logo: {
         src: './src/assets/logo-cropped.png',
         alt: 'Foundry Gate',

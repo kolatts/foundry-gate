@@ -1,9 +1,9 @@
-/* Foundry Gate motion layer — subtle, tasteful, respects prefers-reduced-motion */
+/* Foundry Gate motion — subtle, respects prefers-reduced-motion */
 
 /* ─── Keyframes ─────────────────────────────────────────────── */
 
 @keyframes fg-rise {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -15,37 +15,26 @@
 /* ─── Page load — staggered content reveal ───────────────────── */
 
 .sl-markdown-content > * {
-  animation: fg-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: fg-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
-.sl-markdown-content > *:nth-child(1)  { animation-delay: 0.05s; }
-.sl-markdown-content > *:nth-child(2)  { animation-delay: 0.10s; }
-.sl-markdown-content > *:nth-child(3)  { animation-delay: 0.15s; }
-.sl-markdown-content > *:nth-child(4)  { animation-delay: 0.20s; }
-.sl-markdown-content > *:nth-child(5)  { animation-delay: 0.24s; }
-.sl-markdown-content > *:nth-child(6)  { animation-delay: 0.28s; }
-.sl-markdown-content > *:nth-child(7)  { animation-delay: 0.32s; }
-.sl-markdown-content > *:nth-child(8)  { animation-delay: 0.35s; }
-.sl-markdown-content > *:nth-child(n+9) { animation-delay: 0.38s; }
-
-/* Hero (index page) — slightly longer fade */
-.hero {
-  animation: fg-fade 0.6s ease both;
-}
-
-.hero .actions {
-  animation: fg-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.3s both;
-}
+.sl-markdown-content > *:nth-child(1)  { animation-delay: 0.04s; }
+.sl-markdown-content > *:nth-child(2)  { animation-delay: 0.08s; }
+.sl-markdown-content > *:nth-child(3)  { animation-delay: 0.12s; }
+.sl-markdown-content > *:nth-child(4)  { animation-delay: 0.16s; }
+.sl-markdown-content > *:nth-child(5)  { animation-delay: 0.20s; }
+.sl-markdown-content > *:nth-child(6)  { animation-delay: 0.23s; }
+.sl-markdown-content > *:nth-child(7)  { animation-delay: 0.26s; }
+.sl-markdown-content > *:nth-child(n+8) { animation-delay: 0.28s; }
 
 /* ─── Sidebar nav — left-border hover glow ───────────────────── */
 
 .sidebar-content a {
   border-left: 2px solid transparent;
-  transition: color 0.18s ease, border-left-color 0.18s ease, background 0.18s ease;
+  transition: color 0.15s ease, border-left-color 0.15s ease, background 0.15s ease;
 }
 
 .sidebar-content a:hover {
-  color: var(--fg-azure-neon);
   border-left-color: var(--fg-azure-neon);
   background: color-mix(in srgb, var(--fg-azure) 8%, transparent);
 }
@@ -58,7 +47,7 @@
 
 .expressive-code pre {
   border-left: 3px solid var(--fg-azure-dim);
-  transition: border-left-color 0.22s ease;
+  transition: border-left-color 0.2s ease;
 }
 
 .expressive-code pre:hover {
@@ -68,7 +57,7 @@
 /* ─── Callout / aside cards ──────────────────────────────────── */
 
 .starlight-aside {
-  animation: fg-rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
+  border-radius: 6px;
   transition: box-shadow 0.2s ease;
 }
 
@@ -76,25 +65,10 @@
   box-shadow: 0 0 0 1px var(--fg-border-strong);
 }
 
-/* ─── Hero CTA — ember glow on primary button ───────────────── */
-
-.hero .action.primary {
-  transition: background 0.2s ease, box-shadow 0.25s ease, transform 0.15s ease;
-}
-
-.hero .action.primary:hover {
-  background: var(--fg-azure-hover);
-  box-shadow: 0 0 20px 2px color-mix(in srgb, var(--fg-azure-neon) 35%, transparent);
-  transform: translateY(-1px);
-}
-
-.hero .action.primary:active {
-  transform: translateY(0);
-}
-
 /* ─── Link underline sweep ───────────────────────────────────── */
 
-.sl-markdown-content a:not(.action) {
+.sl-markdown-content a:not(.action):not([href^="#"]) {
+  text-decoration: none;
   background-image: linear-gradient(var(--fg-azure), var(--fg-azure));
   background-size: 0 1px;
   background-position: 0 100%;
@@ -102,7 +76,7 @@
   transition: background-size 0.2s ease, color 0.15s ease;
 }
 
-.sl-markdown-content a:not(.action):hover {
+.sl-markdown-content a:not(.action):not([href^="#"]):hover {
   background-size: 100% 1px;
   color: var(--fg-azure-neon);
 }

@@ -1,0 +1,7 @@
+---
+// ThemeProvider override — always sets dark theme, ignores user preference and localStorage.
+---
+<script is:inline>
+  document.documentElement.dataset.theme = 'dark';
+  window.StarlightThemeProvider = { updatePickers() {} };
+</script>

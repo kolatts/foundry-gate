@@ -1,4 +1,4 @@
-/* Foundry Gate design tokens — generated from content/tokens.md */
+/* Foundry Gate design tokens */
 @import '@fontsource/inter/400.css';
 @import '@fontsource/inter/500.css';
 @import '@fontsource/inter/600.css';
@@ -7,12 +7,12 @@
 
 :root {
   /* Background scale (darkest → lightest) */
-  --fg-bg-base:     #080C12;
-  --fg-bg-surface:  #0D1520;
-  --fg-bg-raised:   #111927;
-  --fg-bg-overlay:  #162032;
-  --fg-border-subtle: #1E2D42;
-  --fg-border-strong: #2D4460;
+  --fg-bg-base:     #07090F;
+  --fg-bg-surface:  #0C1420;
+  --fg-bg-raised:   #101B2A;
+  --fg-bg-overlay:  #152234;
+  --fg-border-subtle: #1C2E44;
+  --fg-border-strong: #2A4260;
 
   /* Azure primary */
   --fg-azure-dim:   #0558A0;
@@ -25,10 +25,10 @@
   --fg-ember:       #F58025;
   --fg-ember-hot:   #FF5400;
 
-  /* Text scale */
-  --fg-text-primary:   #E8EEF5;
-  --fg-text-secondary: #A0B0C0;
-  --fg-text-muted:     #6B7E94;
+  /* Text scale — properly legible on dark bg */
+  --fg-text-primary:   #EDF2F7;  /* headings, primary content */
+  --fg-text-secondary: #C4D0DC;  /* body text — main reading copy */
+  --fg-text-muted:     #7E96AD;  /* labels, captions, sidebar */
   --fg-text-disabled:  #3A4F63;
 
   /* Semantic */

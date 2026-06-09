@@ -1,106 +1,211 @@
-/* Map --fg-* design tokens onto Starlight's --sl-* variables.
-   Force dark by targeting both the theme attribute and bare :root. */
+/* Foundry Gate — Starlight dark-only theme
+   Maps --fg-* tokens onto Starlight's --sl-* variables.
+   Theme toggle is disabled; only dark is ever rendered. */
 
-/* Force dark on first paint — prevents light flash */
-:root { color-scheme: dark; }
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
 
-/* Always render as dark theme regardless of system preference */
-:root:not([data-theme='light']) { color-scheme: dark; }
-html { color-scheme: dark; }
-
-:root[data-theme='dark'],
-:root[data-theme='light'],
-:root {
-  /* Accent — Azure scale */
+  /* ── Accent ── */
   --sl-color-accent-low:  var(--fg-azure-dim);
   --sl-color-accent:      var(--fg-azure);
   --sl-color-accent-high: var(--fg-azure-neon);
 
-  /* Page background */
-  --sl-color-black:  var(--fg-bg-base);
-  --sl-color-gray-6: var(--fg-bg-surface);
-  --sl-color-gray-5: var(--fg-bg-raised);
-  --sl-color-gray-4: var(--fg-bg-overlay);
-  --sl-color-gray-3: var(--fg-border-subtle);
-  --sl-color-gray-2: var(--fg-border-strong);
-  --sl-color-gray-1: var(--fg-text-muted);
+  /* ── Gray scale: gray-1 = lightest, gray-6 = darkest ──
+     Starlight uses gray-1 for body text, gray-6 for backgrounds. */
+  --sl-color-white:  var(--fg-text-primary);     /* headings */
+  --sl-color-gray-1: var(--fg-text-secondary);   /* body text */
+  --sl-color-gray-2: var(--fg-text-muted);       /* secondary text */
+  --sl-color-gray-3: var(--fg-border-strong);    /* strong borders */
+  --sl-color-gray-4: var(--fg-border-subtle);    /* subtle borders */
+  --sl-color-gray-5: var(--fg-bg-raised);        /* panel / sidebar bg */
+  --sl-color-gray-6: var(--fg-bg-surface);       /* surface bg */
+  --sl-color-black:  var(--fg-bg-base);          /* page bg */
 
-  /* Text */
-  --sl-color-white:  var(--fg-text-primary);
-
-  /* Semantic */
+  /* ── Semantic ── */
   --sl-color-green:  var(--fg-success);
   --sl-color-blue:   var(--fg-info);
   --sl-color-orange: var(--fg-ember);
   --sl-color-red:    var(--fg-ember-hot);
 
-  /* Typography */
-  --sl-font:      var(--fg-font-ui);
-  --sl-font-mono: var(--fg-font-mono);
-  --sl-text-code: var(--fg-text-mono);
+  /* ── Typography ── */
+  --sl-font:      'Inter', system-ui, -apple-system, sans-serif;
+  --sl-font-mono: 'Monaspace Argon', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* ── Content width ── */
+  --sl-content-width: 52rem;
+
+  /* ── Line height — loosen for readability ── */
+  --sl-line-height: 1.75;
+  --sl-line-height-headings: 1.25;
 }
 
-/* Tighten the site header */
+/* ── Force dark even if system prefers light ── */
+html { color-scheme: dark; }
+
+/* ── Page background ── */
+body {
+  background-color: var(--fg-bg-base);
+}
+
+/* ── Header ── */
 header.header {
-  background: color-mix(in srgb, var(--fg-bg-base) 80%, transparent);
-  backdrop-filter: blur(16px) saturate(160%);
-  -webkit-backdrop-filter: blur(16px) saturate(160%);
+  background: color-mix(in srgb, var(--fg-bg-base) 85%, transparent);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   border-bottom: 1px solid var(--fg-border-subtle);
+  position: sticky;
+  z-index: 10;
 }
 
-/* Sidebar background */
+/* ── Sidebar ── */
 .sidebar-pane {
   background: var(--fg-bg-surface);
   border-right: 1px solid var(--fg-border-subtle);
 }
 
-/* Code block background */
+/* Sidebar section labels */
+.sidebar-pane .group-label span {
+  color: var(--fg-azure-neon);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+/* Sidebar nav links */
+.sidebar-content a {
+  color: var(--fg-text-muted);
+  font-size: 0.875rem;
+}
+
+.sidebar-content a:hover,
+.sidebar-content a[aria-current='page'] {
+  color: var(--fg-text-primary);
+}
+
+/* ── Main content area ── */
+.sl-markdown-content {
+  font-size: 0.9375rem;    /* 15px — easier to read than default 14px */
+  line-height: 1.8;
+  color: var(--fg-text-secondary);
+}
+
+/* Headings */
+.sl-markdown-content h1 {
+  color: var(--fg-text-primary);
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+
+.sl-markdown-content h2 {
+  color: var(--fg-text-primary);
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--fg-border-subtle);
+  margin-top: 2.5rem;
+}
+
+.sl-markdown-content h3 {
+  color: var(--fg-azure-neon);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-top: 1.75rem;
+}
+
+.sl-markdown-content h4 {
+  color: var(--fg-text-primary);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* Paragraphs */
+.sl-markdown-content p {
+  color: var(--fg-text-secondary);
+}
+
+/* Links */
+.sl-markdown-content a {
+  color: var(--fg-azure-hover);
+}
+
+.sl-markdown-content a:hover {
+  color: var(--fg-azure-neon);
+}
+
+/* Inline code */
+.sl-markdown-content :not(pre) > code {
+  background: var(--fg-bg-raised);
+  border: 1px solid var(--fg-border-subtle);
+  color: var(--fg-azure-neon);
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  font-size: 0.875em;
+}
+
+/* Tables */
+.sl-markdown-content table {
+  border-color: var(--fg-border-subtle);
+  font-size: 0.875rem;
+}
+
+.sl-markdown-content thead th {
+  background: var(--fg-bg-raised);
+  color: var(--fg-text-primary);
+  border-color: var(--fg-border-subtle);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sl-markdown-content td {
+  border-color: var(--fg-border-subtle);
+  color: var(--fg-text-secondary);
+}
+
+.sl-markdown-content tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--fg-bg-raised) 50%, transparent);
+}
+
+/* ── Code blocks ── */
 .expressive-code .frame {
   background: var(--fg-bg-raised) !important;
   border: 1px solid var(--fg-border-subtle) !important;
+  border-radius: 8px !important;
 }
 
-/* ── Ambient aurora behind the docs pages ────────────── */
+/* ── Logo ── */
+.site-title img {
+  height: 44px !important;
+  width: auto !important;
+  max-width: none !important;
+  filter: brightness(1.1) drop-shadow(0 0 8px rgba(77,207,255,0.2));
+}
+
+/* ── Ambient aurora — quieter, fixed opacity ── */
 body::before {
   content: '';
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(ellipse 60% 50% at 5% 15%,  rgba(0,120,212,0.07)  0%, transparent 60%),
-    radial-gradient(ellipse 50% 70% at 95% 70%, rgba(77,207,255,0.05) 0%, transparent 55%),
-    url('/foundry-gate/nebula.png') center / cover no-repeat;
-  opacity: 0.035;
+    radial-gradient(ellipse 70% 50% at 8% 10%,  rgba(0,120,212,0.06) 0%, transparent 60%),
+    radial-gradient(ellipse 55% 65% at 92% 75%, rgba(77,207,255,0.04) 0%, transparent 55%);
   pointer-events: none;
   z-index: 0;
-  animation: docs-aurora 30s cubic-bezier(0.45, 0, 0.55, 1) infinite alternate;
 }
 
-@keyframes docs-aurora {
-  from { opacity: 0.5; transform: scale(1)    translateX(0);    }
-  to   { opacity: 1;   transform: scale(1.03) translateX(10px); }
-}
-
-/* ── Dot grid texture ────────────────────────────────── */
+/* ── Dot grid — very subtle ── */
 body::after {
   content: '';
   position: fixed;
   inset: 0;
-  background-image: radial-gradient(circle, rgba(160,176,192,0.04) 1px, transparent 1px);
+  background-image: radial-gradient(circle, rgba(160,176,192,0.035) 1px, transparent 1px);
   background-size: 28px 28px;
   pointer-events: none;
   z-index: 0;
-}
-
-/* ── Logo sizing in header ──────────────────────────────── */
-.site-title img {
-  height: 48px !important;
-  width: auto !important;
-  max-width: none !important;
-  filter: brightness(1.15) drop-shadow(0 0 6px rgba(77,207,255,0.15));
-}
-
-/* Stack the header above the fixed aurora */
-header.header {
-  position: sticky;
-  z-index: 10;
 }
