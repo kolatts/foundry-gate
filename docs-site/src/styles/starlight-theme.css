@@ -187,25 +187,4 @@ header.header {
   filter: brightness(1.1) drop-shadow(0 0 8px rgba(77,207,255,0.2));
 }
 
-/* ── Ambient aurora — quieter, fixed opacity ── */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 70% 50% at 8% 10%,  rgba(0,120,212,0.06) 0%, transparent 60%),
-    radial-gradient(ellipse 55% 65% at 92% 75%, rgba(77,207,255,0.04) 0%, transparent 55%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* ── Dot grid — very subtle ── */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background-image: radial-gradient(circle, rgba(160,176,192,0.035) 1px, transparent 1px);
-  background-size: 28px 28px;
-  pointer-events: none;
-  z-index: 0;
-}
+/* Aurora orbs and dot grid are injected by the PageFrame component override */

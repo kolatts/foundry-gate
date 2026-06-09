@@ -1,0 +1,169 @@
+---
+import MobileMenuToggle from 'virtual:starlight/components/MobileMenuToggle';
+
+const { hasSidebar } = Astro.locals.starlightRoute;
+---
+
+<!-- Aurora background — orbs only, no nebula (that lives on the landing page) -->
+<div class="fg-aurora" aria-hidden="true">
+  <div class="fg-orb fg-orb-1"></div>
+  <div class="fg-orb fg-orb-2"></div>
+  <div class="fg-orb fg-orb-3"></div>
+</div>
+<div class="fg-dot-grid" aria-hidden="true"></div>
+
+<div class="page sl-flex">
+  <header class="header"><slot name="header" /></header>
+  {
+    hasSidebar && (
+      <nav class="sidebar print:hidden" aria-label={Astro.locals.t('sidebarNav.accessibleLabel')}>
+        <MobileMenuToggle />
+        <div id="starlight__sidebar" class="sidebar-pane">
+          <div class="sidebar-content sl-flex">
+            <slot name="sidebar" />
+          </div>
+        </div>
+      </nav>
+    )
+  }
+  <div class="main-frame"><slot /></div>
+</div>
+
+<style>
+  /* ── Aurora orbs ───────────────────────────────────────── */
+  .fg-aurora {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .fg-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(90px);
+    will-change: transform;
+  }
+
+  .fg-orb-1 {
+    width: 700px; height: 480px;
+    background: radial-gradient(ellipse, rgba(0,120,212,0.20) 0%, transparent 70%);
+    top: -120px; left: -80px;
+    animation: fg-orb1 24s ease-in-out infinite alternate;
+  }
+
+  .fg-orb-2 {
+    width: 520px; height: 660px;
+    background: radial-gradient(ellipse, rgba(77,207,255,0.09) 0%, transparent 70%);
+    top: 8%; right: -130px;
+    animation: fg-orb2 30s ease-in-out infinite alternate;
+    animation-delay: -14s;
+  }
+
+  .fg-orb-3 {
+    width: 820px; height: 380px;
+    background: radial-gradient(ellipse, rgba(5,88,160,0.17) 0%, transparent 70%);
+    bottom: -60px; left: 18%;
+    animation: fg-orb3 20s ease-in-out infinite alternate;
+    animation-delay: -7s;
+  }
+
+  @keyframes fg-orb1 {
+    from { transform: translate(0, 0) scale(1); }
+    to   { transform: translate(50px, 35px) scale(1.07); }
+  }
+  @keyframes fg-orb2 {
+    from { transform: translate(0, 0) scale(1); }
+    to   { transform: translate(-38px, 30px) scale(0.93); }
+  }
+  @keyframes fg-orb3 {
+    from { transform: translate(0, 0) scale(1); }
+    to   { transform: translate(28px, -24px) scale(1.06); }
+  }
+
+  /* ── Dot grid ──────────────────────────────────────────── */
+  .fg-dot-grid {
+    position: fixed;
+    inset: 0;
+    background-image: radial-gradient(circle, rgba(160,176,192,0.045) 1px, transparent 1px);
+    background-size: 28px 28px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Starlight page layout (copied from original PageFrame) ── */
+  .page {
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  .header {
+    z-index: var(--sl-z-index-navbar);
+    position: fixed;
+    inset-inline-start: 0;
+    inset-block-start: 0;
+    width: 100%;
+    height: var(--sl-nav-height);
+    border-bottom: 1px solid var(--sl-color-hairline-shade);
+    padding: var(--sl-nav-pad-y) var(--sl-nav-pad-x);
+    padding-inline-end: var(--sl-nav-pad-x);
+    background-color: var(--sl-color-bg-nav);
+  }
+
+  :global([data-has-sidebar]) .header {
+    padding-inline-end: calc(var(--sl-nav-gap) + var(--sl-nav-pad-x) + var(--sl-menu-button-size));
+  }
+
+  .sidebar-pane {
+    visibility: var(--sl-sidebar-visibility, hidden);
+    position: fixed;
+    z-index: var(--sl-z-index-menu);
+    inset-block: var(--sl-nav-height) 0;
+    inset-inline-start: 0;
+    width: 100%;
+    background-color: var(--sl-color-black);
+    overflow-y: auto;
+  }
+
+  :global([aria-expanded='true']) ~ .sidebar-pane {
+    --sl-sidebar-visibility: visible;
+  }
+
+  .sidebar-content {
+    height: 100%;
+    min-height: max-content;
+    padding: 1rem var(--sl-sidebar-pad-x) 0;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  @media (min-width: 50rem) {
+    .sidebar-content::after {
+      content: '';
+      padding-bottom: 1px;
+    }
+  }
+
+  .main-frame {
+    padding-top: calc(var(--sl-nav-height) + var(--sl-mobile-toc-height));
+    padding-inline-start: var(--sl-content-inline-start);
+  }
+
+  @media (min-width: 50rem) {
+    :global([data-has-sidebar]) .header {
+      padding-inline-end: var(--sl-nav-pad-x);
+    }
+    .sidebar-pane {
+      --sl-sidebar-visibility: visible;
+      width: var(--sl-sidebar-width);
+      background-color: var(--sl-color-bg-sidebar);
+      border-inline-end: 1px solid var(--sl-color-hairline-shade);
+    }
+  }
+
+  /* Respect reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .fg-orb { animation: none; }
+  }
+</style>

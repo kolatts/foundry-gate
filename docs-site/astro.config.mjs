@@ -10,6 +10,7 @@ export default defineConfig({
       components: {
         ThemeSelect:   './src/components/ThemeSelect.astro',
         ThemeProvider: './src/components/ThemeProvider.astro',
+        PageFrame:     './src/components/PageFrame.astro',
       },
       logo: {
         src: './src/assets/logo-cropped.png',
