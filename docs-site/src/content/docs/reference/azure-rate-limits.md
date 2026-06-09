@@ -6,142 +6,195 @@ description: How Azure AI Foundry's deployment-level TPM/RPM limits cap the numb
 import { Aside } from '@astrojs/starlight/components';
 
 <Aside type="caution">
-**Scale blocker**: Azure AI Foundry enforces hard rate limits at the deployment level, shared across all callers. These limits cap how many developers can actively use FoundryGate simultaneously, regardless of per-developer token budgets. For organisations with more than 50–100 active developers, these limits are likely the binding constraint — not FoundryGate's quota system.
+**Scale blocker**: Azure AI Foundry enforces hard rate limits at the deployment level, shared across all callers. These limits cap how many developers can actively use FoundryGate simultaneously, regardless of per-developer token budgets. For organisations with more than 50–100 actively generating developers, the deployment-level ceiling is likely the binding constraint — not FoundryGate's quota system.
 </Aside>
 
 ## What the limits are
 
-Azure AI Foundry imposes two limits on every model deployment in the **standard (pay-as-you-go)** tier:
+Azure AI Foundry imposes two limits on every model deployment:
 
-- **Tokens per minute (TPM)** — the total input + output tokens that can be processed per rolling minute, across all callers.
-- **Requests per minute (RPM)** — the number of API calls allowed per rolling minute, across all callers.
+- **Tokens per minute (TPM)** — total input + output tokens processed per rolling minute, across all callers sharing that deployment.
+- **Requests per minute (RPM)** — number of API calls allowed per rolling minute, across all callers.
 
-These limits apply to the **deployment**, not to an individual APIM subscription or developer. Every request FoundryGate routes to Foundry counts against the same pool.
-
-### Default limits by model
-
-These are the standard defaults for new deployments in major regions (East US, West Europe). Actual defaults vary by region and subscription history; limits can be raised via the Azure quota request process.
-
-| Model | Default TPM | Default RPM | Max requestable TPM |
-|---|---|---|---|
-| GPT-4o | 450,000 | 2,700 | ~2,000,000+ (region-dependent) |
-| GPT-4o mini | 2,000,000 | 12,000 | ~10,000,000+ |
-| GPT-4 Turbo | 150,000 | 900 | ~600,000 |
-| GPT-3.5 Turbo | 1,000,000 | 6,000 | ~4,000,000 |
-| **Claude 3.5 Sonnet** | **200,000** | **1,000** | **~400,000** |
-| **Claude 3 Sonnet** | **200,000** | **1,000** | **~400,000** |
-| **Claude 3.5 Haiku** | **400,000** | **2,000** | **~800,000** |
+These limits apply to the **deployment**, not to an individual APIM subscription or developer. Every request FoundryGate routes to Foundry counts against the same shared pool.
 
 <Aside type="note">
-Claude models on Azure AI Foundry are provisioned through the Azure AI Model Catalog (Anthropic as a marketplace partner). Their TPM limits are significantly lower than equivalent OpenAI models and lower than what you would get calling Anthropic's API directly. Microsoft and Anthropic have not published a formal quota increase path for Claude on Azure equivalent to the Azure OpenAI quota request portal — increases typically require opening a support ticket.
+Rate windows are evaluated over **1-second and 10-second intervals**, not only per-minute rolling windows. A burst of requests can trigger `429 Too Many Requests` even when the per-minute average is well within quota.
 </Aside>
+
+---
+
+## Claude models on Azure AI Foundry
+
+### Enterprise subscription requirement
+
+<Aside type="caution">
+**Access blocker before rate limits are even relevant**: Claude models on Azure AI Foundry are available only on **Enterprise Agreement (EA) and Microsoft Customer Agreement – Enterprise (MCA-E) subscriptions**. Pay-as-you-go, MSDN, Visual Studio, student, free trial, and CSP subscriptions receive a default quota of **0** — Claude deployments exist in the portal but cannot process any traffic.
+</Aside>
+
+If your Azure subscription is not EA or MCA-E, Claude is not a viable model choice through Azure AI Foundry. Consider the direct Anthropic API or waiting for broader subscription eligibility.
+
+### Available Claude models and limits
+
+All Claude deployments are **Global Standard** type only. Two regions are supported: **East US2** and **Sweden Central**.
+
+| Model | Default RPM (non-EA) | Default TPM (non-EA) | Enterprise RPM | Enterprise TPM |
+|---|---|---|---|---|
+| claude-opus-4-8, 4-7, 4-6, 4-5, 4-1 | **0** | **0** | 2,000 | 2,000,000 |
+| claude-sonnet-4-6 | **0** | **0** | 2,000 | 2,000,000 |
+| claude-sonnet-4-5 | **0** | **0** | 4,000 | 2,000,000 |
+| claude-haiku-4-5 | **0** | **0** | 4,000 | 4,000,000 |
+
+In addition to TPM and RPM, Azure AI Foundry imposes a **300 concurrent request** cap per deployment for Foundry (non-OpenAI) models, including all Claude variants.
+
+Quota above these Enterprise defaults requires submitting a [quota increase request](https://aka.ms/oai/stuquotarequest). There is no published ceiling; increases are evaluated individually. There is no self-service path equivalent to Azure OpenAI's quota portal for Claude — contact Microsoft support.
+
+**Claude does not support Provisioned Throughput Units (PTU).** All Claude capacity is standard consumption-based with shared rate limits. There is no way to purchase dedicated, isolated throughput for Claude on Azure AI Foundry.
+
+---
+
+## Azure OpenAI models (GPT series)
+
+### Tiered quota system
+
+Azure OpenAI uses a 7-tier quota system (Tier 0–6), assigned automatically based on subscription type and historical usage. Enterprise/MCA-E customers start higher; tiers increase automatically as consumption grows.
+
+### GPT-4.1 (current primary GPT-4-class model)
+
+| Tier | Global Standard TPM | Global Standard RPM | Data Zone Standard TPM |
+|---|---|---|---|
+| Tier 1 | 1,000,000 | 1,000 | 300,000 |
+| Tier 2 | 3,000,000 | 3,000 | — |
+| Tier 3 | 9,000,000 | 9,000 | — |
+| Tier 4 | 18,000,000 | 18,000 | — |
+| Tier 5 | 30,000,000 | 30,000 | — |
+| Tier 6 | 45,000,000 | 45,000 | — |
+
+### GPT-4o
+
+GPT-4o is not in the new tier tables (those cover gpt-4.1, gpt-5, o4-mini). For reference, GPT-4o Standard deployments historically started at approximately 300,000–450,000 TPM depending on region and subscription type.
+
+### GPT-4o-mini
+
+| Tier | Global Standard TPM | Global Standard RPM | Data Zone Standard TPM |
+|---|---|---|---|
+| Tier 1 | 2,000,000 | 20,000 | 1,000,000 |
+| Tier 2 | 9,000,000 | 90,000 | — |
+| Tier 3 | 33,000,000 | 330,000 | — |
+| Tier 4 | 78,000,000 | 780,000 | — |
+| Tier 5 | 150,000,000 | 1,500,000 | — |
+| Tier 6 | 225,000,000 | 2,250,000 | — |
+
+### Provisioned Throughput Units (PTU)
+
+GPT models support PTU: purchased dedicated capacity with no shared rate limits, billed per PTU regardless of utilisation. Minimum purchase is typically 50–100 PTUs. PTU is the correct architecture for latency-sensitive or high-volume GPT workloads. **Claude does not support PTU.**
 
 ---
 
 ## How many concurrent developers can one deployment support?
 
-This depends on how actively developers are generating tokens. The key variable is **requests per active user per minute** — which varies widely between occasional chat usage and a continuously streaming AI code editor.
+Azure does not enforce a per-connection concurrency limit on Standard/Global Standard GPT deployments. TPM is the binding constraint. For Claude, the 300 concurrent request cap is an additional hard ceiling.
 
-### Assumptions
+### Key variables
 
 | Variable | Light usage | Heavy usage |
 |---|---|---|
-| Avg tokens per request (input + output) | 2,000 | 4,000 |
+| Avg tokens per request (input + output) | 1,500 | 4,000 |
 | Requests per minute per active user | 1 | 6 |
-| % of org active simultaneously | 15% | 30% |
+| % of org actively generating tokens | 15% | 30% |
 
-### Concurrent developer estimates
+### Claude Sonnet 4.5/4.6 — Enterprise tier (2M TPM / 2,000 RPM)
 
-#### GPT-4o at default 450K TPM
-
-| Usage pattern | Requests/min capacity | Concurrent active users | Total org size supported |
-|---|---|---|---|
-| Light (2K tokens, 1 req/min) | 225 | 225 | ~1,500 |
-| Moderate (2K tokens, 3 req/min) | 225 | 75 | ~250–500 |
-| Heavy (4K tokens, 6 req/min) | 112 | 19 | ~65–130 |
-
-#### Claude 3.5 Sonnet at default 200K TPM
-
-| Usage pattern | Requests/min capacity | Concurrent active users | Total org size supported |
-|---|---|---|---|
-| Light (2K tokens, 1 req/min) | 100 | 100 | ~650 |
-| Moderate (2K tokens, 3 req/min) | 100 | 33 | ~110–220 |
-| Heavy (4K tokens, 6 req/min) | 50 | 8 | ~25–55 |
-
-#### Claude 3.5 Sonnet at max quota ~400K TPM
-
-| Usage pattern | Requests/min capacity | Concurrent active users | Total org size supported |
-|---|---|---|---|
-| Light (2K tokens, 1 req/min) | 200 | 200 | ~1,300 |
-| Moderate (2K tokens, 3 req/min) | 200 | 67 | ~220–450 |
-| Heavy (4K tokens, 6 req/min) | 100 | 17 | ~55–115 |
+| Usage pattern | TPM capacity (req/min) | RPM constraint | Effective req/min | Concurrent active users | Total org size |
+|---|---|---|---|---|---|
+| Light (1,500 tok, 1 req/min) | 1,333 | 2,000 | 1,333 | 1,333 | ~8,900 |
+| Moderate (2,000 tok, 3 req/min) | 1,000 | 667 | **667** (RPM-bound) | 222 | ~740–1,480 |
+| Heavy (4,000 tok, 6 req/min) | 500 | 333 | **333** (RPM-bound) | 56 | ~185–370 |
+| Heavy + 300-concurrent cap | 500 | 333 | **300** (concurrency-bound) | 50 | ~165–330 |
 
 <Aside type="caution">
-**Real-world expectation**: In practice, AI-assisted development workflows (code completion, inline suggestions, agentic loops) generate traffic closer to the **heavy** end of this table. An organisation with 200 developers expecting AI-assisted coding from Claude 3.5 Sonnet is likely to hit the default 200K TPM ceiling within minutes of a busy morning standup.
+**The 300 concurrent request cap is the binding constraint for heavy AI-assisted coding.** When developers use AI coding assistants that pipeline multiple requests (e.g., agentic loops, inline completions, multi-step reasoning), the per-deployment concurrent request ceiling of 300 becomes the first limit hit — regardless of TPM headroom. At 6 requests per minute per active user, 300 concurrent requests supports only about **50 simultaneously active developers**.
+</Aside>
+
+### GPT-4.1 — Tier 1 (1M TPM / 1,000 RPM, Global Standard)
+
+| Usage pattern | TPM capacity (req/min) | RPM constraint | Effective req/min | Concurrent active users | Total org size |
+|---|---|---|---|---|---|
+| Light (1,500 tok, 1 req/min) | 667 | 1,000 | 667 | 667 | ~4,450 |
+| Moderate (2,000 tok, 3 req/min) | 500 | 333 | **333** (RPM-bound) | 111 | ~370–740 |
+| Heavy (4,000 tok, 6 req/min) | 250 | 167 | **167** (RPM-bound) | 28 | ~93–186 |
+
+At higher tiers (Tier 3: 9M TPM / 9,000 RPM), the heavy-usage total org ceiling rises to ~840–1,680 — more viable for large organisations.
+
+### GPT-4o — ~450K TPM (historical Standard)
+
+| Usage pattern | Effective req/min | Concurrent active users | Total org size |
+|---|---|---|---|
+| Light (1,500 tok, 1 req/min) | 300 | 300 | ~2,000 |
+| Moderate (2,000 tok, 3 req/min) | 75 | 25 | ~83–167 |
+| Heavy (4,000 tok, 6 req/min) | 18 | 3 | **~10–20** |
+
+<Aside type="caution">
+GPT-4o at its historical Standard default is severely limited for heavy AI-assisted coding — a busy team of 20 can saturate it.
 </Aside>
 
 ---
 
 ## Why FoundryGate's per-developer quotas don't solve this
 
-FoundryGate's monthly token budgets and APIM suspension mechanism operate at a different layer than Azure's deployment-level TPM limits:
+FoundryGate's monthly token budgets and APIM suspension mechanism operate at a different layer than Azure's deployment-level limits:
 
 - **FoundryGate** controls *who gets access* and *how much they consume over a month*. It's a governance and fairness tool.
-- **Azure Foundry TPM limits** control *how fast* the deployment can process requests *right now*, regardless of who is asking.
+- **Azure Foundry TPM / RPM / concurrency limits** control *how fast* the deployment can process requests *right now*, regardless of who is asking.
 
-A developer within their monthly quota can still trigger a `429 Too Many Requests` from Foundry if the deployment is saturated by other users at that moment. FoundryGate currently surfaces this as a pass-through error — it does not retry, queue, or prioritise requests.
+A developer well within their monthly quota will still receive a `429 Too Many Requests` if the deployment is saturated. FoundryGate currently surfaces this as a pass-through error — it does not retry, queue, or prioritise requests.
 
-This means the effective scale ceiling for FoundryGate is determined by Azure's rate limits, not by how many users you provision or how large their monthly quotas are.
+The effective scale ceiling for FoundryGate is determined by Azure's rate limits, not by the number of users provisioned or the size of their monthly budgets.
 
 ---
 
 ## Mitigations
 
-### 1. Request quota increases (Azure OpenAI)
+### 1. Verify subscription eligibility for Claude first
 
-For OpenAI models, Azure provides a [quota increase request form](https://customervoice.microsoft.com/Pages/ResponsePage.aspx?id=v4j5cvGGr0GRqy180BHbR4xPXO648sJKt4GoXAed-0pUMFE2Rk5GSllYRDRMQVZZWlU5Q0tGUEJRRCQlQCN0PWcu) in the Azure portal. Increases to 2M–10M TPM for GPT-4o are achievable for enterprise subscriptions but typically require business justification and can take days to weeks.
+Before planning any Claude-based deployment, confirm your Azure subscription type is EA or MCA-E. If not, Claude is unavailable through Azure AI Foundry entirely.
 
-For Claude models on Azure, quota increases are not self-service. Open a Microsoft Azure support ticket with your use case and expected peak TPM.
+### 2. Use GPT-4.1 Global Standard and auto-tier progression
 
-### 2. Provisioned Throughput Units (PTU) — OpenAI models only
+GPT-4.1 on Global Standard starts at 1M TPM (Tier 1) and auto-scales to 45M TPM at Tier 6 as consumption grows. For new deployments it is a better starting point than legacy GPT-4o or GPT-4 Turbo.
 
-Azure OpenAI's **Provisioned** tier pre-allocates model capacity to your deployment. PTU provides **dedicated, consistent throughput** rather than a shared rate limit:
+### 3. Move GPT workloads to Provisioned Throughput Units (PTU)
 
-- GPT-4o: approximately 2,500–6,000 TPM per PTU (varies by context and workload)
-- Commitment: monthly or annual, billed per PTU regardless of utilisation
-- Minimum purchase: typically 50–100 PTUs depending on the model
+PTU provides dedicated, consistent throughput with no shared rate limits. It is the correct architecture for more than ~100 heavily active developers on GPT models. PTU is not available for Claude.
 
-At 100 PTUs of GPT-4o (~250K–600K sustained TPM), the concurrent user ceiling shifts from Azure's shared limits to your own provisioned capacity. PTU is the correct architecture for more than ~100 active developers on GPT-4o.
+### 4. Request quota increases
 
-Claude models on Azure **do not support PTU**. They are available only in the standard consumption-based tier, making quota limits the hard ceiling for Claude at scale on Azure.
+For Claude, open a Microsoft Azure support ticket with your expected peak TPM and use case. For GPT models, use the [Azure OpenAI quota request form](https://aka.ms/oai/stuquotarequest). Priority goes to subscriptions already actively consuming existing quota.
 
-### 3. Multiple Foundry deployments or regions
+### 5. Route across multiple regions
 
-FoundryGate currently routes to a single Foundry endpoint via a single APIM backend. Deploying additional Foundry accounts or models in additional Azure regions and load-balancing across them at the APIM layer multiplies the effective TPM ceiling. This requires APIM backend pool configuration outside of FoundryGate's scope.
+FoundryGate routes to a single Foundry endpoint. Adding APIM backend pools across multiple Foundry deployments in different regions (East US2 + Sweden Central for Claude; any two regions for GPT) multiplies effective TPM and concurrent request headroom. This requires APIM backend pool configuration outside FoundryGate's scope today.
 
-### 4. Reduce token consumption per request
+### 6. Use GPT-4o-mini or Claude Haiku for overflow
 
-- Lower `max_tokens` / `max_completion_tokens` defaults in requests sent through APIM.
-- Apply APIM policies to strip unnecessarily large system prompts or enforce response length limits.
-- Route lightweight tasks (embeddings, short completions) to cheaper models with higher default TPM.
+GPT-4o-mini starts at 2M TPM at Tier 1. Claude Haiku 4.5 at Enterprise tier allows 4M TPM and 4,000 RPM. Routing lightweight tasks (short Q&A, summarisation, embeddings) to these models frees Sonnet / GPT-4.1 capacity for tasks where quality matters.
 
-### 5. Use gpt-4o-mini or GPT-3.5 Turbo as overflow
+### 7. Reduce per-request token consumption
 
-Both models have dramatically higher default TPM limits (2M and 1M respectively). Routing non-latency-sensitive or lower-stakes tasks to these models through a separate APIM backend frees GPT-4o and Claude capacity for tasks where model quality matters.
+Apply APIM policies to cap `max_tokens` / `max_completion_tokens`, strip oversized system prompts at the gateway, or enforce response length limits. Halving average tokens per request doubles effective concurrent user capacity.
 
 ---
 
 ## Planning for your deployment
 
-Use this rough sizing guide when deploying FoundryGate:
-
 | Team size | Recommended approach |
 |---|---|
-| < 50 developers | Standard tier, single deployment. Default limits are sufficient for most usage patterns. |
-| 50–150 developers | Request a quota increase to 1M+ TPM. Monitor for 429s in Application Insights. |
-| 150–500 developers | PTU for GPT-4o (if primary model). Multiple Claude deployments across regions if using Claude. Budget for support tickets. |
-| 500+ developers | Multi-region APIM backend pools. PTU is mandatory for OpenAI models. Claude at this scale on Azure requires a Anthropic enterprise agreement routed directly, not through Azure AI Foundry. |
+| < 30 developers | Claude Sonnet or GPT-4o at standard limits. Likely fine for moderate usage patterns. |
+| 30–100 developers | GPT-4.1 Global Standard (auto-tiers up). For Claude: verify EA/MCA-E subscription. Add APIM retry-on-429 policy. |
+| 100–300 developers | PTU for GPT models. For Claude: request quota increases; plan multi-region APIM backend pool. The 300-concurrent-request cap makes Claude challenging at this scale. |
+| 300–500 developers | PTU mandatory for GPT. Claude at this scale requires a direct Anthropic API agreement; Azure AI Foundry's Global Standard + 300-concurrent cap is a structural ceiling. |
+| 500+ developers | Multi-region APIM backend pools for GPT (PTU per region). Claude via direct Anthropic API, not Azure AI Foundry. |
 
 <Aside type="tip">
-FoundryGate's per-developer usage data (visible in the admin dashboard) is your best tool for right-sizing Foundry capacity. Export a week of usage, identify your 90th-percentile concurrent-request minutes, and use that as input to the quota planning formula above.
+FoundryGate's per-developer usage data (admin dashboard + Log Analytics) is your best right-sizing input. Export a week of usage, identify your 90th-percentile concurrent-request minutes, and use those as input to the concurrent-user calculations above. The data will reveal whether you are TPM-bound, RPM-bound, or concurrency-bound — each has a different mitigation path.
 </Aside>
