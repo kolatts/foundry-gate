@@ -33,7 +33,15 @@ public static class ReferenceDataExtensions
         ArgumentNullException.ThrowIfNull(context);
 
         var seed = (seedData ?? TEntity.GetSeedData()).ToList();
-        var existing = await context.Set<TEntity>().AsNoTracking().ToListAsync(cancellationToken);
+
+        // Deliberately NOT AsNoTracking(): existing rows come back tracked (Unchanged), so
+        // mutating them in place below marks them Modified automatically. Fetching untracked and
+        // then calling Set<TEntity>().Update(current) on a detached copy is what the original
+        // version of this method did, and it throws once anything else in this DbContext instance
+        // has already loaded the same row (EF refuses to attach a second instance with a key it's
+        // already tracking) — a latent bug that only stayed hidden because SystemConfiguration
+        // marks every column [DoNotUpdate], so the Update() branch was never actually reached.
+        var existing = await context.Set<TEntity>().ToListAsync(cancellationToken);
         var existingById = existing.ToDictionary(e => e.ItemId);
 
         var added = 0;
@@ -41,14 +49,10 @@ public static class ReferenceDataExtensions
 
         foreach (var seeded in seed)
         {
-            if (existingById.TryGetValue(seeded.ItemId, out var current))
+            if (existingById.TryGetValue(seeded.ItemId, out var tracked))
             {
-                // Only attach/mark Modified when something actually changed, so a no-op sync
-                // (the common case once an admin has customized a row) doesn't touch the row or
-                // trip TimestampInterceptor into stamping a fresh ModifiedDate for nothing.
-                if (UpdateProperties(context, current, seeded))
+                if (UpdateProperties(context, tracked, seeded))
                 {
-                    context.Set<TEntity>().Update(current);
                     updated++;
                 }
 
@@ -73,9 +77,17 @@ public static class ReferenceDataExtensions
     }
 
     /// <summary>
-    /// Copies every writable property from <paramref name="source"/> onto <paramref name="target"/>,
-    /// skipping key properties and any property tagged <c>[DoNotUpdate]</c>.
+    /// Copies every mapped scalar column from <paramref name="source"/> onto <paramref name="target"/>,
+    /// skipping key columns and any column tagged <c>[DoNotUpdate]</c>.
     /// </summary>
+    /// <remarks>
+    /// Walks <c>IEntityType.GetProperties()</c> (EF's own scalar-property metadata) rather than
+    /// raw CLR reflection over every public property: navigation properties (e.g.
+    /// <c>SystemConfiguration.UpdatedByUser</c>) simply aren't in that set, so there's no risk of
+    /// reflection-copying a navigation reference between two different instances of the related
+    /// entity — a shared-instance accident that happened to be harmless only because nothing
+    /// downstream relied on it.
+    /// </remarks>
     /// <returns><see langword="true"/> if any property value actually changed.</returns>
     private static bool UpdateProperties<TEntity>(DbContext context, TEntity target, TEntity source)
         where TEntity : class
@@ -86,23 +98,28 @@ public static class ReferenceDataExtensions
         var keyProperties = entityType.FindPrimaryKey()?.Properties.Select(p => p.Name).ToHashSet()
             ?? [];
 
-        var properties = typeof(TEntity)
-            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.CanRead && p.CanWrite
-                && p.GetCustomAttribute<DoNotUpdateAttribute>() is null
-                && !keyProperties.Contains(p.Name));
-
         var changed = false;
-        foreach (var property in properties)
+        foreach (var efProperty in entityType.GetProperties())
         {
-            var newValue = property.GetValue(source);
-            var currentValue = property.GetValue(target);
+            if (keyProperties.Contains(efProperty.Name))
+            {
+                continue;
+            }
+
+            var propertyInfo = efProperty.PropertyInfo;
+            if (propertyInfo is null || propertyInfo.GetCustomAttribute<DoNotUpdateAttribute>() is not null)
+            {
+                continue;
+            }
+
+            var newValue = propertyInfo.GetValue(source);
+            var currentValue = propertyInfo.GetValue(target);
             if (Equals(newValue, currentValue))
             {
                 continue;
             }
 
-            property.SetValue(target, newValue);
+            propertyInfo.SetValue(target, newValue);
             changed = true;
         }
 

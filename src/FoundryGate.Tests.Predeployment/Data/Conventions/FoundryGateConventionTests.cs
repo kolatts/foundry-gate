@@ -42,5 +42,12 @@ public class FoundryGateConventionTests : DbContextConventionTests
         // from "known to be blank" — collapsing it to string.Empty would lose that signal.
         _ = builder.ForRule<ProhibitNullableStringsRule>(rule =>
             rule.ExcludeProperty<User, string?>(u => u.EmployeeId));
+
+        // AuditLog.Details is deliberately nvarchar(max) (AuditLogConfiguration) — a JSON audit
+        // payload getting silently truncated is worse than an unbounded column, and there's no
+        // #91 ValidationConstants entry to align a cap with since nothing writes it through a
+        // validated request DTO.
+        _ = builder.ForRule<StringsMustHaveMaxLengthRule>(rule =>
+            rule.ExcludeProperty<AuditLog, string>(a => a.Details));
     }
 }

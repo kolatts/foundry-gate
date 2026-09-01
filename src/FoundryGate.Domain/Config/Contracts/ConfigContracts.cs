@@ -4,11 +4,18 @@ using FoundryGate.Domain.Constants;
 namespace FoundryGate.Domain.Config.Contracts;
 
 /// <summary>One <c>SystemConfiguration</c> row (spec &#167;3.1). GET /config, admin-only.</summary>
+/// <param name="Key">The configuration key.</param>
+/// <param name="Value">The configured value.</param>
+/// <param name="UpdatedDate">When this row was last inserted or updated.</param>
+/// <param name="UpdatedByUserId">
+/// Null for a seeded row an admin has never edited (the data-layer entity is nullable for the
+/// same reason — reconciled in #92, see the row's <c>[DoNotUpdate]</c> seeding semantics).
+/// </param>
 public record SystemConfigEntryResponse(
     string Key,
     string Value,
     DateTimeOffset UpdatedDate,
-    int UpdatedByUserId);
+    int? UpdatedByUserId);
 
 /// <summary>PUT /config/{key} body.</summary>
 public record UpdateSystemConfigRequest(

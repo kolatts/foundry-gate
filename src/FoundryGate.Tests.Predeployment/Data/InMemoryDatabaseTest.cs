@@ -29,7 +29,7 @@ public abstract class InMemoryDatabaseTest : IDisposable
 
     /// <summary>Seeds Bogus-generated demo data.</summary>
     protected Task SeedTestDataAsync(int developerCount = 8) =>
-        TestDataSeeder.SeedAsync(Context, developerCount);
+        TestDataSeeder.SeedAsync(Context, TimeProvider.System, developerCount);
 
     public void Dispose()
     {

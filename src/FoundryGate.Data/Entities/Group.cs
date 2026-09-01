@@ -1,14 +1,22 @@
 using System.ComponentModel.DataAnnotations;
 using FoundryGate.Data.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace FoundryGate.Data.Entities;
 
 /// <summary>
 /// A group of users that can carry its own quota policy, optionally synced from an Entra group.
 /// </summary>
+[Index(nameof(GroupUnique), IsUnique = true)]
 public class Group : ICreatedDate
 {
     public int GroupId { get; set; }
+
+    /// <summary>
+    /// Stable id referenced by external callers/UI (#91's <c>GroupResponse.GroupUnique</c>) —
+    /// mirrors <see cref="User.UserUnique"/>.
+    /// </summary>
+    public Guid GroupUnique { get; set; } = Guid.NewGuid();
 
     [Required]
     [StringLength(200)]

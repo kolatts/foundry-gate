@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using FoundryGate.Data.Interfaces;
 using FoundryGate.Data.Seeding;
+using FoundryGate.Domain.Constants;
 using Imagile.Framework.Core.Attributes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -22,7 +23,7 @@ public class SystemConfiguration : IModifiedDate, IReferenceDataEntity<SystemCon
     /// </summary>
     [Key]
     [Required]
-    [StringLength(100)]
+    [StringLength(ValidationConstants.ConfigKeyMaxLength)]
     public string Key { get; set; } = string.Empty;
 
     /// <summary>
@@ -30,22 +31,25 @@ public class SystemConfiguration : IModifiedDate, IReferenceDataEntity<SystemCon
     /// never overwrite a value an operator already edited via the admin config page.
     /// </summary>
     [Required]
-    [StringLength(500)]
+    [StringLength(ValidationConstants.ConfigValueMaxLength)]
     [DoNotUpdate]
     public string Value { get; set; } = string.Empty;
 
     /// <summary>
-    /// Set by <see cref="Interceptors.TimestampInterceptor"/> whenever this row is genuinely
-    /// inserted or updated by application code. <c>[DoNotUpdate]</c> so re-running the reference
-    /// data sync on a row that already exists does not touch it (and does not trip the
-    /// interceptor into stamping a new timestamp for a no-op sync).
+    /// Named to match #91's <c>SystemConfigEntryResponse.UpdatedDate</c> rather than the generic
+    /// "ModifiedDate". Backs <see cref="IModifiedDate"/> via the explicit interface
+    /// implementation below so <see cref="Interceptors.TimestampInterceptor"/> still stamps it
+    /// whenever this row is genuinely inserted or updated by application code. <c>[DoNotUpdate]</c>
+    /// so re-running the reference data sync on a row that already exists does not touch it (and
+    /// does not trip the interceptor into stamping a new timestamp for a no-op sync).
     /// </summary>
     [DoNotUpdate]
-    public DateTimeOffset ModifiedDate { get; set; }
+    public DateTimeOffset UpdatedDate { get; set; }
 
     /// <summary>
     /// Admin who last changed this key via the config UI; <see langword="null"/> for
-    /// seeded/system writes. <c>[DoNotUpdate]</c> alongside <see cref="Value"/>.
+    /// seeded/never-yet-edited rows — matches #91's <c>SystemConfigEntryResponse.UpdatedByUserId</c>,
+    /// which is nullable for exactly this reason. <c>[DoNotUpdate]</c> alongside <see cref="Value"/>.
     /// </summary>
     [DoNotUpdate]
     public int? UpdatedByUserId { get; set; }
@@ -60,17 +64,24 @@ public class SystemConfiguration : IModifiedDate, IReferenceDataEntity<SystemCon
     // Navigation
     public User? UpdatedByUser { get; set; }
 
+    /// <inheritdoc cref="IModifiedDate.ModifiedDate"/>
+    DateTimeOffset IModifiedDate.ModifiedDate
+    {
+        get => UpdatedDate;
+        set => UpdatedDate = value;
+    }
+
     /// <summary>The eight placeholder defaults forks must override via the admin config page (spec §3.1).</summary>
     public static IEnumerable<SystemConfiguration> GetSeedData() =>
     [
-        new() { Key = "DefaultMonthlyTokenQuota", Value = "1000000" },
-        new() { Key = "ApimResourceId", Value = string.Empty },
-        new() { Key = "ApimGatewayUrl", Value = string.Empty },
-        new() { Key = "ApimProductId", Value = "foundrygate" },
-        new() { Key = "FoundryResourceId", Value = string.Empty },
-        new() { Key = "EntraTenantId", Value = string.Empty },
-        new() { Key = "EntraGroupSyncEnabled", Value = "false" },
-        new() { Key = "ResetDayOfMonth", Value = "1" }
+        new() { Key = SystemConfigurationKeys.DefaultMonthlyTokenQuota, Value = "1000000" },
+        new() { Key = SystemConfigurationKeys.ApimResourceId, Value = string.Empty },
+        new() { Key = SystemConfigurationKeys.ApimGatewayUrl, Value = string.Empty },
+        new() { Key = SystemConfigurationKeys.ApimProductId, Value = "foundrygate" },
+        new() { Key = SystemConfigurationKeys.FoundryResourceId, Value = string.Empty },
+        new() { Key = SystemConfigurationKeys.EntraTenantId, Value = string.Empty },
+        new() { Key = SystemConfigurationKeys.EntraGroupSyncEnabled, Value = "false" },
+        new() { Key = SystemConfigurationKeys.ResetDayOfMonth, Value = "1" }
     ];
 }
 

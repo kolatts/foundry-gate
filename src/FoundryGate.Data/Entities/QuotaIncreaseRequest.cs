@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using FoundryGate.Data.Interfaces;
-using FoundryGate.Domain.Enums;
+using FoundryGate.Domain.Requests;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -10,6 +10,12 @@ namespace FoundryGate.Data.Entities;
 /// A developer- or admin-initiated request to raise a user's quota for a given period, subject to
 /// admin review.
 /// </summary>
+/// <remarks>
+/// Uses <see cref="QuotaRequestStatusType"/> (added by #91's
+/// contracts) rather than a Data-local enum — the two PRs briefly defined the same concept
+/// twice; this is the reconciled single source.
+/// </remarks>
+[Index(nameof(QuotaIncreaseRequestUnique), IsUnique = true)]
 public class QuotaIncreaseRequest : ICreatedDate
 {
     public int QuotaIncreaseRequestId { get; set; }

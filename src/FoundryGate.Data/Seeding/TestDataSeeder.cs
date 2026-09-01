@@ -1,6 +1,6 @@
 using Bogus;
 using FoundryGate.Data.Entities;
-using FoundryGate.Domain.Enums;
+using FoundryGate.Domain.Requests;
 using Microsoft.EntityFrameworkCore;
 
 namespace FoundryGate.Data.Seeding;
@@ -20,7 +20,7 @@ public static class TestDataSeeder
         1_000_000,
         2_000_000,
         2_000_000,
-        null, // unlimited tier — paired with User.IsUnlimited = true below
+        null, // unlimited tier (index 5) — paired with User.IsUnlimited = true below
         1_000_000,
         2_000_000
     ];
@@ -30,22 +30,37 @@ public static class TestDataSeeder
     /// quota increase request). No-ops if any <see cref="User"/> already exists, so it is safe to
     /// call on every local/dev startup without piling up duplicate demo data.
     /// </summary>
+    /// <param name="context">The database context.</param>
+    /// <param name="timeProvider">
+    /// Clock used for the seeded rows' period/reset dates — CONVENTIONS.md bans naked
+    /// <c>DateTimeOffset.UtcNow</c> outside <see cref="Interceptors.TimestampInterceptor"/>, and
+    /// that rule doesn't get a dev-only exemption.
+    /// </param>
+    /// <param name="developerCount">How many demo users to create.</param>
+    /// <param name="randomSeed">
+    /// Seed for this call's own <see cref="Faker{T}"/> instance (via <c>UseSeed</c>), not
+    /// <see cref="Randomizer.Seed"/> — that field is a process-global static, and mutating it here
+    /// would make every other Bogus user in the process (including anything running concurrently,
+    /// e.g. parallel test collections) implicitly reseed too.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public static async Task SeedAsync(
         AppDbContext context,
+        TimeProvider timeProvider,
         int developerCount = 8,
         int randomSeed = 20260901,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         if (await context.Users.AnyAsync(cancellationToken))
         {
             return;
         }
 
-        Randomizer.Seed = new Random(randomSeed);
-
         var userFaker = new Faker<User>()
+            .UseSeed(randomSeed)
             .RuleFor(u => u.DisplayName, f => f.Name.FullName())
             .RuleFor(u => u.Email, (f, u) => f.Internet.Email(u.DisplayName, provider: "contoso.com").ToLowerInvariant())
             .RuleFor(u => u.EntraObjectId, _ => Guid.NewGuid().ToString())
@@ -77,25 +92,27 @@ public static class TestDataSeeder
             UserId = u.UserId
         }));
 
-        var now = DateTimeOffset.UtcNow;
+        var now = timeProvider.GetUtcNow();
         var allocations = new List<QuotaAllocation>();
         for (var i = 0; i < users.Count; i++)
         {
             var user = users[i];
             var allocated = user.MonthlyTokenQuota;
 
-            // Match the landing page demo panel's usage story where a tier repeats: comfortably
-            // under, comfortably under, near-limit (91%), fully consumed (100%), unlimited,
-            // comfortably under, barely touched, comfortably under.
+            // Vary usage across the roster the way the landing page demo panel does: mostly
+            // comfortably under budget, one user near their limit, one fully consumed, and a
+            // couple of barely-touched/average users to round it out. Index 5 (QuotaTiers[5] is
+            // null) is the unlimited user — its fraction below is unused since the ternary a few
+            // lines down always routes null-allocated users to the flat 42,000 fallback instead.
             var usedFraction = i switch
             {
                 0 => 0.62,
                 1 => 0.38,
-                2 => 0.91,
-                3 => 1.00,
-                4 => 0.0, // unlimited — usage tracked but not meaningful as a fraction
-                5 => 0.64,
-                6 => 0.12,
+                2 => 0.91, // near limit
+                3 => 1.00, // fully consumed
+                4 => 0.55,
+                5 => 0.0, // unlimited — see comment above
+                6 => 0.12, // barely touched
                 _ => 0.77
             };
 

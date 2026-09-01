@@ -1,4 +1,5 @@
 using FoundryGate.Data.Entities;
+using FoundryGate.Domain.Constants;
 
 namespace FoundryGate.Data.Seeding;
 
@@ -18,8 +19,13 @@ public static class ReferenceDataSeeder
 
         var results = new Dictionary<string, ReferenceDataSyncResult>
         {
-            [nameof(SystemConfiguration)] = await context
-                .SyncReferenceDataAsync<SystemConfiguration, string>(cancellationToken: cancellationToken)
+            // deleteFilter restricts orphan deletion to the eight known seeded keys
+            // (SystemConfigurationKeys.All): without it, a fork operator who adds their own
+            // SystemConfiguration row (or a future key this code doesn't know about yet) would
+            // have it silently deleted on the next deploy's re-seed.
+            [nameof(SystemConfiguration)] = await context.SyncReferenceDataAsync<SystemConfiguration, string>(
+                deleteFilter: c => SystemConfigurationKeys.All.Contains(c.Key),
+                cancellationToken: cancellationToken)
         };
 
         return results;

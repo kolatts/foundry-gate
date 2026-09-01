@@ -1,3 +1,5 @@
+using FoundryGate.Data.Interceptors;
+using FoundryGate.Data.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -7,13 +9,22 @@ namespace FoundryGate.Data.Entities;
 /// A user's membership in a group. Composite key (no surrogate identity) — spec calls this out
 /// explicitly and issue #22 lists it as the one deliberately composite-keyed entity.
 /// </summary>
+/// <remarks>
+/// Implements <see cref="ICreatedDate"/> via an explicit interface implementation that forwards
+/// to <see cref="AddedDate"/> rather than renaming the property to the generic "CreatedDate":
+/// #91's already-merged <c>GroupMemberResponse.AddedDate</c> is the authoritative DTO field name,
+/// and this keeps <see cref="TimestampInterceptor"/> coverage (so the column actually gets
+/// populated, unlike before) without forcing a rename that would ripple into the Domain contract
+/// for no benefit.
+/// </remarks>
 [PrimaryKey(nameof(GroupId), nameof(UserId))]
-public class GroupMember
+public class GroupMember : ICreatedDate
 {
     public int GroupId { get; set; }
 
     public int UserId { get; set; }
 
+    /// <summary>When this membership was created. Set by <see cref="TimestampInterceptor"/> via <see cref="ICreatedDate"/>.</summary>
     public DateTimeOffset AddedDate { get; set; }
 
     /// <summary>
@@ -28,6 +39,13 @@ public class GroupMember
     public User User { get; set; } = null!;
 
     public User? AddedByUser { get; set; }
+
+    /// <inheritdoc cref="ICreatedDate.CreatedDate"/>
+    DateTimeOffset ICreatedDate.CreatedDate
+    {
+        get => AddedDate;
+        set => AddedDate = value;
+    }
 }
 
 /// <summary>

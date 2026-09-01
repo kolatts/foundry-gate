@@ -25,8 +25,14 @@ public class AuditLog
     [StringLength(100)]
     public string TargetId { get; set; } = string.Empty;
 
-    /// <summary>Free-form JSON blob with action-specific detail.</summary>
-    [StringLength(4000)]
+    /// <summary>
+    /// Free-form JSON blob with action-specific detail. Deliberately no <c>[StringLength]</c>,
+    /// which is what leaves it unbounded (<c>nvarchar(max)</c> on SQL Server) — a fixed cap risks
+    /// silently truncating exactly the payload an admin needs when auditing an incident, and
+    /// there's no #91 <c>ValidationConstants</c> entry to align with since this column is never
+    /// written through a validated request DTO. See <see cref="AuditLogConfiguration"/> for why
+    /// this isn't instead spelled out via <c>HasColumnType("nvarchar(max)")</c>.
+    /// </summary>
     public string Details { get; set; } = string.Empty;
 
     public DateTimeOffset OccurredDate { get; set; }
@@ -48,5 +54,11 @@ internal sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
             .WithMany()
             .HasForeignKey(a => a.ActorUserId)
             .OnDelete(DeleteBehavior.NoAction);
+
+        // Details deliberately has no HasColumnType/StringLength override: leaving it unconfigured
+        // is what makes EF Core map it to nvarchar(max) on SQL Server (and unbounded TEXT on
+        // SQLite) — explicitly writing "nvarchar(max)" via HasColumnType is SQL-Server-only syntax
+        // that SQLite's own DDL parser rejects (the length "max" isn't a number), which would
+        // break the SQLite in-memory test harness.
     }
 }
