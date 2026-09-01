@@ -11,7 +11,7 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 
 | Key | Default | Description |
 |---|---|---|
-| `DefaultMonthlyTokenQuota` | `"1000000"` | Per-user monthly token budget when no user or group override applies. |
+| `DefaultMonthlyTokenQuota` | `"5000000"` | Per-user monthly token budget when no user or group override applies. Must equal a configured tier cap (`5000000` = the Standard tier as shipped) — see [Gateway quota tiers](#gateway-quota-tiers-gatewaytiers). A value that matches no tier is enforced at the next tier up and flagged `isGatewayCapped` on every allocation it produces. |
 | `ApimResourceId` | `""` | ARM resource ID of the APIM instance (`/subscriptions/.../Microsoft.ApiManagement/service/...`). Informational — the key service addresses APIM through the `Gateway__*` environment variables below, not this value. |
 | `ApimGatewayUrl` | `""` | APIM gateway base URL shown to developers on `/me` for CLI configuration (e.g., `https://my-apim.azure-api.net`). |
 | `ApimProductId` | `"foundrygate"` | Legacy single-product name. **Superseded**: a developer's subscription is created under their **quota-tier product** (`standard`, `power`, `unlimited`), not this one. Kept as seeded reference data. |
@@ -23,6 +23,37 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 <Aside type="caution">
 Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl` and `ApimProductId` are set to real values. Foundry deployment management reads the `Gateway__*` variables instead, which infra sets automatically.
 </Aside>
+
+---
+
+## Gateway quota tiers (`Gateway:Tiers`)
+
+**A developer's monthly budget is a gateway tier.** APIM's `token-quota` is a per-product
+literal, so the only budgets the gateway can enforce are the configured tier products — and
+therefore the only monthly token quotas the control plane accepts are a tier's exact cap or
+unlimited. The Api learns the tiers from the `Gateway:Tiers` section of `appsettings.json`
+(override per index with `Gateway__Tiers__{i}__ProductId` / `__DisplayName` /
+`__MonthlyTokenQuota`). The shipped values mirror `infra/main.bicep`'s `quotaTiers` parameter
+and a predeployment test (`GatewayOptionsTiersTests`) fails if the two drift. `Tiers` lives on the
+same `Gateway` section as the `Gateway__*` addressing below, but unlike the addressing it is never
+optional — the Api refuses to start without at least one tier.
+
+| ProductId | DisplayName | MonthlyTokenQuota | Meaning |
+|---|---|---|---|
+| `standard` | `Standard` | `5000000` | Everyday agent usage. |
+| `power` | `Power` | `20000000` | Heavy agentic workloads. |
+| `unlimited` | `Unlimited` | `0` | No gateway-enforced monthly budget (`0` = unlimited, as in bicep). |
+
+Validated at startup (fail-fast): at least one tier, product ids ⊆ `GatewayTiers.All`, no
+duplicates, every cap in range, exactly one unlimited tier, and at least one finite tier.
+
+**Adding or changing a tier** means changing two things together: `quotaTiers` in
+`infra/main.bicep` (creates the APIM product and renders its `llm-token-limit` policy) and
+`Gateway:Tiers` here (what the Api validates quotas against and serves from `GET /quota/tiers`).
+A new product id must also be added to `GatewayTiers.All` in Domain. Until #108 has infra emit
+`Gateway__Tiers__*`, a fork that overrides `quotaTiers` at deploy time updates this section by
+hand. Existing quotas that no longer match any tier are not rejected on read — they are enforced
+at the next tier up and flagged `isGatewayCapped` until an admin corrects them.
 
 ---
 

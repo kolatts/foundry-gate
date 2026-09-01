@@ -122,6 +122,14 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   New action/target kinds are constants in Domain's `AuditActions` / `AuditTargetTypes`,
   never inline strings. `details` is JSON-serialized (camelCase, cycles ignored) — pass
   the fields you mean rather than a tracked entity, and never a key or token.
+- **Quota values are tiers (D-013).** A monthly token quota is either unlimited (`null`) or
+  exactly one configured tier cap (`GatewayOptions.Tiers` from `Gateway:Tiers`; `GET /quota/tiers`
+  lists them). Every write path that accepts a quota — `PUT /users/{id}/quota`, group
+  create/update, request approval — calls
+  `GatewayTierMapper.EnsureValidQuota(quota, nameof(request.MonthlyTokenQuota))` (singleton in
+  `Services/Quota`) *before* persisting: a non-tier value is an `ArgumentException` (400) whose
+  message lists the allowed values. Resolution (`GatewayTierMapper.Map`) never throws for a legacy
+  value — it maps to the next tier up and sets `IsGatewayCapped` so reads keep working.
 - **External side effects have a commit point.** When a service mutates something outside
   the database (ARM, APIM, Graph), resolve the actor and do every refusal *before* the
   call; once the external system has accepted the change, the audit row and
