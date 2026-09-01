@@ -120,11 +120,9 @@ When a developer's allocation is created or updated, `IQuotaResolutionService` w
 
 The resolved value is written to `QuotaAllocation` for the current period, and the subscription is created under (or moved to) the matching tier product. Admins can see which level resolved each developer's quota in the user detail view. Tiers exist because APIM's `token-quota` attribute accepts only literals — one policy cannot read a per-user number — so each tier is a product with its own rendered policy.
 
-**From a number to a tier.** The gateway cannot enforce an arbitrary per-developer number
-(APIM's `token-quota` is a literal baked into each tier product's policy), so resolution
-also maps the number onto a tier: unlimited → the *Unlimited* product; otherwise the
-smallest tier whose cap covers the quota (5M → *Standard*, 5M+1 to 20M → *Power*, with
-the shipped caps). A quota above every finite cap lands on the largest finite tier and
+**From a number to a tier.** Resolution maps the number onto a tier: unlimited → the
+*Unlimited* product; otherwise the smallest tier whose cap covers the quota (5M →
+*Standard*, 5M+1 to 20M → *Power*, with the shipped caps). A quota above every finite cap lands on the largest finite tier and
 the allocation is flagged **gateway-capped** — the developer is cut off at that tier's cap,
 not at their nominal number, until an admin raises the caps or grants unlimited. The
 allocation records the level, the tier, and the flag, and moving the developer's
