@@ -15,7 +15,14 @@ var builder = WebApplication.CreateBuilder(args);
 // Environment: lowercase local/qa/prod (CONVENTIONS.md), not ASP.NET Core's own
 // Development/Staging/Production names. launchSettings.json and deployment configs set
 // ASPNETCORE_ENVIRONMENT accordingly, which also drives the appsettings.{env}.json overlay.
-var environment = Enum.Parse<AppEnvironment.Types>(builder.Environment.EnvironmentName, ignoreCase: true);
+if (!Enum.TryParse<AppEnvironment.Types>(builder.Environment.EnvironmentName, ignoreCase: true, out var environment))
+{
+    var validValues = string.Join(", ", Enum.GetNames<AppEnvironment.Types>());
+    throw new Imagile.Framework.Configuration.Exceptions.ConfigurationValidationException(
+        $"ASPNETCORE_ENVIRONMENT '{builder.Environment.EnvironmentName}' is not a recognized FoundryGate environment. " +
+        $"Valid values (case-insensitive): {validValues}.");
+}
+
 builder.Services.AddSingleton(typeof(AppEnvironment.Types), _ => environment);
 
 // AZURE_CLIENT_ID is set by the hosting environment's user-assigned managed identity;

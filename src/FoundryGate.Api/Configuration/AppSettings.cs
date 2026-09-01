@@ -79,15 +79,31 @@ public class CorsOptions
 }
 
 /// <summary>OpenTelemetry → Azure Monitor instrumentation, gated by <see cref="Enabled"/>.</summary>
-public class OpenTelemetryOptions
+public class OpenTelemetryOptions : IValidatableObject
 {
     /// <summary>Off by default (appsettings.local.json keeps it off) so local dev never
-    /// needs an Application Insights connection string.</summary>
+    /// needs an Application Insights connection string. Turning this on without a
+    /// <see cref="ConnectionString"/> fails startup — see <see cref="Validate"/> — rather than
+    /// silently sending telemetry nowhere.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>Azure Monitor Application Insights connection string. Only read when
-    /// <see cref="Enabled"/> is <c>true</c>.</summary>
+    /// <summary>Azure Monitor Application Insights connection string. Not <c>[Required]</c>
+    /// directly, since it's legitimately empty whenever <see cref="Enabled"/> is <c>false</c>;
+    /// <see cref="Validate"/> enforces it conditionally instead.</summary>
     public string? ConnectionString { get; set; }
+
+    /// <summary>Fail-fast: <see cref="Enabled"/> without a <see cref="ConnectionString"/> means
+    /// telemetry would be silently dropped rather than shipped, which is worse than refusing
+    /// to start.</summary>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (Enabled && string.IsNullOrWhiteSpace(ConnectionString))
+        {
+            yield return new ValidationResult(
+                $"{nameof(ConnectionString)} is required when {nameof(Enabled)} is true.",
+                [nameof(ConnectionString)]);
+        }
+    }
 }
 
 /// <summary>Azure Key Vault reference resolution settings.</summary>

@@ -44,15 +44,18 @@ public class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
     }
 
     [Fact]
-    public async Task HealthReady_reports_degraded_rather_than_throwing_when_the_database_is_unreachable()
+    public async Task HealthReady_returns_503_rather_than_throwing_when_the_database_is_unreachable()
     {
+        // The connection string above points at a closed local port (127.0.0.1,1), so the
+        // AddDbContextCheck<AppDbContext> check deterministically fails -- pinning 503 (not a
+        // 200-or-503 either/or) is the actual contract: an unreachable database must degrade
+        // the readiness probe, never crash the process or silently report healthy.
         var response = await _client.GetAsync(new Uri("/health/ready", UriKind.Relative));
 
-        Assert.True(
-            response.StatusCode is HttpStatusCode.OK or HttpStatusCode.ServiceUnavailable,
-            $"Expected 200 or 503, got {(int)response.StatusCode}.");
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("database", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Unhealthy", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

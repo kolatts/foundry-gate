@@ -64,29 +64,33 @@ public static class HealthCheckExtensions
     private static Task WriteLivenessResponseAsync(HttpContext context, HealthReport report, string environmentName)
     {
         context.Response.ContentType = "application/json";
-        return context.Response.WriteAsJsonAsync(new
-        {
-            status = report.Status.ToString(),
-            version = AssemblyVersion,
-            environment = environmentName,
-        });
+        return context.Response.WriteAsJsonAsync(
+            new
+            {
+                status = report.Status.ToString(),
+                version = AssemblyVersion,
+                environment = environmentName,
+            },
+            context.RequestAborted);
     }
 
     private static Task WriteReadinessResponseAsync(HttpContext context, HealthReport report, string environmentName)
     {
         context.Response.ContentType = "application/json";
-        return context.Response.WriteAsJsonAsync(new
-        {
-            status = report.Status.ToString(),
-            version = AssemblyVersion,
-            environment = environmentName,
-            checks = report.Entries.Select(entry => new
+        return context.Response.WriteAsJsonAsync(
+            new
             {
-                name = entry.Key,
-                status = entry.Value.Status.ToString(),
-                description = entry.Value.Description,
-                durationMs = entry.Value.Duration.TotalMilliseconds,
-            }),
-        });
+                status = report.Status.ToString(),
+                version = AssemblyVersion,
+                environment = environmentName,
+                checks = report.Entries.Select(entry => new
+                {
+                    name = entry.Key,
+                    status = entry.Value.Status.ToString(),
+                    description = entry.Value.Description,
+                    durationMs = entry.Value.Duration.TotalMilliseconds,
+                }),
+            },
+            context.RequestAborted);
     }
 }

@@ -8,10 +8,13 @@ namespace FoundryGate.Api.Middleware;
 /// The single global exception handler (CONVENTIONS.md §Configuration &amp; auth: "Exceptions
 /// → HTTP via one <c>IExceptionHandler</c> + ProblemDetails (404/400/403/409 mapping), not
 /// per-controller try/catch"). Registered via <c>AddExceptionHandler&lt;GlobalExceptionHandler&gt;()</c>
-/// + <c>app.UseExceptionHandler()</c>; unlike a handler that falls through for unmapped
-/// exceptions, this one always handles (returns <c>true</c>) so every unhandled exception —
-/// mapped or not — gets the same ProblemDetails shape and correlation ID header. Unmapped
-/// exceptions fall back to <c>500</c>.
+/// + <c>app.UseExceptionHandler()</c>. Mapped exceptions get a specific status and their own
+/// <see cref="Exception.Message"/> as the ProblemDetails <c>Detail</c> — those messages are
+/// written by application code specifically to be shown to a caller. Unmapped exceptions are
+/// logged with full detail but return <c>false</c> (imagile-app's <c>ApiExceptionHandler</c>
+/// fall-through pattern), so ASP.NET Core's own <c>AddProblemDetails()</c> writes the generic,
+/// message-free <c>500</c> body — an unmapped exception's <see cref="Exception.Message"/> is
+/// never guaranteed safe to put on the wire (stack traces, connection strings, internal paths).
 /// </summary>
 /// <remarks>
 /// Mapping: <see cref="KeyNotFoundException"/> → 404, <see cref="ArgumentException"/> → 400,
@@ -28,31 +31,34 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
         ArgumentNullException.ThrowIfNull(httpContext);
         ArgumentNullException.ThrowIfNull(exception);
 
-        var (statusCode, title) = exception switch
+        var correlationId = httpContext.TraceIdentifier;
+        httpContext.Response.Headers["X-Correlation-Id"] = correlationId;
+
+        (int StatusCode, string Title)? mapping = exception switch
         {
             KeyNotFoundException => (StatusCodes.Status404NotFound, "Not found"),
             ConflictException => (StatusCodes.Status409Conflict, "Conflict"),
             ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request"),
             UnauthorizedAccessException => (StatusCodes.Status403Forbidden, "Forbidden"),
-            _ => (StatusCodes.Status500InternalServerError, "An unexpected error occurred"),
+            _ => null,
         };
 
-        var correlationId = httpContext.TraceIdentifier;
-        httpContext.Response.Headers["X-Correlation-Id"] = correlationId;
-
-        if (statusCode == StatusCodes.Status500InternalServerError)
+        if (mapping is null)
         {
+            // Unmapped: log with full detail, but never echo exception.Message onto the wire.
+            // Falling through (returning false) hands the response to ASP.NET Core's own
+            // AddProblemDetails() default, which writes a generic 500 with no Detail.
             logger.LogError(exception, "Unhandled exception. CorrelationId: {CorrelationId}", correlationId);
+            return false;
         }
-        else
-        {
-            logger.LogWarning(
-                exception,
-                "{Title} ({StatusCode}). CorrelationId: {CorrelationId}",
-                title,
-                statusCode,
-                correlationId);
-        }
+
+        var (statusCode, title) = mapping.Value;
+        logger.LogWarning(
+            exception,
+            "{Title} ({StatusCode}). CorrelationId: {CorrelationId}",
+            title,
+            statusCode,
+            correlationId);
 
         httpContext.Response.StatusCode = statusCode;
         var problemDetails = new ProblemDetails
