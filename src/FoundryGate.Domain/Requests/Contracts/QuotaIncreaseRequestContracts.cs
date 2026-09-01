@@ -22,16 +22,26 @@ public record QuotaIncreaseRequestResponse(
     string? ReviewNotes,
     DateTimeOffset CreatedDate);
 
-/// <summary>POST /requests body — a developer (or admin on their behalf) submits a quota increase request.</summary>
-/// <param name="RequestedQuota">Null means requesting unlimited (spec &#167;3.1).</param>
-/// <param name="Justification">Free-text reason for the request; required so reviewers have something to evaluate.</param>
-public record SubmitQuotaIncreaseRequest(
-    [property: Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
-    long? RequestedQuota,
-    [property: Required, StringLength(ValidationConstants.JustificationMaxLength, MinimumLength = ValidationConstants.JustificationMinLength)]
-    string Justification);
+/// <summary>
+/// POST /requests body — a developer (or admin on their behalf) submits a quota increase request.
+/// Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).
+/// </summary>
+public record SubmitQuotaIncreaseRequest
+{
+    /// <summary>Null means requesting unlimited (spec &#167;3.1).</summary>
+    [Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
+    public long? RequestedQuota { get; init; }
+
+    /// <summary>Free-text reason for the request; required so reviewers have something to evaluate.</summary>
+    [Required]
+    [StringLength(ValidationConstants.JustificationMaxLength, MinimumLength = ValidationConstants.JustificationMinLength)]
+    public string Justification { get; init; } = string.Empty;
+}
 
 /// <summary>PUT /requests/{id}/approve or PUT /requests/{id}/reject body — same shape for both (spec &#167;4.4).</summary>
-public record ReviewQuotaIncreaseRequest(
-    [property: StringLength(ValidationConstants.ReviewNotesMaxLength)]
-    string? ReviewNotes);
+public record ReviewQuotaIncreaseRequest
+{
+    /// <summary>Optional reviewer notes, shown to the requester.</summary>
+    [StringLength(ValidationConstants.ReviewNotesMaxLength)]
+    public string? ReviewNotes { get; init; }
+}

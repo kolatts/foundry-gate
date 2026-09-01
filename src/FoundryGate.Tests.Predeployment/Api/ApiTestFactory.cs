@@ -205,6 +205,11 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 options.DefaultAuthenticateScheme = TestAuthHandler.SchemeName;
                 options.DefaultChallengeScheme = TestAuthHandler.SchemeName;
             }).AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
+
+            // Test-only controllers (Support/RequestDtoBindingController): this assembly is not in
+            // Api's application-part graph, so add it explicitly. AddControllers() is idempotent —
+            // Program.cs's options (the global AuthorizeFilter) are untouched.
+            services.AddControllers().AddApplicationPart(typeof(ApiTestFactory).Assembly);
         });
     }
 
