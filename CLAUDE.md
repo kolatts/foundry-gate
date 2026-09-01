@@ -15,6 +15,18 @@
   passes, `FoundryGate.Tests.Predeployment` passes, `dotnet format
   --verify-no-changes` clean, plan-file Verification items checked. PR + review
   cycle before merge.
+- **Everything is a GitHub issue.** All work — features, fixes, follow-ups, tech
+  debt, deferred validation — is tracked as a GitHub issue before it is worked.
+  Never leave follow-up work as inline TODOs, PR-body notes, or plan-file
+  side-remarks: file an issue (labeled appropriately, on the right milestone) and
+  reference it. A PR that discovers new work files the issue in the same breath.
+  PRs close their issues via `Closes #N`.
+- **imagile-bot automation** (mirrored from pncli): `claude-triage.yml` implements
+  issues labeled `claude-triage` as `claude/issue-N` PRs under the imagile-bot app
+  identity; `claude-review.yml` gives every PR a formal Claude review. Both are
+  gated on the repo variable `CLAUDE_AUTOMATION_ENABLED='true'` (requires secrets
+  `CLAUDE_CODE_OAUTH_TOKEN` + `IMAGILE_BOT_PRIVATE_KEY` and the imagile-bot app
+  installed on this repo). Never modify `.github/` from triage-driven work.
 
 ## Docs invariants — check on EVERY change
 
