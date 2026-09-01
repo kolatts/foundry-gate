@@ -170,8 +170,22 @@ Not expressible in Bicep — operator steps tracked in
   ([#106](https://github.com/kolatts/foundry-gate/issues/106)).
 - Runtime creation of **Claude** deployments needs Marketplace/SaaS permissions beyond
   Cognitive Services Contributor ([#107](https://github.com/kolatts/foundry-gate/issues/107)).
-- Graph application permissions for the Entra sync go on the API identity's service
-  principal — no client secret ([#110](https://github.com/kolatts/foundry-gate/issues/110)).
+- **Microsoft Graph application roles** for the Entra sync go on the API identity's service
+  principal (`id-foundrygate-api-{env}`) — no client secret
+  ([#110](https://github.com/kolatts/foundry-gate/issues/110)). They are app-role assignments
+  on the Microsoft Graph service principal (appId `00000003-0000-0000-c000-000000000000`);
+  `az ad app permission` does not apply to managed identities, and no separate admin-consent
+  step is needed. Least privilege per the Graph reference for each call the API makes:
+
+  | Graph app role | Used for |
+  |---|---|
+  | `Application.Read.All` | `GET /servicePrincipals(appId='{clientId}')` and `GET /servicePrincipals/{id}/appRoleAssignedTo` — who is assigned to FoundryGate |
+  | `User.Read.All` | `GET /users?$filter=id in (...)&$select=id,displayName,mail,userPrincipalName,employeeId` and `GET /users/{id}` |
+  | `GroupMember.ReadBasic.All` | `GET /groups/{id}/members` / `transitiveMembers` with `$select=id` (group sync, #41) |
+
+  Verification runbook and a PowerShell grant snippet:
+  [#120](https://github.com/kolatts/foundry-gate/issues/120). Locally the Azure CLI login is
+  used instead, so the developer's own delegated Graph access applies.
 
 ## What the hosts are told
 

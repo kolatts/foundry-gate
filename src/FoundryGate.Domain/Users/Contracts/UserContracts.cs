@@ -60,4 +60,12 @@ public record UpdateUserQuotaRequest(
     long? MonthlyTokenQuota);
 
 /// <summary>Result of POST /users/sync (spec &#167;7.2 bulk Entra sync).</summary>
-public record UserSyncResult(int AddedCount, int UpdatedCount, int DeactivatedCount);
+/// <param name="AddedCount">Users assigned in Entra that had no row and were inserted (no API key).</param>
+/// <param name="UpdatedCount">Users present in both whose directory fields and <c>LastSyncedDate</c> were refreshed (counted whether or not a field changed).</param>
+/// <param name="DeactivatedCount">Previously active users no longer assigned in Entra that were set <c>IsActive = false</c>. Always <c>0</c> when <paramref name="SkippedGroupAssignmentCount"/> is non-zero.</param>
+/// <param name="SkippedGroupAssignmentCount">
+/// App-role assignments on the FoundryGate application whose principal is a <em>group</em>. Their members are
+/// not expanded yet (#121), so the sync cannot tell a departed user from one covered by such a group — when this
+/// is non-zero, departure detection is suspended for the run: nobody is deactivated, adds/updates still happen.
+/// </param>
+public record UserSyncResult(int AddedCount, int UpdatedCount, int DeactivatedCount, int SkippedGroupAssignmentCount);
