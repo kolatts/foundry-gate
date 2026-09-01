@@ -37,13 +37,22 @@ public record GroupDetailResponse(
     IReadOnlyList<GroupMemberResponse> Members);
 
 /// <summary>One member of a group's roster.</summary>
+/// <param name="UserId">The member's int PK.</param>
+/// <param name="UserUnique">The member's externally-shared stable id.</param>
+/// <param name="DisplayName">The member's display name.</param>
+/// <param name="Email">The member's email.</param>
+/// <param name="AddedDate">When this membership was created.</param>
+/// <param name="AddedByUserId">
+/// Null when the membership came from Entra group sync rather than an explicit admin action
+/// (the data-layer entity is nullable for the same reason — reconciled in #92).
+/// </param>
 public record GroupMemberResponse(
     int UserId,
     Guid UserUnique,
     string DisplayName,
     string Email,
     DateTimeOffset AddedDate,
-    int AddedByUserId);
+    int? AddedByUserId);
 
 /// <summary>POST /groups body.</summary>
 /// <param name="Name">Group display name.</param>
