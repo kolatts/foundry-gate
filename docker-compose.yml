@@ -1,0 +1,27 @@
+services:
+  sql-server-db:
+    container_name: foundrygate-sql-server
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    ports:
+      - "3433:1433"
+    environment:
+      SA_PASSWORD: "Temp1234!"
+      ACCEPT_EULA: "Y"
+
+  azurite:
+    container_name: foundrygate-azurite
+    image: mcr.microsoft.com/azure-storage/azurite
+    hostname: azurite
+    restart: always
+    ports:
+      - "10000:10000"
+      - "10001:10001"
+      - "10002:10002"
+    environment:
+      - AZURITE_ACCOUNTS_PATH=/data/accounts
+      - AZURITE_BLOB_PORT=10000
+      - AZURITE_QUEUE_PORT=10001
+      - AZURITE_TABLE_PORT=10002
+    volumes:
+      - ./.azurite:/data

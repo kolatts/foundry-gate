@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <!-- Version properties injected by CI/CD -->
+    <Version Condition="'$(Version)' == ''">0.0.1-local</Version>
+
+    <!-- AssemblyVersion must be numeric (e.g., 1.2.3) -->
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">0.0.1</AssemblyVersion>
+
+    <!-- FileVersion must be numeric (e.g., 1.2.3) -->
+    <FileVersion Condition="'$(FileVersion)' == ''">0.0.1</FileVersion>
+
+    <!-- InformationalVersion can include pre-release labels -->
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
+
+    <!-- NuGet package version -->
+    <PackageVersion Condition="'$(PackageVersion)' == ''">$(Version)</PackageVersion>
+  </PropertyGroup>
+</Project>
