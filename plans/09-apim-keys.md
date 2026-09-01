@@ -46,4 +46,4 @@ Files:
 - [x] Audit log captures provision, rotation, reveal, revocation and tier-change events, attributed to the caller, with no key material in `Details`
 - [x] Plaintext never reaches the logger (`Plaintext_key_material_never_reaches_the_logger_or_an_audit_row`)
 - [x] Key protector round-trips under both providers; `DataProtection` is refused outside `local`; `KeyVault` without a key URI fails startup; envelope fits the 1000-char column for RSA-4096
-- [ ] Live: provision/rotate/reveal/revoke against a real APIM + Key Vault (manual checklist in the follow-up issue filed by the #36/#37/#95 PR)
+- [ ] Live: provision/rotate/reveal/revoke against a real APIM + Key Vault — manual checklist in #132

@@ -50,9 +50,10 @@ public sealed class KeysController(IApimKeyService keys) : ApiControllerBase
     /// user already has a key or is deactivated; 400 for an unknown tier.
     /// </summary>
     /// <remarks>
-    /// The tier is caller-supplied for now. Once the quota wave lands (#32/#33, epic #64's lifecycle
-    /// orchestrator) the user's <em>resolved</em> tier is supplied by the quota resolution service and
-    /// this parameter becomes an override at most — see epic #64 for the wiring.
+    /// The tier is caller-supplied for now. #118 (<c>ApimGatewayTierSync</c>) wires the quota wave's
+    /// resolution (#32/#33) to <c>IApimKeyService.MoveToProductAsync</c>, after which the user's
+    /// <em>resolved</em> tier drives the product and this parameter becomes an override at most; the
+    /// lifecycle orchestrator (epic #64) then owns the provision call itself.
     /// </remarks>
     [HttpPost("{userId:int}/provision")]
     [Authorize(Policy = PolicyNames.AdminOnly)]

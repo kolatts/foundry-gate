@@ -19,8 +19,7 @@ namespace FoundryGate.Api.Services.Keys;
 /// Scope values are written as the <em>full</em> product ARM id (<c>{apim}/products/{id}</c>) because
 /// that is the form ARM echoes back, so <see cref="ApimSubscription.Scope"/> compares stably with what
 /// this class writes. Live behaviour of the SDK against a real APIM instance is validated manually
-/// per the checklist in the follow-up issue this wave filed (see PR body) — the unit suite covers
-/// everything above this seam with a fake.
+/// per the checklist in #132 — the unit suite covers everything above this seam with a fake.
 /// </remarks>
 public sealed class ArmApimManagementClient : IApimManagementClient
 {
