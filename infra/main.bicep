@@ -117,25 +117,27 @@ param quotaTiers array = [
 // in ANTHROPIC_DEFAULT_*_MODEL / Codex `model`, and anything not listed for their tier
 // gets 403 model_not_permitted. Deployments rotate underneath by editing these values —
 // the gateway module emits them as named values the control plane can PUT without a
-// policy redeploy. `pool` is 'anthropic' (multi-region pool) or 'openai'. Deployment
-// names must match the *_ModelDeployments params above.
-@description('Per-tier model alias maps: { <tier>: { <alias>: { deployment, pool } } }. A tier with no entry permits no models.')
+// policy redeploy. `pool` is the APIM backend to route at ('anthropic' multi-region pool
+// or 'openai'); `provider` is the front door the alias belongs to, so a Claude alias sent
+// to the OpenAI front door is refused with the right base path instead of being routed
+// into an opaque 404. Deployment names must match the *_ModelDeployments params above.
+@description('Per-tier model alias maps: { <tier>: { <alias>: { deployment, pool, provider } } }. A tier with no entry permits no models.')
 param productModelAliases object = {
   standard: {
-    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic' }
-    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic' }
-    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai' }
+    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic', provider: 'anthropic' }
+    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic', provider: 'anthropic' }
+    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai', provider: 'openai' }
   }
   power: {
-    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic' }
-    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic' }
-    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai' }
+    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic', provider: 'anthropic' }
+    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic', provider: 'anthropic' }
+    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai', provider: 'openai' }
   }
   unlimited: {
-    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic' }
-    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic' }
-    opus: { deployment: 'claude-opus-4-5', pool: 'anthropic' }
-    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai' }
+    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic', provider: 'anthropic' }
+    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic', provider: 'anthropic' }
+    opus: { deployment: 'claude-opus-4-5', pool: 'anthropic', provider: 'anthropic' }
+    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai', provider: 'openai' }
   }
 }
 

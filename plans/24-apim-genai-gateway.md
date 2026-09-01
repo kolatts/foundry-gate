@@ -66,6 +66,21 @@ policy's `<base />` expands the product policy), which fixes where each concern 
 both scopes would count every request twice; `scripts/validate-policies.ps1` asserts
 this statically.
 
+**The bypass that split creates, and its guard.** If every meter lives at product scope,
+a subscription with no product context never runs any of it — APIM's built-in all-access
+("master") subscription being the obvious case, plus any API-scoped or fork-created
+subscription. The `fg-require-product` fragment is included in both API policies *before*
+their `<base />`, i.e. ahead of where product scope would have run, and returns 403 when
+`context.Product == null`.
+
+Deactivating the built-in subscription in Bicep was considered and **rejected**: it would
+mean PUTing `Microsoft.ApiManagement/service/subscriptions/master`, whose required
+`scope` value for a built-in subscription this template cannot set with confidence —
+guessing it risks rewriting a live built-in subscription's scope on every deploy. The
+policy guard also covers strictly more cases (subscriptions created outside a tier
+product later), so it is the enforcement mechanism, not a stopgap. Revisit if a live
+deploy confirms a safe resource shape.
+
 ### Backend pools + circuit breakers (#83)
 
 One pool per model family. The Anthropic pool is generated from `foundryRegions`: the
@@ -127,6 +142,8 @@ are wrong) and spec the `/me` "Configure your CLI" panel to emit these snippets.
       API mechanics; shared preamble folded into fragments
 - [x] `infra/policies/backend-auth-fragment.xml`,
       `infra/policies/token-metrics-fragment.xml` — shared fragments (new)
+- [x] `infra/policies/require-product-fragment.xml` — refuses subscriptions with no tier
+      product, closing the product-scope-only enforcement bypass (new)
 - [x] `infra/parameters/test.bicepparam` — test-sized tiers
 - [x] `scripts/validate-policies.ps1` — offline policy-XML validation (new)
 
@@ -136,13 +153,15 @@ Static verification (no live APIM exists; run against this branch):
 
 - [x] `az bicep build --file infra/main.bicep` compiles clean (only the expected BCP081
       warnings for the 2026-07-01 CognitiveServices api-version)
-- [x] `pwsh ./scripts/validate-policies.ps1` — all six policy documents are well-formed
-      XML after the same token substitution Bicep performs, no placeholder survives, no
-      unknown placeholder exists, every `include-fragment` resolves to a fragment file,
-      and `llm-token-limit` is declared in exactly one scope
+- [x] `pwsh ./scripts/validate-policies.ps1` — all seven policy documents are well-formed
+      XML under **both** render variants (quota-configured and the unlimited tier's empty
+      `__QUOTA_ATTRS__`), no placeholder survives, no unknown placeholder exists, every
+      `include-fragment` resolves to a fragment file, `llm-token-limit` is declared in
+      exactly one scope, and the `token-quota` attribute is present in exactly the
+      variant that should carry it
 - [x] `az deployment sub validate` against `infra/parameters/test.bicepparam`
       (`createModelDeployments=false`) — Succeeded
-- [x] `az deployment group validate` + `what-if` of `modules/ai-gateway.bicep` — all 30
+- [x] `az deployment group validate` + `what-if` of `modules/ai-gateway.bicep` — all 31
       APIM child resources pass ARM preflight; the ARM-rendered product policies, API
       policies and fragments re-parse as well-formed XML, the pool renders
       priority 1 / priority 2, and each `fg-model-map-{tier}` named value renders the
@@ -157,6 +176,8 @@ Live verification (all **pending next live deploy**):
       *same: proved at API scope (T4), re-prove at product scope*
 - [ ] Each tier product enforces its own literal quota, and moving a subscription
       between tier products changes the enforced budget
+- [ ] A call with APIM's built-in all-access ("master") subscription key is refused 403
+      by `fg-require-product` on both front doors, in each API's native error schema
 - [ ] Pool failover: saturate priority-1 deployment, traffic continues via priority-2
 - [ ] `llm-emit-token-metric` accepts the `Product ID` dimension and it appears in
       customMetrics

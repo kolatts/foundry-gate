@@ -28,13 +28,17 @@ which is exactly why each tier gets its own rendered product policy instead of o
 policy reading a per-user value.''')
 param quotaTiers array
 
-@description('''Per-tier model alias maps (#86): { <tier name>: { <alias>: { deployment, pool } } }.
+@description('''Per-tier model alias maps (#86): { <tier name>: { <alias>: { deployment, pool, provider } } }.
 `deployment` is the real Foundry deployment name; `pool` is 'anthropic' (the multi-region
-pool) or 'openai' (the primary-account OpenAI backend). The map IS the allowlist — an
-alias missing here returns 403 model_not_permitted, and a tier with no entry at all
-permits nothing (fail loud, by design). Values become the `fg-model-map-{tier}` named
-values, which the control plane may edit through the Management API without redeploying
-any policy.''')
+pool) or 'openai' (the primary-account OpenAI backend); `provider` is the front door the
+alias belongs to ('anthropic' or 'openai'), which the policy uses to refuse a
+right-plan/wrong-door request instead of routing it into a 404. `provider` and `pool` are
+separate fields on purpose: they coincide today, but a future Anthropic DataZone or
+secondary pool would split them.
+The map IS the allowlist — an alias missing here returns 403 model_not_permitted, and a
+tier with no entry at all permits nothing (fail loud, by design). Values become the
+`fg-model-map-{tier}` named values, which the control plane may edit through the
+Management API without redeploying any policy.''')
 param productModelAliases object
 
 // Backend/pool ids are referenced from the alias maps and from the API policies, so they
@@ -43,6 +47,10 @@ var anthropicPoolName = 'foundry-anthropic-pool'
 var openaiBackendName = 'foundry-openai-${foundryAccounts[0].name}'
 var anthropicApiName = 'foundrygate-anthropic'
 var openaiApiName = 'foundrygate-openai'
+// The API paths are substituted into the alias fragment so a wrong-front-door 403 can
+// name the base path the caller should have used, without hard-coding it twice.
+var anthropicApiPath = 'anthropic'
+var openaiApiPath = 'openai/v1'
 
 // One rendered alias map per tier, with the logical pool name resolved to the real
 // backend id. A tier absent from productModelAliases gets `{}` — every model blocked.
@@ -53,6 +61,7 @@ var tierAliasMapJson = [
     entry => {
       deployment: entry.value.deployment
       backend: entry.value.pool == 'openai' ? openaiBackendName : anthropicPoolName
+      provider: entry.value.provider
     }
   ))
 ]
@@ -172,9 +181,44 @@ resource modelAliasFragment 'Microsoft.ApiManagement/service/policyFragments@202
     description: 'Resolve a virtual model alias to a real deployment + pool, or 403 model_not_permitted.'
     format: 'rawxml'
     // The API name is substituted in so the fragment can pick the caller's native error
-    // schema without hard-coding a magic string.
+    // schema without hard-coding a magic string; the paths let a wrong-front-door 403
+    // name the base path the caller should have used.
     value: replace(
-      loadTextContent('../policies/model-alias-fragment.xml'),
+      replace(
+        replace(
+          loadTextContent('../policies/model-alias-fragment.xml'),
+          '__ANTHROPIC_API_ID__',
+          anthropicApiName
+        ),
+        '__ANTHROPIC_API_PATH__',
+        anthropicApiPath
+      ),
+      '__OPENAI_API_PATH__',
+      openaiApiPath
+    )
+  }
+}
+
+// Enforcement lives in the tier product policies, so a subscription with no product
+// context would bypass it entirely. This fragment (included at API scope, ahead of
+// <base />) refuses those requests.
+//
+// DECISION — the built-in "master" all-access subscription is handled by this guard,
+// NOT by a Bicep resource. Deactivating it would mean PUTing
+// Microsoft.ApiManagement/service/subscriptions/master, whose required `scope` value
+// for the built-in subscription is not something this template can set with confidence;
+// guessing it risks rewriting the scope of a live built-in subscription on every deploy.
+// The policy guard is also strictly broader: it covers subscriptions created outside a
+// tier product later, which deactivating master would not. Revisit if a live deploy
+// confirms a safe resource shape.
+resource requireProductFragment 'Microsoft.ApiManagement/service/policyFragments@2024-06-01-preview' = {
+  parent: apim
+  name: 'fg-require-product'
+  properties: {
+    description: 'Refuse requests whose subscription is not scoped to a quota tier product.'
+    format: 'rawxml'
+    value: replace(
+      loadTextContent('../policies/require-product-fragment.xml'),
       '__ANTHROPIC_API_ID__',
       anthropicApiName
     )
@@ -187,7 +231,7 @@ resource anthropicApi 'Microsoft.ApiManagement/service/apis@2024-06-01-preview' 
   name: anthropicApiName
   properties: {
     displayName: 'FoundryGate — Anthropic Messages'
-    path: 'anthropic'
+    path: anthropicApiPath
     protocols: ['https']
     subscriptionRequired: true
     // Claude Code (Foundry mode) sends the key as x-api-key — verified by wire capture
@@ -231,7 +275,7 @@ resource anthropicPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-06-
       anthropicPool.name
     )
   }
-  dependsOn: [backendAuthFragment, tokenMetricsFragment]
+  dependsOn: [backendAuthFragment, tokenMetricsFragment, requireProductFragment]
 }
 
 // ---- OpenAI v1 API (Codex CLI and OpenAI-compatible clients) -------------------
@@ -240,7 +284,7 @@ resource openaiApi 'Microsoft.ApiManagement/service/apis@2024-06-01-preview' = {
   name: openaiApiName
   properties: {
     displayName: 'FoundryGate — OpenAI v1'
-    path: 'openai/v1'
+    path: openaiApiPath
     protocols: ['https']
     subscriptionRequired: true
     subscriptionKeyParameterNames: {
@@ -282,7 +326,7 @@ resource openaiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-06-01-
       openaiBackend.name
     )
   }
-  dependsOn: [backendAuthFragment, tokenMetricsFragment]
+  dependsOn: [backendAuthFragment, tokenMetricsFragment, requireProductFragment]
 }
 
 // ---- Alias maps as per-tier named values (#86) ---------------------------------

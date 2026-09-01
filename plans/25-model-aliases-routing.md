@@ -53,11 +53,22 @@ One APIM policy fragment (`fg-model-alias`), running *before* `llm-token-limit`:
 - Parse `model` from the request body (no `model` — e.g. `GET /openai/v1/models` — is a
   no-op).
 - Look up the alias in a per-product named value (`fg-model-map-{productId}`, JSON:
-  alias → `{ deployment, backend }`; absent or `null` = blocked).
+  alias → `{ deployment, backend, provider }`; absent, `null`, or missing any of the
+  three fields = blocked).
 - Miss/blocked → `return-response` 403 with a `model_not_permitted` error body in the
   API's native error schema.
+- **Wrong front door** → 403 as well. A tier's map covers both providers, so `sonnet`
+  requested through the OpenAI front door would otherwise be rewritten to a Claude
+  deployment and routed at the Anthropic pool, dying as an opaque 404. The entry's
+  `provider` is compared against the current API and the refusal names the base path the
+  caller should have used. `provider` is a separate field from `pool` deliberately: they
+  coincide today, but an Anthropic DataZone or secondary pool would split them.
 - Hit → `set-body` with the real deployment name, `set-backend-service` to the mapped
   pool/backend.
+
+The machine-readable code travels in an `x-fg-error` header rather than the body,
+because Anthropic's native error envelope (`{type, error:{type, message}}`) has no
+`code` field — putting one there would be inventing wire format the SDK does not expect.
 
 **Where the fragment is included — product scope, not API scope.** `{{named-value}}`
 tokens resolve by literal name, so a shared fragment cannot compute
@@ -105,8 +116,9 @@ Streaming caveat documented: response-side enforcement silently stops the stream
 - [x] `infra/modules/ai-gateway.bicep` — per-tier named values, the `fg-model-alias`
       policy fragment, product policy wiring
 - [x] `infra/policies/model-alias-fragment.xml` — the fragment
-- [x] `infra/main.bicep` — `productModelAliases` param; Claude models moved into the
-      pooled deployment set so every alias exists in every pool member
+- [x] `infra/main.bicep` — `productModelAliases` param (`deployment` / `pool` /
+      `provider` per alias); Claude models moved into the pooled deployment set so every
+      alias exists in every pool member
 - [x] `infra/policies/product-policy.xml` — includes the fragment ahead of
       `llm-token-limit` (API policies keep only the default `set-backend-service`)
 - [x] `infra/policies/anthropic-api.xml`, `infra/policies/openai-api.xml` — static
@@ -127,8 +139,9 @@ Static verification (no live APIM exists; run against this branch):
       resolves to it
 - [x] `az deployment group what-if` on `modules/ai-gateway.bicep` — each
       `fg-model-map-{tier}` named value renders the expected alias JSON with the logical
-      pool resolved to a real backend id (`unlimited` alone carries `opus`), and the
-      ARM-rendered fragment re-parses as well-formed XML
+      pool resolved to a real backend id and a `provider` on every entry (`unlimited`
+      alone carries `opus`), and the ARM-rendered fragment re-parses as well-formed XML
+      with the API id and both front-door paths substituted in
 - [x] `az deployment sub validate` / `group validate` — the `policyFragments` and
       `namedValues` resources pass ARM preflight
 
@@ -137,6 +150,8 @@ Live verification (all **pending next live deploy**):
 - [ ] `sonnet` alias resolves and completes through the Anthropic front door
 - [ ] Alias absent from product map → 403 `model_not_permitted` (native error schema on
       each front door)
+- [ ] A Claude alias sent to the OpenAI front door (and vice versa) → 403 naming the
+      correct base path, instead of a 404 from the wrong pool
 - [ ] Named-value JSON survives `{{...}}` substitution into the `set-variable` attribute
       (embedded quotes) — the one mechanism here with no offline proof
 - [ ] Retargeting an alias via named-value update takes effect without policy redeploy

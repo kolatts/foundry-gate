@@ -7,7 +7,12 @@
     every request is counted twice.
   -->
   <inbound>
-    <!-- BEFORE <base />, so it is a DEFAULT the product policy can override. The
+    <!-- BEFORE <base />, so it runs before the product scope would have: all
+         enforcement lives in the tier product policy, so a subscription with no product
+         context (APIM's built-in all-access subscription, or any subscription scoped
+         outside a tier) would otherwise skip the allowlist and both meters entirely. -->
+    <include-fragment fragment-id="fg-require-product" />
+    <!-- Also BEFORE <base />, so it is a DEFAULT the product policy can override. The
          alias fragment (product scope, runs when <base /> expands) points each permitted
          model at its own pool; anything it does not touch — a request with no `model`,
          or a fork that has not populated an alias map — still lands on the pool rather

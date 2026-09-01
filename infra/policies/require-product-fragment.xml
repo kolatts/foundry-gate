@@ -1,0 +1,62 @@
+<fragment>
+  <!--
+    Closes the non-product bypass (PR #93 review).
+
+    All FoundryGate enforcement — model allowlist, TPM cap, monthly token quota — lives
+    in the tier PRODUCT policy, because `token-quota` is a literal and must be rendered
+    per tier. That leaves a hole: a subscription that is NOT scoped to a tier product
+    never runs the product policy at all, so it would reach Foundry with no allowlist
+    and no meter. APIM's built-in all-access ("master") subscription is exactly such a
+    subscription, and any API-scoped or fork-created subscription would be too.
+
+    This fragment is included in BOTH API policies BEFORE their <base />, i.e. before
+    the product scope would have run, and refuses anything without product context.
+    After it, `context.Product` is guaranteed non-null for the rest of the pipeline.
+
+    The check is deliberately `context.Product == null` rather than a membership test
+    against the tier list: every product this template creates IS a tier, and a
+    name-list check would need the tier set substituted into a shared fragment for no
+    added safety. A fork that adds a non-FoundryGate product must give it a policy.
+
+    NOTE on the master subscription: this policy guard is the enforcement mechanism.
+    Deactivating the built-in subscription in Bicep was considered and rejected — see
+    modules/ai-gateway.bicep. The guard covers strictly more cases than deactivation
+    would, since it also catches subscriptions created later outside a tier product.
+
+    XML NOTE: expressions use &quot; rather than raw double quotes so this file stays
+    well-formed XML and `scripts/validate-policies.ps1` can parse it.
+  -->
+  <choose>
+    <when condition="@(context.Product == null)">
+      <return-response>
+        <set-status code="403" reason="Forbidden" />
+        <set-header name="Content-Type" exists-action="override">
+          <value>application/json</value>
+        </set-header>
+        <!-- Machine-readable code lives in a header on both paths: the native Anthropic
+             error envelope has no `code` field, so the header is the only place it can
+             appear consistently across the two front doors. -->
+        <set-header name="x-fg-error" exists-action="override">
+          <value>plan_required</value>
+        </set-header>
+        <set-body>@{
+            var message = &quot;This key is not scoped to a FoundryGate plan. Use a per-developer FoundryGate key issued against a quota tier product.&quot;;
+            if (context.Api.Id == &quot;__ANTHROPIC_API_ID__&quot;) {
+                return new JObject(
+                    new JProperty(&quot;type&quot;, &quot;error&quot;),
+                    new JProperty(&quot;error&quot;, new JObject(
+                        new JProperty(&quot;type&quot;, &quot;permission_error&quot;),
+                        new JProperty(&quot;message&quot;, message)))
+                ).ToString(Newtonsoft.Json.Formatting.None);
+            }
+            return new JObject(
+                new JProperty(&quot;error&quot;, new JObject(
+                    new JProperty(&quot;code&quot;, &quot;plan_required&quot;),
+                    new JProperty(&quot;type&quot;, &quot;invalid_request_error&quot;),
+                    new JProperty(&quot;message&quot;, message)))
+            ).ToString(Newtonsoft.Json.Formatting.None);
+        }</set-body>
+      </return-response>
+    </when>
+  </choose>
+</fragment>
