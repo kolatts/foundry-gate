@@ -1,0 +1,120 @@
+name: API Deploy
+
+# Code pipeline for FoundryGate.Api (#71) — never triggers on infra/**.
+#   push to main (Api/Data/Domain/Database/Cli or this pipeline) -> database -> api, to dev
+#   workflow_dispatch (environment)                               -> database -> api
+#   pull_request touching the Dockerfile or these workflows      -> image build + /health smoke only
+# Build/test of the .NET code on PRs is ci.yml's job (required check `build-test`); this
+# workflow does not repeat it.
+#
+# Order matters: the dacpac (schema) goes first, then the Container App rolls to the new image.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/FoundryGate.Api/**"
+      - "src/FoundryGate.Data/**"
+      - "src/FoundryGate.Domain/**"
+      - "src/FoundryGate.Database/**"
+      - "src/FoundryGate.Cli/**"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - ".github/workflows/api-deploy.yml"
+      - ".github/workflows/_deploy-api.yml"
+      - ".github/workflows/_prepare-database.yml"
+      - ".github/workflows/_deploy-database.yml"
+  pull_request:
+    paths:
+      - "src/FoundryGate.Api/Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/api-deploy.yml"
+      - ".github/workflows/_deploy-api.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+      run-seed-test:
+        description: "Seed Bogus demo data after the schema deploy (ignored for production)."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('api-image-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || 'dev') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # PR-only: prove the Dockerfile still builds and the image answers /health. No Azure access.
+  image-build:
+    name: API - Image build check (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version
+        id: version
+        uses: ./.github/actions/version
+      - name: Build image
+        run: |
+          docker build --file src/FoundryGate.Api/Dockerfile \
+            --build-arg "VERSION=${{ steps.version.outputs.semver }}" \
+            --build-arg "ASSEMBLY_VERSION=${{ steps.version.outputs.major-minor-patch }}" \
+            --tag "foundrygate-api:${{ steps.version.outputs.image-tag }}" .
+      - name: Smoke-test /health
+        run: |
+          docker run -d --name api-smoke -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=local "foundrygate-api:${{ steps.version.outputs.image-tag }}"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || true)
+            if [ "$code" = "200" ]; then echo "/health -> 200 after ${i}s"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::/health did not return 200 within 30s"; docker logs api-smoke; exit 1
+
+  prepare-database:
+    name: Database
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_prepare-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+  database:
+    name: Database
+    needs: prepare-database
+    uses: ./.github/workflows/_deploy-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
+      sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
+      sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
+      run-seed-test: ${{ github.event_name == 'workflow_dispatch' && inputs.run-seed-test || false }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
+      AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
+      AZURE_SUBSCRIPTION_ID: ${{ needs.prepare-database.outputs.azure-subscription-id }}
+
+  api:
+    name: API
+    needs: database
+    uses: ./.github/workflows/_deploy-api.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}

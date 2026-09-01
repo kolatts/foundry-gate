@@ -1,0 +1,175 @@
+name: Deploy UI (Reusable)
+
+# Reusable workflow_call (#73): publish the Blazor WASM app (FoundryGate.Web), write its runtime
+# configuration (API base URL from the infra outputs, Entra ids from Environment variables) into
+# wwwroot/appsettings.json, and push it to the environment's Static Web App.
+#
+# No long-lived SWA token in GitHub: the deployment token is read at run time with
+# `az staticwebapp secrets list` under the OIDC identity and masked.
+#
+# PR previews: with `action: upload` on a pull_request event the SWA action creates/updates a
+# staging environment named after the PR and comments its URL on the PR; `action: close` on the
+# PR's close event removes it. Previews use the dev Static Web App. Forks (no Azure variables)
+# skip cleanly instead of failing (`required: false` on the login guard).
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name: dev | production."
+        required: true
+        type: string
+      action:
+        description: "'upload' (default) or 'close' (remove a PR preview environment)."
+        required: false
+        type: string
+        default: upload
+    outputs:
+      static-web-app-hostname:
+        value: ${{ jobs.deploy.outputs.hostname }}
+
+concurrency:
+  group: ui-${{ inputs.environment }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'main' }}
+  cancel-in-progress: false
+
+env:
+  FG_ENV: ${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  DEPLOYMENT_NAME: foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+
+jobs:
+  deploy:
+    name: UI - ${{ inputs.action == 'close' && 'Close preview' || 'Deploy' }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.summary.outputs.url }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    outputs:
+      hostname: ${{ steps.infra.outputs.static-web-app-hostname }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Azure login (OIDC)
+        id: login
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+          # Deploys must fail loudly; PR previews (pull_request events) skip when a fork has no setup.
+          required: ${{ github.event_name != 'pull_request' }}
+
+      - name: Resolve infra outputs
+        if: steps.login.outputs.configured == 'true'
+        id: infra
+        run: |
+          bash .github/scripts/infra/export-outputs.sh "$DEPLOYMENT_NAME"
+          if [ -z "$(grep '^static-web-app-name=' "$GITHUB_OUTPUT" | cut -d= -f2-)" ]; then
+            echo "::error::Infra outputs have no staticWebAppName — was the control plane deployed (deployControlPlane=true)?"
+            exit 1
+          fi
+
+      - name: Set up .NET
+        if: steps.login.outputs.configured == 'true' && inputs.action != 'close'
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Version
+        if: steps.login.outputs.configured == 'true' && inputs.action != 'close'
+        id: version
+        uses: ./.github/actions/version
+
+      - name: Publish FoundryGate.Web
+        if: steps.login.outputs.configured == 'true' && inputs.action != 'close'
+        run: |
+          dotnet publish src/FoundryGate.Web/FoundryGate.Web.csproj --configuration Release \
+            -o publish/web \
+            -p:Version=${{ steps.version.outputs.semver }} \
+            -p:AssemblyVersion=${{ steps.version.outputs.major-minor-patch }} \
+            -p:FileVersion=${{ steps.version.outputs.major-minor-patch }}
+          test -f publish/web/wwwroot/index.html
+
+      # Runtime config for the SPA (nothing here is a secret — MSAL public client ids and URLs).
+      # FG_ENTRA_WEB_CLIENT_ID / FG_ENTRA_API_CLIENT_ID are Environment variables from #109;
+      # while they are unset the placeholder zero GUIDs stay and sign-in fails, but the deploy
+      # itself succeeds so the pipeline can be proven before the app registrations exist.
+      - name: Write wwwroot/appsettings.json
+        if: steps.login.outputs.configured == 'true' && inputs.action != 'close'
+        env:
+          API_FQDN: ${{ steps.infra.outputs.container-app-fqdn }}
+          TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          WEB_CLIENT_ID: ${{ vars.FG_ENTRA_WEB_CLIENT_ID }}
+          API_CLIENT_ID: ${{ vars.FG_ENTRA_API_CLIENT_ID }}
+        run: |
+          zero="00000000-0000-0000-0000-000000000000"
+          [ -n "$WEB_CLIENT_ID" ] || { echo "::warning::FG_ENTRA_WEB_CLIENT_ID is not set for ${{ inputs.environment }} — sign-in will fail until it is (#109)."; WEB_CLIENT_ID="$zero"; }
+          [ -n "$API_CLIENT_ID" ] || { echo "::warning::FG_ENTRA_API_CLIENT_ID is not set for ${{ inputs.environment }} — API calls will be rejected until it is (#109)."; API_CLIENT_ID="$zero"; }
+          [ -n "$API_FQDN" ] || { echo "::error::Infra outputs have no containerAppFqdn."; exit 1; }
+
+          file=publish/web/wwwroot/appsettings.json
+          jq --arg authority "https://login.microsoftonline.com/${TENANT_ID}" \
+             --arg clientId "$WEB_CLIENT_ID" \
+             --arg baseUrl "https://${API_FQDN}/api/v1/" \
+             --arg scope "api://${API_CLIENT_ID}/access_as_user" \
+             '.AzureAd.Authority = $authority
+              | .AzureAd.ClientId = $clientId
+              | .Api.BaseUrl = $baseUrl
+              | .Api.Scopes = [$scope]
+              | del(._README)' "$file" > appsettings.tmp && mv appsettings.tmp "$file"
+
+          # Blazor pre-compresses static assets at publish; the stale .br/.gz copies of the file
+          # we just rewrote must not be served instead of it.
+          find publish/web/wwwroot -maxdepth 1 -name 'appsettings*.json.br' -delete
+          find publish/web/wwwroot -maxdepth 1 -name 'appsettings*.json.gz' -delete
+          echo "Runtime configuration:"; cat "$file"
+
+      - name: Get Static Web App deployment token
+        if: steps.login.outputs.configured == 'true'
+        id: swa-token
+        run: |
+          token=$(az staticwebapp secrets list --name "$FG_STATIC_WEB_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" \
+            --query properties.apiKey -o tsv)
+          if [ -z "$token" ]; then echo "::error::Could not read the Static Web App deployment token."; exit 1; fi
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Azure Static Web Apps
+        if: steps.login.outputs.configured == 'true' && inputs.action != 'close'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          repo_token: ${{ github.token }}
+          action: upload
+          app_location: publish/web/wwwroot
+          skip_app_build: true
+          skip_api_build: true
+
+      - name: Close PR preview environment
+        if: steps.login.outputs.configured == 'true' && inputs.action == 'close'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          repo_token: ${{ github.token }}
+          action: close
+
+      - name: Summary
+        if: steps.login.outputs.configured == 'true'
+        id: summary
+        run: |
+          url="https://${FG_STATIC_WEB_APP_HOSTNAME}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## UI ${{ inputs.action == 'close' && 'preview closed' || 'deployed' }} — ${FG_ENV}"
+            echo ""
+            echo "- Static Web App: \`${FG_STATIC_WEB_APP_NAME}\` — ${url}"
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ inputs.action }}" != "close" ]; then
+              echo "- PR preview: the SWA action posts the staging URL on the PR. Sign-in on a preview hostname needs that hostname among the SPA app registration's redirect URIs (#138)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

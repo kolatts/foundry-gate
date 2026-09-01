@@ -57,4 +57,4 @@ Files expected to be created or modified:
 - `.github/workflows/deploy-all.yml`
 
 ## Verification
-- [ ] See plan #22 verification checklist
+- [x] Workflow files for every row of the inventory exist on `main` (#68–#75; `docs.yml` renamed to `docs-deploy.yml`) — see plan #22 for the per-item checklist and what still needs a live run (#105)

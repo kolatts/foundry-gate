@@ -1,0 +1,85 @@
+name: Docs Deploy
+
+# Docs site (Astro/Starlight) -> GitHub Pages (#74). Formerly docs.yml; renamed to match the
+# pipeline inventory in plans/14-github-actions.md. No Azure involved.
+#   pull_request touching docs-site/** or content/**  -> build only
+#   push to main touching the same                    -> build + deploy to the github-pages Environment
+#   workflow_dispatch                                 -> build + deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - "content/**"
+      - ".github/workflows/docs-deploy.yml"
+  pull_request:
+    paths:
+      - "docs-site/**"
+      - "content/**"
+      - ".github/workflows/docs-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One Pages deploy at a time; PR builds cancel each other per PR.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('docs-pr-{0}', github.event.pull_request.number) || 'docs-deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build Astro site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: docs-site/package-lock.json
+
+      - name: Configure Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: docs-site
+
+      - name: Build
+        run: npm run build
+        working-directory: docs-site
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Summary
+        run: |
+          {
+            echo "## Docs deployed"
+            echo ""
+            echo "${{ steps.deployment.outputs.page_url }}"
+          } >> "$GITHUB_STEP_SUMMARY"

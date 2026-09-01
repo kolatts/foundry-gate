@@ -264,11 +264,41 @@ Files:
 
 ---
 
+## Implementation notes (#68–#75, landed)
+
+Where the shipped workflows deviate from the sketches above, the shipped shape wins — it was
+written against the real infra contract from PR #111 (`docs-site/.../reference/infrastructure.md`):
+
+- **No `SQL_ADMIN_PASSWORD` / `GRAPH_CLIENT_SECRET` / `SWA_DEPLOY_TOKEN`.** SQL is Entra-only, Key
+  Vault holds no Bicep-managed secrets, and the SWA deployment token is read at run time with
+  `az staticwebapp secrets list`. The GitHub side has **zero secrets**.
+- **No `RESOURCE_GROUP` / `ACR_LOGIN_SERVER` / `CONTAINER_APP_NAME` / `FUNCTION_APP_NAME` variables.**
+  Every code deploy reads `az deployment sub show -n foundrygate-{dev|prod}` outputs
+  (`.github/scripts/infra/export-outputs.sh`). Variables are only the OIDC ids, the Entra client
+  ids and (prod) the SQL admin group.
+- `environment` inputs are GitHub Environment names (`dev` | `production`); the Bicep name
+  (`prod`) is derived.
+- `_deploy-infra.yml` computes `FG_API_IMAGE` from the running Container App (or the placeholder on
+  day 0) so a re-run never resets the API; `create-model-deployments` is a dispatch input, false by
+  default.
+- The first API deploy detects the bootstrap placeholder and replaces it with an infra re-run (port
+  8080 + probes flip together with the image) instead of `az containerapp update`.
+- Reusable children: `_deploy-infra.yml`, `_prepare-database.yml` (dacpac + CLI artifacts, SQL names
+  from outputs, OIDC-id bridge for `_deploy-database.yml` — #137), `_deploy-database.yml`,
+  `_deploy-api.yml`, `_deploy-functions.yml`, `_deploy-ui.yml`, `_postdeployment-tests.yml`.
+  `docs.yml` became `docs-deploy.yml`. Shared helpers: `.github/actions/azure-oidc-login`,
+  `.github/actions/version` (GitVersion 6 trunk-based, `GitVersion.yml`).
+- `deploy-all.yml` does not call `docs-deploy.yml` (Pages deploys from main; no Azure dependency).
+- Full reference: `docs-site/src/content/docs/reference/ci-cd.md`.
+
 ## Verification
-- [ ] `infra-deploy.yml` what-if posts a PR comment with the diff
-- [ ] `infra-deploy.yml` deploy-prod requires manual reviewer approval in GitHub UI
-- [ ] `infra-destroy.yml` rejects mismatched confirmation string (no resources deleted)
-- [ ] `infra-destroy.yml` destroy-prod has both required reviewers AND a 30-minute wait timer
-- [ ] Each code pipeline builds and tests on PRs without deploying
-- [ ] `deploy-all.yml` successfully rebuilds a fresh dev environment from zero
-- [ ] No long-lived Azure credentials anywhere in GitHub secrets — OIDC only
+- [x] Every workflow and composite action passes `actionlint` with zero errors
+- [x] `src/FoundryGate.Api/Dockerfile` builds; container runs non-root on 8080 and `/health` returns 200
+- [x] GitHub Environments `dev`, `production` (1 reviewer, protected branches), `dev-destroy` (reviewer + 5 min), `prod-destroy` (reviewer + 30 min, protected branches) exist — second `prod-destroy` reviewer is an owner action (#109)
+- [x] No long-lived Azure credentials anywhere in GitHub secrets — OIDC only (no secrets at all)
+- [x] `infra-destroy.yml` rejects a mismatched confirmation string before any login (job `validate-confirmation`)
+- [ ] `infra-deploy.yml` what-if posts a PR comment with the diff — needs a live subscription (#105/#109)
+- [ ] `infra-deploy.yml` deploy-production stops at the reviewer approval — needs a live run (#105)
+- [ ] Each code pipeline deploys dev on merge without touching infra — needs a live run (#105)
+- [ ] `deploy-all.yml` rebuilds a fresh dev environment from zero — needs a live run (#105)
+- [ ] Postdeployment tests gating — #139

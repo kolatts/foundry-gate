@@ -222,15 +222,18 @@ subscription if a previous deprovision left one behind — and issues a new key.
 
 ---
 
-## Deploy pipeline (designed shape)
+## Deploy pipeline
 
 This is the pipeline FoundryGate is built around, as fixed in `CONVENTIONS.md` §CI/CD —
 GitHub Actions with OIDC federated credentials and no long-lived Azure secrets. **What
-runs today** on `main`: the pull-request track (`ci.yml`: build, tests, format;
-`claude-review.yml`) and the reusable database-deploy workflow file. **What is being
-implemented** under epic #67: the merge-to-main deploy chain — infra, database, app
-deploys, post-deploy tests — behind GitHub Environment gates (`dev`, then `production`).
-Badges on the diagram mark which is which.
+runs today** on every pull request: `ci.yml` (build, tests, format) and `claude-review.yml`.
+**What exists on `main`** for the merge-to-main chain: every workflow file — infra
+(what-if on PRs, deploy on merge), database, API, Functions, UI, post-deploy tests and the
+full-stack `deploy-all.yml` — plus the four GitHub Environments that gate them (`dev`,
+`production`, `dev-destroy`, `prod-destroy`). **What has not happened yet**: a run against
+Azure. That needs the owner-side OIDC setup (#109) and is the live validation tracked in
+#105. Badges on the diagram mark the difference; the
+[CI/CD reference](/foundry-gate/reference/ci-cd/) lists every workflow, trigger and variable.
 
 <DeployPipeline />
 
@@ -239,7 +242,10 @@ server, the workflow waits for firewall propagation and probes port 1433, then t
 `FoundryGate.Database` dacpac is deployed with DacFx (data-loss blocked unless a reviewed
 `allow-data-loss` override is passed) and reference data is seeded. Bicep re-runs pass
 `createModelDeployments=false` because Anthropic model deployments are create-once under
-ARM.
+ARM, and always pass the image the API is currently running so a re-run never resets it.
+Code deploys read resource names from the infra deployment's outputs rather than from
+GitHub variables — the only variables are the three OIDC identifiers and the Entra client
+ids.
 
 ---
 

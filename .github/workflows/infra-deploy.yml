@@ -1,0 +1,90 @@
+name: Infra Deploy
+
+# Thin trigger wrapper around _deploy-infra.yml (#69):
+#   pull_request touching infra/**  -> validate + what-if against dev, posted as a PR comment
+#   push to main touching infra/**  -> deploy dev (automatic — CONVENTIONS.md §CI/CD)
+#   workflow_dispatch               -> deploy dev, then production (production gate = the
+#                                      `production` GitHub Environment's required reviewer)
+#
+# Code deploys never trigger from here and this never triggers on src/** — infra and code
+# pipelines are deliberately separate (plans/22-cicd-pipelines.md).
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-deploy.yml"
+      - ".github/workflows/_deploy-infra.yml"
+      - ".github/scripts/infra/**"
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-deploy.yml"
+      - ".github/workflows/_deploy-infra.yml"
+      - ".github/scripts/infra/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target: dev, or dev-then-production."
+        required: true
+        type: choice
+        options: [dev, dev-then-production]
+        default: dev
+      create-model-deployments:
+        description: "Day-0 ONLY for a brand-new environment: pass createModelDeployments=true (Anthropic deployments are create-once)."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+# PR what-ifs cancel each other per PR; deploys share the per-environment lock with every other
+# deploy workflow (api/functions/ui/deploy-all) so two runs never mutate one environment at once.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('infra-what-if-pr-{0}', github.event.pull_request.number) || 'deploy-dev' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  what-if:
+    name: What-if (PR)
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_deploy-infra.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: dev
+      mode: what-if
+      post-what-if-comment: true
+
+  deploy-dev:
+    name: Deploy dev
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_deploy-infra.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: dev
+      mode: deploy
+      create-model-deployments: ${{ github.event_name == 'workflow_dispatch' && inputs.create-model-deployments || false }}
+
+  deploy-production:
+    name: Deploy production
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'dev-then-production'
+    needs: deploy-dev
+    uses: ./.github/workflows/_deploy-infra.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: production
+      mode: deploy
+      create-model-deployments: ${{ inputs.create-model-deployments }}

@@ -1,0 +1,7 @@
+# GitVersion 6 configuration (CONVENTIONS.md §CI/CD: "GitVersion Mainline").
+# `TrunkBased/preview1` is v6's built-in successor of the v5 `mode: Mainline` workflow: every
+# commit on main increments the patch version (0.3.4 -> 0.3.5), other branches get a
+# pre-release label from the branch name. Bump markers in commit messages still work:
+#   +semver: minor | +semver: major | +semver: none
+# Used by .github/actions/version (image tag `{semVer}-{shortSha}`, assembly versions).
+workflow: TrunkBased/preview1

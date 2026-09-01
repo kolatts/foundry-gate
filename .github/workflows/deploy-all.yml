@@ -1,0 +1,176 @@
+name: Deploy All
+
+# Full-stack ordered deploy of one environment (#75) — the way a fresh environment is built
+# (day 0, or after infra-destroy.yml):
+#
+#   infra ─► prepare-database ─► database ─► api ──────┐
+#                                         ├─► functions ─┼─► postdeployment tests ─► summary
+#                                         └─► ui ────────┘
+#
+# workflow_dispatch only. Every stage is a reusable _deploy-*.yml child that targets the chosen
+# GitHub Environment, so a production run stops at the `production` reviewer gate — once per
+# stage (GitHub approves pending jobs, not whole runs; see docs reference/ci-cd).
+# Docs are not part of this chain: GitHub Pages deploys from docs-deploy.yml on push to main
+# and has no Azure dependency.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+      create-model-deployments:
+        description: "Day-0 ONLY for a brand-new environment (or right after infra-destroy): pass createModelDeployments=true. Anthropic deployments are create-once — never re-run with this on."
+        required: false
+        type: boolean
+        default: false
+      run-seed-test:
+        description: "Seed Bogus demo data after the schema deploy (ignored for production)."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+# Same per-environment lock as the single-component pipelines: nothing else deploys to this
+# environment while the chain runs.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  infra:
+    name: Infra
+    uses: ./.github/workflows/_deploy-infra.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: ${{ inputs.environment }}
+      mode: deploy
+      create-model-deployments: ${{ inputs.create-model-deployments }}
+
+  prepare-database:
+    name: Database
+    needs: infra
+    uses: ./.github/workflows/_prepare-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}
+
+  database:
+    name: Database
+    needs: prepare-database
+    uses: ./.github/workflows/_deploy-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}
+      sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
+      sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
+      sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
+      run-seed-test: ${{ inputs.run-seed-test }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
+      AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
+      AZURE_SUBSCRIPTION_ID: ${{ needs.prepare-database.outputs.azure-subscription-id }}
+
+  api:
+    name: API
+    needs: database
+    uses: ./.github/workflows/_deploy-api.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}
+
+  functions:
+    name: Functions
+    needs: database
+    uses: ./.github/workflows/_deploy-functions.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}
+
+  ui:
+    name: UI
+    needs: database
+    uses: ./.github/workflows/_deploy-ui.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: ${{ inputs.environment }}
+
+  postdeployment-tests:
+    name: Postdeployment tests
+    needs: [api, functions, ui]
+    uses: ./.github/workflows/_postdeployment-tests.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}
+
+  summary:
+    name: Summary
+    needs: [infra, prepare-database, database, api, functions, ui, postdeployment-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write deployment summary
+        env:
+          API_URL: ${{ needs.api.outputs.api-base-url }}
+          UI_HOST: ${{ needs.ui.outputs.static-web-app-hostname }}
+          FUNC_HOST: ${{ needs.functions.outputs.function-app-hostname }}
+          IMAGE: ${{ needs.api.outputs.image }}
+          TESTS: ${{ needs.postdeployment-tests.outputs.summary }}
+        run: |
+          {
+            echo "# Deploy All — ${{ inputs.environment }}"
+            echo ""
+            echo "Commit \`${GITHUB_SHA::7}\` · by @${GITHUB_ACTOR} · createModelDeployments=${{ inputs.create-model-deployments }}"
+            echo ""
+            echo "| Stage | Result |"
+            echo "|---|---|"
+            echo "| Infra | ${{ needs.infra.result }} |"
+            echo "| Database (prepare) | ${{ needs.prepare-database.result }} |"
+            echo "| Database (dacpac + seed) | ${{ needs.database.result }} |"
+            echo "| API | ${{ needs.api.result }} |"
+            echo "| Functions | ${{ needs.functions.result }} |"
+            echo "| UI | ${{ needs.ui.result }} |"
+            echo "| Postdeployment tests | ${{ needs.postdeployment-tests.result }} — ${TESTS:-n/a} (not gating, #139) |"
+            echo ""
+            echo "| Endpoint | URL |"
+            echo "|---|---|"
+            echo "| API | ${API_URL:-n/a} |"
+            echo "| API health | ${API_URL:+${API_URL}/health} |"
+            echo "| UI | ${UI_HOST:+https://${UI_HOST}} |"
+            echo "| Functions | ${FUNC_HOST:+https://${FUNC_HOST}} |"
+            echo "| Image | \`${IMAGE:-n/a}\` |"
+            echo ""
+            echo "Infra outputs (registry, SQL server, Key Vault, APIM) are in the Infra job's summary."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail the run if any deploy stage failed
+        if: >-
+          needs.infra.result != 'success' || needs.prepare-database.result != 'success' ||
+          needs.database.result != 'success' || needs.api.result != 'success' ||
+          needs.functions.result != 'success' || needs.ui.result != 'success'
+        run: |
+          echo "::error::At least one deploy stage did not succeed — see the table above."
+          exit 1

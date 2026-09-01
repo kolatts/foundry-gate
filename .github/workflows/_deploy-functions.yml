@@ -1,0 +1,136 @@
+name: Deploy Functions (Reusable)
+
+# Reusable workflow_call (#72): publish FoundryGate.Functions and deploy it to the environment's
+# Flex Consumption Function App with Azure/functions-action, authenticated by the OIDC identity
+# (RBAC — no publish profile). Deployment storage is identity-based (allowSharedKeyAccess=false,
+# infra/modules/function-app.bicep) and the package is built here, so `remote-build: false`.
+#
+# The Function App name comes from the infra deployment outputs (functionAppName), never from a
+# GitHub variable. Runs after the database deploy in deploy-all.yml because the Functions share
+# the EF model with the API.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name: dev | production."
+        required: true
+        type: string
+    outputs:
+      function-app-hostname:
+        value: ${{ jobs.deploy.outputs.function-app-hostname }}
+
+concurrency:
+  group: functions-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  FG_ENV: ${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  DEPLOYMENT_NAME: foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+
+jobs:
+  build:
+    name: Functions - Publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Version
+        id: version
+        uses: ./.github/actions/version
+
+      - name: Publish
+        run: |
+          dotnet publish src/FoundryGate.Functions/FoundryGate.Functions.csproj --configuration Release \
+            -o publish/functions \
+            -p:Version=${{ steps.version.outputs.semver }} \
+            -p:AssemblyVersion=${{ steps.version.outputs.major-minor-patch }} \
+            -p:FileVersion=${{ steps.version.outputs.major-minor-patch }}
+          test -f publish/functions/host.json
+          test -d publish/functions/.azurefunctions
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: functions-package
+          path: publish/functions
+          retention-days: 7
+          if-no-files-found: error
+          # The isolated worker needs the hidden .azurefunctions folder at the package root;
+          # upload-artifact drops hidden files unless told otherwise.
+          include-hidden-files: true
+
+  deploy:
+    name: Functions - Deploy (${{ inputs.environment }})
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: https://${{ steps.verify.outputs.hostname }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      function-app-hostname: ${{ steps.verify.outputs.hostname }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: functions-package
+          path: publish/functions
+
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+
+      - name: Resolve infra outputs
+        id: infra
+        run: |
+          bash .github/scripts/infra/export-outputs.sh "$DEPLOYMENT_NAME"
+          if [ -z "$(grep '^function-app-name=' "$GITHUB_OUTPUT" | cut -d= -f2-)" ]; then
+            echo "::error::Infra outputs have no functionAppName — was the control plane deployed (deployControlPlane=true)?"
+            exit 1
+          fi
+
+      - name: Deploy to Azure Functions (Flex Consumption, identity-based)
+        uses: Azure/functions-action@v1
+        with:
+          app-name: ${{ steps.infra.outputs.function-app-name }}
+          package: publish/functions
+          sku: flexconsumption
+          remote-build: false
+
+      - name: Verify
+        id: verify
+        run: |
+          state=$(az functionapp show --name "$FG_FUNCTION_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" --query state -o tsv)
+          hostname=$(az functionapp show --name "$FG_FUNCTION_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" --query defaultHostName -o tsv)
+          echo "hostname=${hostname}" >> "$GITHUB_OUTPUT"
+          echo "State: ${state}"
+          if [ "$state" != "Running" ]; then
+            echo "::error::Function App ${FG_FUNCTION_APP_NAME} is '${state}', expected Running."
+            exit 1
+          fi
+          # Function discovery after a Flex deploy can lag; list what the host indexed but don't fail on an empty list.
+          functions=$(az functionapp function list --name "$FG_FUNCTION_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" --query '[].name' -o tsv 2>/dev/null || true)
+          {
+            echo "## Functions deployed — ${FG_ENV}"
+            echo ""
+            echo "- App: \`${FG_FUNCTION_APP_NAME}\` (${state}) — https://${hostname}"
+            echo "- Functions indexed: ${functions:-none yet (indexing lags the deploy; check the portal)}"
+          } >> "$GITHUB_STEP_SUMMARY"

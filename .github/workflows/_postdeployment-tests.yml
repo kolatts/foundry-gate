@@ -1,0 +1,111 @@
+name: Postdeployment Tests (Reusable)
+
+# Reusable workflow_call: runs FoundryGate.Tests.Postdeployment against a deployed environment
+# after the app deploys (deploy-all.yml). Today the project holds only the scaffold smoke test,
+# so the run is NOT gating (`continue-on-error`) — it reports. #139 makes it gating once the
+# Playwright scenarios exist.
+#
+# The tests receive the live URLs through environment variables read from the infra outputs:
+#   FG_API_BASE_URL   https://<container app fqdn>
+#   FG_UI_BASE_URL    https://<static web app hostname>
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name: dev | production."
+        required: true
+        type: string
+    outputs:
+      summary:
+        description: "e.g. '1/1 passed'"
+        value: ${{ jobs.test.outputs.summary }}
+
+env:
+  DEPLOYMENT_NAME: foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+
+jobs:
+  test:
+    name: Postdeployment tests (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      summary: ${{ steps.summary.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+
+      - name: Resolve infra outputs
+        id: infra
+        run: bash .github/scripts/infra/export-outputs.sh "$DEPLOYMENT_NAME"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build tests
+        run: dotnet build src/FoundryGate.Tests.Postdeployment --configuration Release
+
+      - name: Wait for the API to answer
+        env:
+          API: https://${{ steps.infra.outputs.container-app-fqdn }}
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "${API}/health" || true)
+            echo "attempt $i: ${API}/health -> ${code}"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          echo "::warning::API did not answer /health with 200 in 5 minutes; running the tests anyway."
+
+      - name: Run postdeployment tests (reporting only — #139 makes this gating)
+        continue-on-error: true
+        env:
+          FG_API_BASE_URL: https://${{ steps.infra.outputs.container-app-fqdn }}
+          FG_UI_BASE_URL: https://${{ steps.infra.outputs.static-web-app-hostname }}
+        run: |
+          dotnet test src/FoundryGate.Tests.Postdeployment --configuration Release --no-build \
+            --logger "trx;LogFileName=postdeployment.trx" --results-directory TestResults
+
+      - name: Summarise
+        id: summary
+        if: always()
+        run: |
+          trx=TestResults/postdeployment.trx
+          if [ -f "$trx" ]; then
+            total=$(grep -oP 'total="\K[^"]+' "$trx" | head -1)
+            passed=$(grep -oP 'passed="\K[^"]+' "$trx" | head -1)
+            failed=$(grep -oP 'failed="\K[^"]+' "$trx" | head -1)
+            summary="${passed:-0}/${total:-0} passed"
+            [ "${failed:-0}" != "0" ] && summary="${summary} (${failed} failed)"
+          else
+            summary="no results file"
+          fi
+          echo "summary=${summary}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Postdeployment tests — ${{ inputs.environment }}"
+            echo ""
+            echo "- Result: **${summary}** (not gating yet — #139)"
+            echo "- API: https://${{ steps.infra.outputs.container-app-fqdn }}"
+            echo "- UI: https://${{ steps.infra.outputs.static-web-app-hostname }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postdeployment-results-${{ inputs.environment }}
+          path: TestResults
+          retention-days: 14
+          if-no-files-found: ignore

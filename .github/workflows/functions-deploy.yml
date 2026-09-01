@@ -1,0 +1,45 @@
+name: Functions Deploy
+
+# Code pipeline for FoundryGate.Functions (#72) — never triggers on infra/**.
+#   push to main (Functions/Data/Domain or this pipeline) -> publish + deploy to dev
+#   workflow_dispatch (environment)                       -> publish + deploy
+# PR build/test is ci.yml's job. Schema changes ride with api-deploy.yml (Data/** triggers both;
+# the database lock in _deploy-database.yml serialises them).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/FoundryGate.Functions/**"
+      - "src/FoundryGate.Data/**"
+      - "src/FoundryGate.Domain/**"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - ".github/workflows/functions-deploy.yml"
+      - ".github/workflows/_deploy-functions.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  functions:
+    name: Functions
+    uses: ./.github/workflows/_deploy-functions.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}

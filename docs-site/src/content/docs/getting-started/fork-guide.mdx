@@ -106,59 +106,71 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
    param foundryResourceId = '/subscriptions/.../Microsoft.CognitiveServices/accounts/...'
    ```
 
-5. ### Configure GitHub OIDC
+5. ### Create the GitHub Environments and the CI identity (OIDC)
 
-   Create a federated credential in the Entra App for each environment:
+   The workflows deploy through four GitHub Environments. Create them in your fork (repo
+   Settings → Environments, or with `gh api -X PUT repos/<you>/foundry-gate/environments/<name>`):
 
-   ```sh
-   # For the dev environment
-   az ad app federated-credential create \
-     --id <appId> \
-     --parameters '{
-       "name": "foundrygate-dev",
-       "issuer": "https://token.actions.githubusercontent.com",
-       "subject": "repo:YOUR_ORG/foundry-gate:environment:dev",
-       "audiences": ["api://AzureADTokenExchange"]
-     }'
-   ```
-
-   Repeat for `environment:production`, `environment:dev-destroy`, `environment:prod-destroy`.
-
-6. ### Add GitHub Actions secrets and variables
-
-   **Secrets** (repo-level):
-   | Name | Value |
+   | Environment | Protection |
    |---|---|
-   | `SQL_ADMIN_PASSWORD` | A strong password for the SQL admin account |
-   | `GRAPH_CLIENT_SECRET` | The Entra App client secret for Graph sync |
+   | `dev` | none — deploys automatically on merge |
+   | `production` | required reviewer; deploys from protected branches only |
+   | `dev-destroy` | required reviewer + 5 min wait |
+   | `prod-destroy` | required reviewers + 30 min wait; protected branches only |
 
-   **Variables** (per GitHub Environment — set in repo Settings → Environments):
-   | Name | dev | prod |
-   |---|---|---|
-   | `AZURE_CLIENT_ID` | `<appId>` | `<appId>` |
-   | `AZURE_TENANT_ID` | `<tenantId>` | `<tenantId>` |
-   | `AZURE_SUBSCRIPTION_ID` | `<subscriptionId>` | `<subscriptionId>` |
-   | `RESOURCE_GROUP` | `rg-foundrygate-dev` | `rg-foundrygate-prod` |
-   | `LOCATION` | `eastus2` | `eastus2` |
-
-7. ### Deploy infrastructure
+   Then one app registration for GitHub Actions with a **federated credential per environment**
+   — no client secret anywhere:
 
    ```sh
-   az deployment sub create \
-     --template-file infra/main.bicep \
-     --parameters infra/parameters/dev.bicepparam \
-     --parameters sqlAdminPassword=$SQL_ADMIN_PASSWORD
+   az ad app create --display-name "foundrygate-github-ci" --sign-in-audience AzureADMyOrg
+   # for each of dev, production, dev-destroy, prod-destroy:
+   az ad app federated-credential create --id <appObjectId> --parameters '{
+     "name": "foundrygate-dev",
+     "issuer": "https://token.actions.githubusercontent.com",
+     "subject": "repo:YOUR_ORG/foundry-gate:environment:dev",
+     "audiences": ["api://AzureADTokenExchange"]
+   }'
    ```
 
-   Expected duration: 8–12 minutes.
+   Its service principal needs **Owner** on the subscription (the template is subscription-scope
+   and creates role assignments), `AcrPush` on the registry once it exists, and membership of
+   the SQL Entra admin group (Azure SQL is Entra-only — there is no password).
 
-8. ### Push to main
+6. ### Add the GitHub Environment variables
 
-   ```sh
-   git push origin main
-   ```
+   There are **no secrets**. The workflows read a handful of identifiers as Environment
+   variables and resolve every resource name from the infra deployment's outputs:
 
-   This triggers `api-deploy.yml`, `functions-deploy.yml`, and `ui-deploy.yml`. Watch the Actions tab. First run takes ~5 minutes as the Docker image builds cold.
+   | Variable | dev | production | destroy envs |
+   |---|---|---|---|
+   | `AZURE_CLIENT_ID` | `<appId>` | `<appId>` | `<appId>` |
+   | `AZURE_TENANT_ID` | `<tenantId>` | `<tenantId>` | `<tenantId>` |
+   | `AZURE_SUBSCRIPTION_ID` | `<subscriptionId>` | `<subscriptionId>` | `<subscriptionId>` |
+   | `FG_ENTRA_API_CLIENT_ID` | API app registration (step 2) | same | — |
+   | `FG_ENTRA_WEB_CLIENT_ID` | Blazor SPA app registration | same | — |
+   | `FG_SQL_ADMIN_GROUP_OBJECT_ID` / `_NAME` | — | your production SQL admin group | — |
+
+   Until `AZURE_CLIENT_ID` is set the deploy workflows fail with a message pointing here rather
+   than an Entra error, and PR jobs (what-if, UI preview) skip. Full list and rationale:
+   [CI/CD reference](/foundry-gate/reference/ci-cd/).
+
+7. ### Deploy the whole stack once (day 0)
+
+   Actions → **Deploy All** → Run workflow → `environment: dev`, tick
+   **create-model-deployments**. This is the only run that creates the model deployments —
+   Claude deployments are create-once under ARM, so every later run leaves the box unticked.
+   The chain is infra → database (dacpac + seed) → API, Functions and UI in parallel →
+   post-deploy tests → a summary with every URL. Expect 20–30 minutes; APIM v2 provisioning
+   is most of it.
+
+   To do the same by hand, see [Infrastructure → Deploying](/foundry-gate/reference/infrastructure/#deploying).
+
+8. ### From now on, merge to main
+
+   Every merge deploys what changed: `infra/**` runs a Bicep what-if on the PR and deploys
+   on merge (`infra-deploy.yml`); API, Functions and UI changes deploy through their own
+   workflows; docs go to GitHub Pages. Production is a manual dispatch of the same workflows
+   (or Deploy All with `environment: production`) behind the reviewer gate.
 
 9. ### Verify
 

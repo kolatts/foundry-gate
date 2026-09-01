@@ -1,0 +1,79 @@
+name: UI Deploy
+
+# Code pipeline for FoundryGate.Web (#73) — never triggers on infra/**.
+#   push to main (Web/Domain or this pipeline)          -> publish + deploy to dev
+#   pull_request touching Web (opened/sync/reopened)   -> PR preview environment on the dev SWA
+#   pull_request closed                                -> remove the preview environment
+#   workflow_dispatch (environment)                    -> publish + deploy
+# Forks: the preview jobs skip (not fail) when the dev environment has no Azure variables.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/FoundryGate.Web/**"
+      - "src/FoundryGate.Domain/**"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - ".github/workflows/ui-deploy.yml"
+      - ".github/workflows/_deploy-ui.yml"
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - "src/FoundryGate.Web/**"
+      - "src/FoundryGate.Domain/**"
+      - ".github/workflows/ui-deploy.yml"
+      - ".github/workflows/_deploy-ui.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('ui-preview-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || 'dev') }}
+  cancel-in-progress: false
+
+jobs:
+  ui:
+    name: UI
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/_deploy-ui.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+  preview:
+    name: UI preview
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    uses: ./.github/workflows/_deploy-ui.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: dev
+      action: upload
+
+  close-preview:
+    name: UI preview cleanup
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    uses: ./.github/workflows/_deploy-ui.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: dev
+      action: close
