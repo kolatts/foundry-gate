@@ -229,6 +229,23 @@ rate-card work (#84) to attribute Claude Marketplace meters across stacks.
 - **E-009:** APIM backend pools reject `url`/`protocol` on the pool resource (only
   leaf backends carry them) — ARM ValidationError otherwise.
 
+### D-010: Review cycle, merge, and teardown (session close)
+**Date:** 2026-09-01
+**Decision:** PR #87 went through the pncli-style review flow: 3-agent sub-review
+(security/correctness, performance/complexity, CLAUDE.md compliance, ≥70-confidence
+threshold), findings posted on the PR, all 16 surviving findings fixed in `4710da1`
+(the two Majors — quota-attrs no-op and key-based backend auth — were re-verified
+LIVE post-fix: quota header renders from the committed template; direct-key bypass
+returns 403 under disableLocalAuth + managed-identity auth), point-by-point response
+posted, merged to main. `research.md` (added on main mid-session) cross-checked and
+updated with live corrections; APIM SKU parameterized (BasicV2 = cheapest viable).
+**Teardown:** `rg-foundrygate-test` deleted; all three soft-deleted Cognitive
+Services accounts purged (they hold quota ≤48h otherwise); soft-deleted APIM purged;
+`imagile-foundry` verified back to its original single gpt-4.1-mini deployment.
+Intentionally left: Microsoft.ApiManagement provider registration (E-003). Harness
+tests never touched user-level CLI config (isolated CODEX_HOME / CLAUDE_CONFIG_DIR).
+Claude e2e remainder: issue #88.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the
