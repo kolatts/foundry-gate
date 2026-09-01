@@ -17,6 +17,8 @@ Add `POST /users/sync` (admin-only). Call Graph `GET /applications/{appId}/appRo
 
 Use `ExecutePageIteratorAsync` for Graph paging. Return `{ added, updated, deactivated }`. Write a `sync.bulk-users` audit log entry.
 
+**As landed (#40, with #110):** Graph goes behind `Services/Entra/IEntraDirectoryClient` (`GetUserAsync`, `ListAssignedUsersAsync`, `ListGroupMemberIdsAsync`) with a Graph implementation authenticated by the app's registered `TokenCredential` (managed identity / Azure CLI — no client secret) and a `DisabledEntraDirectoryClient` when `Entra:Enabled` is false (→ 400). The user population is `servicePrincipals/{id}/appRoleAssignedTo` (user principals only; group-based assignments are #121), hydrated via `GET /users?$filter=id in (...)` in chunks of 15. Departed users are **only** flagged `IsActive = false` in this wave — the full deprovision (APIM subscription deletion, hard stop, request cancellation) is #65's `IUserLifecycleService`, which replaces that branch. Audit action is the Domain constant `users.synced`.
+
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/UsersController.cs`
 - `src/FoundryGate.Api/Services/IEntraUserSyncService.cs`
@@ -30,9 +32,10 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/Services/EntraGroupSyncService.cs` (extends epic #6 service)
 
 ## Verification
-- [ ] `dotnet build` passes
-- [ ] Bulk user sync is idempotent when called twice with no changes between runs
-- [ ] New Entra users appear as `User` rows after sync
+- [x] `dotnet build` passes
+- [x] Bulk user sync is idempotent when called twice with no changes between runs
+- [x] New Entra users appear as `User` rows after sync
+- [x] Bulk user sync handles more than one Graph page (250-user fake directory at the service level; stubbed `@odata.nextLink` paging and 15-id `in` chunks at the Graph client level)
 - [ ] Removed Entra group members have their `GroupMembership` row deleted after group sync
 - [ ] Quota re-resolution fires for users whose group membership changed
 - [ ] Graph paging is handled correctly (more than 100 users in a group)

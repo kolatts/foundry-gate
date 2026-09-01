@@ -42,8 +42,9 @@ These are set as Container App environment variables (sourced from Key Vault ref
 | `Azure__FoundryResourceGroup` | Config / env var | Resource group containing the Foundry account |
 | `Azure__FoundryAccountName` | Config / env var | Foundry account name (short name) |
 | `Azure__KeyVaultUri` | Config / env var | Key Vault URI for key wrapping (APIM key encryption) |
-| `Graph__ClientId` | Config / env var | App registration client ID for Graph SDK (may differ from AzureAd__ClientId) |
-| `Graph__ClientSecret` | Key Vault secret | Client secret for Graph app-only credentials |
+| `Entra__Enabled` | Config / env var | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `User.Read.All`, `GroupMember.Read.All` and `Application.Read.All`. While `false`, the sync endpoints return `400`. |
+| `Entra__ServicePrincipalObjectId` | Config / env var | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application. |
+| `Entra__GraphBaseUrl` | Config / env var | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it). |
 
 ---
 
