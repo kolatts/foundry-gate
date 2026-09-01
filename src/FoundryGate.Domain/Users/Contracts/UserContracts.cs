@@ -7,6 +7,21 @@ using FoundryGate.Domain.Quota.Contracts;
 namespace FoundryGate.Domain.Users.Contracts;
 
 /// <summary>A user as seen in admin lists/detail (spec &#167;3.1 <c>User</c>). GET /users (paged), GET /users/{id}.</summary>
+/// <param name="UserId">Surrogate int PK.</param>
+/// <param name="UserUnique">Externally-shared stable id.</param>
+/// <param name="DisplayName">Name from Entra (spec &#167;7).</param>
+/// <param name="Email">Email from Entra (spec &#167;7).</param>
+/// <param name="EmployeeId">HR employee id from Entra, when available.</param>
+/// <param name="IsActive">False when deactivated (spec &#167;5.3) or not found in the last Entra sync (spec &#167;7.2).</param>
+/// <param name="IsUnlimited">When true, <paramref name="MonthlyTokenQuota"/> is ignored (spec &#167;3.2 step 1).</param>
+/// <param name="MonthlyTokenQuota">Null means "use the system/group default" (spec &#167;3.2).</param>
+/// <param name="IsApiKeyProvisioned">
+/// Same derived fact as <see cref="ApiKeyResponse.IsProvisioned"/> — named to match it
+/// exactly (rather than a "Has..." variant) so Web components can treat "is this user's
+/// key provisioned" as one concept with one name everywhere it appears.
+/// </param>
+/// <param name="CreatedDate">When the user record was first created (spec &#167;7.1).</param>
+/// <param name="LastSyncedDate">When this user was last touched by an Entra sync (spec &#167;7).</param>
 public record UserResponse(
     int UserId,
     Guid UserUnique,
@@ -16,7 +31,7 @@ public record UserResponse(
     bool IsActive,
     bool IsUnlimited,
     long? MonthlyTokenQuota,
-    bool HasApiKey,
+    bool IsApiKeyProvisioned,
     DateTimeOffset CreatedDate,
     DateTimeOffset? LastSyncedDate);
 
