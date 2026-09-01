@@ -1,28 +1,24 @@
 <policies>
+  <!--
+    OpenAI v1 front door (Codex CLI and OpenAI-compatible clients). Same split as the
+    Anthropic policy: API scope = mechanism, tier product policy = entitlement. The two
+    files now share everything that is genuinely identical through fragments; what
+    remains different is real (backend topology and retry semantics), so it stays
+    duplicated on purpose.
+  -->
   <inbound>
-    <base />
-    <!-- The client's api-key was consumed by APIM as the subscription key; delete it
-         and any other auth headers so only the gateway's identity reaches Foundry. -->
-    <set-header name="api-key" exists-action="delete" />
-    <set-header name="x-api-key" exists-action="delete" />
-    <set-header name="Authorization" exists-action="delete" />
-    <!-- Backend auth: APIM's system-assigned managed identity (Cognitive Services User
-         on the Foundry account). No account keys anywhere in config or ARM history. -->
-    <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
-    <!-- Same enforcement shape as the Anthropic policy; when editing either file,
-         mirror the change (a shared policy fragment lands with the #86 alias work). -->
-    <llm-token-limit counter-key="@(context.Subscription.Id)"
-                     tokens-per-minute="__DEVELOPER_TPM__"
-                     estimate-prompt-tokens="false"
-                     remaining-tokens-header-name="x-fg-remaining-tpm"
-                     tokens-consumed-header-name="x-fg-tokens-consumed"
-                     retry-after-header-name="Retry-After"
-                     __QUOTA_ATTRS__ />
-    <llm-emit-token-metric namespace="FoundryGate">
-      <dimension name="Subscription ID" />
-      <dimension name="API ID" />
-    </llm-emit-token-metric>
+    <!-- BEFORE <base />, so it runs before the product scope would have: all
+         enforcement lives in the tier product policy, so a subscription with no product
+         context (APIM's built-in all-access subscription, or any subscription scoped
+         outside a tier) would otherwise skip the allowlist and both meters entirely. -->
+    <include-fragment fragment-id="fg-require-product" />
+    <!-- Default backend, overridable by the product-scope alias fragment. Requests with
+         no `model` in the body (GET /models) never reach the fragment's rewrite branch
+         and land here. -->
     <set-backend-service backend-id="__OPENAI_BACKEND_ID__" />
+    <base />
+    <include-fragment fragment-id="fg-backend-auth" />
+    <include-fragment fragment-id="fg-token-metrics" />
   </inbound>
   <backend>
     <!-- No retry here: this is a single backend with no pool — retrying a 429 would

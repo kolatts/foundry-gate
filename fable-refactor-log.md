@@ -270,6 +270,16 @@ verification keeps changes reviewable; imagile-app conventions avoid re-litigati
 solved patterns; sharding is complexity FoundryGate's fork-per-tenant model doesn't
 need.
 
+### D-012: Frontend stack challenged and re-confirmed — Blazor stays
+**Date:** 2026-09-01
+**Decision:** Mid-implementation, the owner asked whether React should replace Blazor.
+Assessment given (React: lighter payload, agent velocity, broader OSS pool; Blazor:
+compile-time DTO sharing via the Domain project reference, single .NET stack matching
+the fork audience and imagile conventions, #48 already merged-quality). Owner chose:
+**stay on Blazor.** PR #98 stands; frontend issue tree (#49–#55, #62–#63) unchanged.
+**Why:** For an internal admin portal in a .NET-everything forkable product, contract
+safety and stack coherence outweigh the WASM payload tax.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the

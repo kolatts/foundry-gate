@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Microsoft.SqlServer.DacFx" />
   </ItemGroup>
 
   <ItemGroup>

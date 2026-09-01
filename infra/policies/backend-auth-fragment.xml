@@ -1,0 +1,16 @@
+<fragment>
+  <!--
+    Shared backend-auth preamble for both front doors (identical in the Anthropic and
+    OpenAI API policies before this fragment existed — folded up while implementing #86).
+
+    The client's subscription key arrived in the header APIM is configured to consume
+    (x-api-key for Claude Code, api-key for Codex); it must not travel onward, and no
+    client-supplied Authorization may survive either. Backend auth is APIM's
+    system-assigned managed identity (Cognitive Services User on each Foundry account) —
+    account keys are disabled on the Foundry side, so this is the only working path.
+  -->
+  <set-header name="x-api-key" exists-action="delete" />
+  <set-header name="api-key" exists-action="delete" />
+  <set-header name="Authorization" exists-action="delete" />
+  <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
+</fragment>

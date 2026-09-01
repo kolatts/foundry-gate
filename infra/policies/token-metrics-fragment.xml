@@ -1,0 +1,16 @@
+<fragment>
+  <!--
+    Shared token metrics for both front doors (folded up from the two API policies while
+    implementing #86). Dashboards only, never billing: APIM silently discards a metric
+    once a dimension exceeds 100 unique values. Billing-grade per-request counts come
+    from ApiManagementGatewayLlmLog (see modules/apim.bicep, epic #84).
+
+    "Product ID" is the tier the developer's subscription belongs to (#82) — it is what
+    makes per-tier consumption visible without joining Log Analytics.
+  -->
+  <llm-emit-token-metric namespace="FoundryGate">
+    <dimension name="Subscription ID" />
+    <dimension name="API ID" />
+    <dimension name="Product ID" />
+  </llm-emit-token-metric>
+</fragment>

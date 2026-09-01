@@ -1,0 +1,12 @@
+@page "/users/{Id:int}"
+@attribute [Authorize(Roles = RoleNames.Admin)]
+
+<PageTitle>User #@Id — Foundry Gate</PageTitle>
+
+<UnderConstruction Title="@($"User #{Id}")" />
+
+@code {
+    /// <summary>UserId from the route.</summary>
+    [Parameter]
+    public int Id { get; set; }
+}

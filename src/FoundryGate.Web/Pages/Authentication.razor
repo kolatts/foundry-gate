@@ -1,0 +1,12 @@
+@page "/authentication/{action}"
+@using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+
+<PageTitle>Signing in&#8230; — Foundry Gate</PageTitle>
+
+<RemoteAuthenticatorView Action="@Action" />
+
+@code {
+    /// <summary>MSAL login/logout/callback action segment (e.g. "login", "login-callback", "logout"), routed by the library itself.</summary>
+    [Parameter]
+    public string? Action { get; set; }
+}

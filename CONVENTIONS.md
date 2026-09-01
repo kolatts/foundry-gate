@@ -32,7 +32,10 @@
   tenant-connection resolvers/factories, no `CurrentTenantContext`, no shard math.
   A fork IS the tenant.
 - Cloud SQL auth: `Authentication=Active Directory Default` (no SQL passwords);
-  local: `Server=localhost,3433;User Id=sa;Password=<local only>` via docker-compose.
+  local: `Server=127.0.0.1,3433;User Id=sa;Password=<local only>` via docker-compose (use the
+  literal `127.0.0.1`, not `localhost` — SqlClient's dual-stack resolution can time out probing the
+  container's IPv6 loopback, which docker's port mapping doesn't listen on, before falling back to
+  IPv4, even though the port is reachable).
 - Entity config: data annotations first; `internal sealed` `IEntityTypeConfiguration`
   **co-located in the entity's file** only for what annotations can't express
   (delete behavior, composite keys); applied via `ApplyConfigurationsFromAssembly`.
@@ -70,7 +73,11 @@
 - EF entities are the model source of truth. Local: CLI `local setup` runs
   `EnsureCreated` against docker SQL; DacFx schema-compare regenerates the checked-in
   `FoundryGate.Database/dbo/Tables/*.sql`; `.sqlproj` builds the **dacpac**; CI
-  deploys via CLI `db deploy` (DacServices, `--drop-objects` in CI).
+  deploys via CLI `db deploy` (DacServices, `--drop-objects` in CI). Data-loss blocking is **on by
+  default** (DacFx's own `BlockOnPossibleDataLoss=true`) and requires an explicit
+  `--allow-data-loss`/`allow-data-loss: true` override to bypass — a deliberate deviation from
+  imagile-app (which inverts this to opt-in blocking), because a fork's production database
+  deserves a safe default more than CI convenience does.
 - Seeding is code, idempotent, run post-deploy: reference data via the
   `IReferenceDataEntity`/`SyncReferenceDataAsync` pattern
   (Imagile.Framework `[DoNotUpdate]` respected); demo/test data via **Bogus**;
