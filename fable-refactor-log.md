@@ -246,6 +246,30 @@ Intentionally left: Microsoft.ApiManagement provider registration (E-003). Harne
 tests never touched user-level CLI config (isolated CODEX_HOME / CLAUDE_CONFIG_DIR).
 Claude e2e remainder: issue #88.
 
+### D-011: Implementation phase — execution model and stack decisions (user-directed)
+**Date:** 2026-09-01
+**Decisions:**
+1. Issues are implemented by **individual Sonnet/Opus subagents**, one issue (or one
+   tightly-coupled pair) per agent, in isolated worktrees, each ending with
+   **verifiable steps** (build passes, tests pass, explicit checklist from the plan
+   file's Verification section) and the pncli-style review cycle before merge.
+2. **Azure SQL + EF Core** backing store following **imagile-app conventions**
+   (extraction in progress) — explicitly **excluding its multitenant sharding**
+   machinery. Single-database, single-tenant-per-deployment (a fork = a tenant).
+3. **Storage accounts where necessary** (e.g., Functions runtime storage; any blob
+   needs that emerge) — not as a general data store; SQL is the system of record.
+4. **Fully automated deploy pipeline** — the #67 epic's workflows (OIDC, environments,
+   what-if gates) are the shape; "fully automated" means merge-to-main deploys dev and
+   promotes to prod through environment gates without manual CLI steps.
+5. **Architecture diagrams** are first-class deliverables and must appear on the
+   PUBLIC docs site (docs-site architecture pages already have custom Astro diagram
+   components — extend/replace them for the gateway-centric + implementation
+   architecture: SQL/EF Core, Functions, storage, pipeline flow).
+**Why:** User direction at implementation kickoff. The per-issue-agent model with
+verification keeps changes reviewable; imagile-app conventions avoid re-litigating
+solved patterns; sharding is complexity FoundryGate's fork-per-tenant model doesn't
+need.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the

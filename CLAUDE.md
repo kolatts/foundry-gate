@@ -1,5 +1,21 @@
 # FoundryGate — repo instructions for Claude
 
+## Implementation phase (started 2026-09-01)
+
+- **Read `CONVENTIONS.md` before writing any code** — it is the engineering
+  contract (imagile-app-derived EF Core/Azure SQL patterns minus multitenant
+  sharding, storage-account rules, fully-automated CI/CD shape, testing/verification
+  requirements). Where it conflicts with foundrygate-spec.md or an issue body,
+  CONVENTIONS.md wins.
+- Issues #7/#9/#10/#13/#32/#33/#38/#39/#43/#44 have direction-update comments that
+  supersede parts of their bodies (gateway-centric shift; `infra/` already exists
+  with the validated gateway data plane — extend it, don't recreate it). Read the
+  comments and plans/24+25 before implementing those.
+- One issue per implementation agent, isolated worktree, verifiable steps: build
+  passes, `FoundryGate.Tests.Predeployment` passes, `dotnet format
+  --verify-no-changes` clean, plan-file Verification items checked. PR + review
+  cycle before merge.
+
 ## Docs invariants — check on EVERY change
 
 1. **Landing page** (`docs-site/src/pages/index.astro`) is a dead-simple explainer for
