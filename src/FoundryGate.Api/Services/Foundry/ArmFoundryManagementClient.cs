@@ -24,6 +24,13 @@ namespace FoundryGate.Api.Services.Foundry;
 /// The returned state is whatever ARM reported on the initial response; the UI polls.
 /// </para>
 /// <para>
+/// <b>Account-missing vs deployment-missing.</b> A 404 while <em>listing</em> the deployments
+/// collection can only mean the account is gone. A 404 on a single deployment carries ARM's
+/// <c>ParentResourceNotFound</c> error code when the <em>account</em> is missing and a plain
+/// resource-not-found code when the <em>deployment</em> is; only the latter is reported as
+/// absent. (Live confirmation of the code is on #125's checklist.)
+/// </para>
+/// <para>
 /// This SDK version has no <c>modelProviderData</c> on
 /// <see cref="CognitiveServicesAccountDeploymentProperties"/> (nor does 1.6.0-beta.4), and its
 /// api-version predates the one that accepts it (E-005: only ≥ 2026-xx; the repo's Bicep pins
@@ -34,6 +41,8 @@ namespace FoundryGate.Api.Services.Foundry;
 /// </remarks>
 public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings appSettings) : IFoundryManagementClient
 {
+    private const string ParentResourceNotFoundCode = "ParentResourceNotFound";
+
     /// <inheritdoc />
     public async Task<IReadOnlyList<FoundryDeploymentResponse>> ListDeploymentsAsync(string accountName, CancellationToken cancellationToken)
     {
@@ -49,7 +58,8 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
         }
         catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
         {
-            throw new KeyNotFoundException($"Foundry account '{accountName}' was not found in resource group '{appSettings.Gateway.ResourceGroup}'.", ex);
+            // The collection belongs to the account; a 404 here is the account, not a deployment.
+            throw new FoundryAccountNotFoundException(accountName, ex);
         }
 
         return deployments;
@@ -65,6 +75,10 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
         {
             var response = await Deployments(accountName).GetAsync(deploymentName, cancellationToken).ConfigureAwait(false);
             return Map(accountName, response.Value.Data);
+        }
+        catch (RequestFailedException ex) when (IsAccountMissing(ex))
+        {
+            throw new FoundryAccountNotFoundException(accountName, ex);
         }
         catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
         {
@@ -97,12 +111,17 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
                 .CreateOrUpdateAsync(WaitUntil.Started, request.DeploymentName, data, cancellationToken)
                 .ConfigureAwait(false);
 
-            // A PUT's initial response normally carries the resource (Accepted/Creating); when the SDK
-            // hasn't materialized it, read the deployment back rather than waiting for the LRO.
+            // HasValue is true only once the long-running operation has completed with a result — i.e.
+            // ARM finished synchronously (common for OpenAI). While it is still Accepted/Creating the
+            // operation has no value yet, so the current state is read back instead of awaited.
             if (operation.HasValue)
             {
                 return Map(request.AccountName, operation.Value.Data);
             }
+        }
+        catch (RequestFailedException ex) when (IsAccountMissing(ex))
+        {
+            throw new FoundryAccountNotFoundException(request.AccountName, ex);
         }
         catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.Conflict)
         {
@@ -132,11 +151,19 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
             _ = await deployment.DeleteAsync(WaitUntil.Started, cancellationToken).ConfigureAwait(false);
             return true;
         }
+        catch (RequestFailedException ex) when (IsAccountMissing(ex))
+        {
+            throw new FoundryAccountNotFoundException(accountName, ex);
+        }
         catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
         {
             return false;
         }
     }
+
+    private static bool IsAccountMissing(RequestFailedException ex) =>
+        ex.Status == (int)HttpStatusCode.NotFound
+        && string.Equals(ex.ErrorCode, ParentResourceNotFoundCode, StringComparison.OrdinalIgnoreCase);
 
     private string RequiredSubscriptionId =>
         appSettings.Gateway.SubscriptionId

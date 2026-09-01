@@ -140,6 +140,8 @@ public class RequestDtoValidationTests
     [InlineData("")]
     [InlineData("has_underscore")]
     [InlineData("has.dot")]
+    [InlineData("-leading-hyphen")]
+    [InlineData("trailing-hyphen-")]
     public void CreateFoundryDeploymentRequest_with_an_invalid_accountName_fails_validation(string accountName)
     {
         var request = ValidFoundryRequest() with { AccountName = accountName };

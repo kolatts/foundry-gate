@@ -65,7 +65,7 @@ That works fine when you have three engineers sharing a dev environment. It brea
 | Monthly reset | ❌ Manual | ✅ Azure Function fires at 00:01 UTC on the 1st |
 | Quota increase workflow | ❌ None | ✅ Submit → admin approves → quota applied |
 | Per-developer usage visibility | ❌ Aggregate only | ✅ Dashboard + audit log per user |
-| Model deployment management | ❌ Portal only | ✅ Admin UI in FoundryGate |
+| Model deployment management | ❌ Portal only | ✅ Claude models are set up by the infrastructure deploy; admins manage OpenAI model deployments from the FoundryGate UI |
 | Deployment-level rate limits (TPM/RPM) | ⚠️ Shared ceiling, 429s passed to callers | ⚠️ Mitigated — backend pools + circuit breakers reroute around saturated deployments; the platform ceiling itself remains |
 
 ## How it works

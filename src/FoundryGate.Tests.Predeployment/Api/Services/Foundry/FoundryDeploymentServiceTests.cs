@@ -13,6 +13,7 @@ using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Identity.Web;
 
@@ -21,18 +22,23 @@ namespace FoundryGate.Tests.Predeployment.Api.Services.Foundry;
 /// <summary>
 /// The provisioning service's own rules, against the in-memory ARM fake and a real
 /// <see cref="AuditService"/>/<see cref="CurrentUserAccessor"/> over SQLite: multi-account
-/// aggregation, the developer view's de-duplication, create-once (409 before any PUT), the
-/// Anthropic refusal (#107), and that every refusal happens <em>before</em> ARM is touched.
+/// aggregation, the developer view's de-duplication and cache, create-once (409 before any PUT),
+/// the Anthropic refusals on create <em>and</em> delete (#126), missing-account vs
+/// missing-deployment (503 vs 404; skipped on the developer view), that every refusal happens
+/// <em>before</em> ARM is touched, and that the audit row survives a client cancelling after ARM
+/// accepted.
 /// </summary>
 public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
 {
     private const string Primary = "fg-eus2";
     private const string Secondary = "fg-swc";
+    private const string Missing = "fg-decommissioned";
 
     private static readonly DateTimeOffset Now = new(2026, 9, 1, 12, 0, 0, TimeSpan.Zero);
 
     private readonly FakeFoundryManagementClient _client = new();
     private readonly MutableTimeProvider _timeProvider = new(Now);
+    private readonly MemoryCache _cache = new(new MemoryCacheOptions());
 
     public FoundryDeploymentServiceTests()
     {
@@ -56,13 +62,25 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task ListDeploymentsAsync_throws_when_the_Gateway_section_is_not_configured()
+    public async Task ListDeploymentsAsync_throws_FeatureNotConfigured_when_the_Gateway_section_is_absent()
     {
         var service = CreateService(oid: null, configured: false);
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ListDeploymentsAsync(CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<FeatureNotConfiguredException>(() => service.ListDeploymentsAsync(CancellationToken.None));
 
         Assert.Contains("Gateway:FoundryAccountNames", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ListDeploymentsAsync_throws_FeatureNotConfigured_naming_a_configured_account_Azure_does_not_have()
+    {
+        _client.Seed(Primary, "gpt-4-1-mini");
+        var service = CreateService(oid: null, accounts: [Primary, Missing]);
+
+        var exception = await Assert.ThrowsAsync<FeatureNotConfiguredException>(() => service.ListDeploymentsAsync(CancellationToken.None));
+
+        Assert.Contains(Missing, exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("rg-", exception.Message, StringComparison.Ordinal); // never the resource group
     }
 
     [Fact]
@@ -85,12 +103,62 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task GetDeploymentAsync_throws_KeyNotFound_for_an_absent_deployment_and_for_an_unconfigured_account()
+    public async Task ListModelsAsync_skips_a_missing_account_and_serves_the_rest()
     {
+        _client.Seed(Primary, "gpt-4-1-mini");
+        var service = CreateService(oid: null, accounts: [Primary, Missing]);
+
+        var models = await service.ListModelsAsync(CancellationToken.None);
+
+        var model = Assert.Single(models);
+        Assert.Equal("gpt-4-1-mini", model.DeploymentName);
+    }
+
+    [Fact]
+    public async Task ListModelsAsync_is_served_from_cache_until_a_create_or_delete_invalidates_it()
+    {
+        _client.Seed(Primary, "gpt-4-1-mini");
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+
+        _ = await service.ListModelsAsync(CancellationToken.None);
+        _ = await service.ListModelsAsync(CancellationToken.None);
+        Assert.Equal(2, _client.ListCalls.Count); // one per account, once — the second call was cached
+
+        _ = await service.CreateDeploymentAsync(Request(Primary, "gpt-4-1-nano") with { ModelName = "gpt-4.1-nano" }, CancellationToken.None);
+        var afterCreate = await service.ListModelsAsync(CancellationToken.None);
+        Assert.Equal(4, _client.ListCalls.Count);
+        Assert.Contains(afterCreate, m => m.DeploymentName == "gpt-4-1-nano");
+
+        await service.DeleteDeploymentAsync(Primary, "gpt-4-1-nano", CancellationToken.None);
+        var afterDelete = await service.ListModelsAsync(CancellationToken.None);
+        Assert.Equal(6, _client.ListCalls.Count);
+        Assert.DoesNotContain(afterDelete, m => m.DeploymentName == "gpt-4-1-nano");
+    }
+
+    [Fact]
+    public async Task ListModelsAsync_cache_entry_expires_after_the_configured_duration()
+    {
+        // MemoryCache's expiry is wall-clock based; assert the entry is registered with the intended TTL
+        // rather than sleeping: the absolute expiration must be set and not longer than the constant.
         _client.Seed(Primary, "gpt-4-1-mini");
         var service = CreateService(oid: null);
 
+        _ = await service.ListModelsAsync(CancellationToken.None);
+
+        Assert.True(_cache.TryGetValue(FoundryDeploymentService.ModelsCacheKey, out IReadOnlyList<FoundryModelResponse>? cached));
+        Assert.NotNull(cached);
+        Assert.Equal(TimeSpan.FromSeconds(30), FoundryDeploymentService.ModelsCacheDuration);
+    }
+
+    [Fact]
+    public async Task GetDeploymentAsync_distinguishes_missing_deployment_404_from_missing_account_503_and_unconfigured_account_404()
+    {
+        _client.Seed(Primary, "gpt-4-1-mini");
+        var service = CreateService(oid: null, accounts: [Primary, Secondary, Missing]);
+
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.GetDeploymentAsync(Primary, "nope", CancellationToken.None));
+        await Assert.ThrowsAsync<FeatureNotConfiguredException>(() => service.GetDeploymentAsync(Missing, "gpt-4-1-mini", CancellationToken.None));
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.GetDeploymentAsync("someone-elses-account", "gpt-4-1-mini", CancellationToken.None));
     }
 
@@ -117,6 +185,38 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
         Assert.Equal($"{Primary}/gpt-4-1-mini", audit.TargetId);
         Assert.Contains("\"modelName\":\"gpt-4.1-mini\"", audit.Details, StringComparison.Ordinal);
         Assert.Contains("\"capacity\":10", audit.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateDeploymentAsync_still_audits_when_the_caller_cancels_after_ARM_accepted()
+    {
+        // The reviewer's probe: a client that drops during the ARM call. Past the commit point the audit
+        // row and save must not observe the request token — an accepted deployment is never unaudited.
+        var actor = await SeedUserAsync("Ada Lovelace");
+        using var cts = new CancellationTokenSource();
+        _client.OnCreate = _ => cts.Cancel();
+        var service = CreateService(actor.EntraObjectId);
+
+        var created = await service.CreateDeploymentAsync(Request(Primary, "gpt-4-1-mini"), cts.Token);
+
+        Assert.NotNull(await _client.GetDeploymentAsync(Primary, "gpt-4-1-mini", CancellationToken.None));
+        var audit = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.FoundryDeploymentCreated);
+        Assert.Equal($"{Primary}/{created.DeploymentName}", audit.TargetId);
+    }
+
+    [Fact]
+    public async Task DeleteDeploymentAsync_still_audits_when_the_caller_cancels_after_ARM_accepted()
+    {
+        _client.Seed(Primary, "gpt-4-1-mini");
+        var actor = await SeedUserAsync("Ada Lovelace");
+        using var cts = new CancellationTokenSource();
+        _client.OnDelete = (_, _) => cts.Cancel();
+        var service = CreateService(actor.EntraObjectId);
+
+        await service.DeleteDeploymentAsync(Primary, "gpt-4-1-mini", cts.Token);
+
+        Assert.Null(await _client.GetDeploymentAsync(Primary, "gpt-4-1-mini", CancellationToken.None));
+        Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.FoundryDeploymentDeleted).ToListAsync());
     }
 
     [Fact]
@@ -151,6 +251,7 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
         var exception = await Assert.ThrowsAsync<ArgumentException>(() => service.CreateDeploymentAsync(request, CancellationToken.None));
 
         Assert.Contains("#107", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("#126", exception.Message, StringComparison.Ordinal);
         Assert.Contains("modelProviderData", exception.Message, StringComparison.Ordinal);
         Assert.Empty(_client.CreateCalls);
         Assert.Empty(Context.ChangeTracker.Entries<AuditLog>());
@@ -168,6 +269,19 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
         Assert.Contains("not-ours", exception.Message, StringComparison.Ordinal);
         Assert.Contains(Primary, exception.Message, StringComparison.Ordinal);
         Assert.Empty(_client.CreateCalls);
+    }
+
+    [Fact]
+    public async Task CreateDeploymentAsync_throws_FeatureNotConfigured_when_the_configured_account_is_missing_in_Azure()
+    {
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId, accounts: [Primary, Missing]);
+
+        await Assert.ThrowsAsync<FeatureNotConfiguredException>(() =>
+            service.CreateDeploymentAsync(Request(Missing, "gpt-4-1-mini"), CancellationToken.None));
+
+        Assert.Empty(_client.CreateCalls);
+        Assert.Empty(Context.ChangeTracker.Entries<AuditLog>());
     }
 
     [Fact]
@@ -214,6 +328,24 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
         Assert.Equal($"{Secondary}/gpt-4-1-mini", audit.TargetId);
         Assert.Contains("\"previousProvisioningState\":\"Succeeded\"", audit.Details, StringComparison.Ordinal);
         Assert.Contains("\"capacity\":25", audit.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeleteDeploymentAsync_refuses_an_Anthropic_deployment_before_any_ARM_delete()
+    {
+        // Symmetric with the create refusal: the API cannot recreate a Claude deployment (#126) and infra
+        // can only recreate all of an account's deployments (re-PUTting the survivors, E-006).
+        _client.Seed(Primary, "claude-sonnet-4-5", "Anthropic", "claude-sonnet-4-5", "20250929");
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.DeleteDeploymentAsync(Primary, "claude-sonnet-4-5", CancellationToken.None));
+
+        Assert.Contains("#126", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(_client.DeleteCalls);
+        Assert.NotNull(await _client.GetDeploymentAsync(Primary, "claude-sonnet-4-5", CancellationToken.None));
+        Assert.Empty(Context.ChangeTracker.Entries<AuditLog>());
     }
 
     [Fact]
@@ -264,7 +396,7 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
         };
 
     /// <summary>Wires the real accessor + audit service over this test's context, as the DI container would per request.</summary>
-    private FoundryDeploymentService CreateService(string? oid, bool configured = true)
+    private FoundryDeploymentService CreateService(string? oid, bool configured = true, List<string>? accounts = null)
     {
         var claims = oid is null ? [] : new List<Claim> { new(ClaimConstants.Oid, oid) };
         var identity = new ClaimsIdentity(claims, "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
@@ -279,12 +411,12 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
                 {
                     SubscriptionId = "00000000-0000-0000-0000-000000000001",
                     ResourceGroup = "rg-foundrygate-test",
-                    FoundryAccountNames = [Primary, Secondary],
+                    FoundryAccountNames = accounts ?? [Primary, Secondary],
                 }
                 : new GatewayOptions(),
         };
 
-        return new FoundryDeploymentService(_client, appSettings, auditService, accessor, Context, NullLogger<FoundryDeploymentService>.Instance);
+        return new FoundryDeploymentService(_client, appSettings, auditService, accessor, Context, _cache, NullLogger<FoundryDeploymentService>.Instance);
     }
 
     private async Task<User> SeedUserAsync(string displayName)

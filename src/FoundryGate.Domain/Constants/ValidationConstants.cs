@@ -48,14 +48,18 @@ public static class ValidationConstants
     /// <summary>Cognitive Services account names are 2–64 characters (Azure resource naming rules).</summary>
     public const int FoundryAccountNameMaxLength = 64;
 
-    /// <summary>Letters, digits and hyphens, starting with a letter or digit — the Cognitive Services account-name rule (also the account's DNS sub-domain).</summary>
-    public const string FoundryAccountNamePattern = "^[A-Za-z0-9][A-Za-z0-9-]{1,63}$";
+    /// <summary>
+    /// Letters, digits and hyphens, starting and ending with a letter or digit — the Cognitive
+    /// Services account-name rule (also the account's DNS sub-domain, hence no trailing hyphen).
+    /// Character shape only; length is <c>[StringLength]</c>'s job so the two never drift.
+    /// </summary>
+    public const string FoundryAccountNamePattern = "^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$";
 
     /// <summary>Cognitive Services deployment names are 2–64 characters (Azure resource naming rules).</summary>
     public const int FoundryDeploymentNameMaxLength = 64;
 
-    /// <summary>Letters, digits, <c>.</c>, <c>_</c> and <c>-</c>, starting with a letter or digit — the Cognitive Services deployment-name rule.</summary>
-    public const string FoundryDeploymentNamePattern = "^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$";
+    /// <summary>Letters, digits, <c>.</c>, <c>_</c> and <c>-</c>, starting with a letter or digit — the Cognitive Services deployment-name rule. Character shape only; length is <c>[StringLength]</c>'s job.</summary>
+    public const string FoundryDeploymentNamePattern = "^[A-Za-z0-9][A-Za-z0-9._-]*$";
 
     public const int FoundryModelNameMaxLength = 128;
     public const int FoundryModelVersionMaxLength = 64;

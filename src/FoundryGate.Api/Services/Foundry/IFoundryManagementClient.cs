@@ -12,20 +12,24 @@ namespace FoundryGate.Api.Services.Foundry;
 /// types never leak past <c>Services/Foundry</c>.
 /// </summary>
 /// <remarks>
-/// Implementations map ARM's <c>404</c> to "absent" (<see langword="null"/> / <see langword="false"/>)
-/// and its <c>409</c> to <see cref="Domain.Exceptions.ConflictException"/>; any other ARM failure
-/// (403 from an under-privileged identity, 400 from a quota or model-catalog rejection, 5xx) is
-/// left to surface as <c>Azure.RequestFailedException</c> — a 500 with the detail in the server
-/// log, never on the wire — because it describes the <em>gateway's</em> identity or quota, not
-/// the caller's request.
+/// Two kinds of "not found" are kept apart: the <b>account</b> missing is
+/// <see cref="FoundryAccountNotFoundException"/> from every method (a configuration/server
+/// problem); the <b>deployment</b> missing is <see langword="null"/> from
+/// <see cref="GetDeploymentAsync"/> and <see langword="false"/> from
+/// <see cref="DeleteDeploymentAsync"/> (a legitimate 404). ARM's <c>409</c> becomes
+/// <see cref="Domain.Exceptions.ConflictException"/>; any other ARM failure (403 from an
+/// under-privileged identity, 400 from a quota or model-catalog rejection, 5xx) is left to surface
+/// as <c>Azure.RequestFailedException</c> — a 500 with the detail in the server log, never on the
+/// wire — because it describes the <em>gateway's</em> identity or quota, not the caller's request.
 /// </remarks>
 public interface IFoundryManagementClient
 {
     /// <summary>Every deployment in <paramref name="accountName"/>, in ARM's enumeration order.</summary>
-    /// <exception cref="KeyNotFoundException">The account itself does not exist (ARM 404 on the account).</exception>
+    /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
     Task<IReadOnlyList<FoundryDeploymentResponse>> ListDeploymentsAsync(string accountName, CancellationToken cancellationToken);
 
     /// <summary>One deployment, or <see langword="null"/> when no deployment of that name exists in the account.</summary>
+    /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
     Task<FoundryDeploymentResponse?> GetDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken);
 
     /// <summary>
@@ -36,13 +40,15 @@ public interface IFoundryManagementClient
     /// established the name does not exist: this method is a PUT and must never be pointed at an
     /// existing deployment (CLAUDE.md: never re-PUT).
     /// </summary>
+    /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
     /// <exception cref="Domain.Exceptions.ConflictException">ARM refused with 409 (a concurrent create of the same name, or a name racing this call).</exception>
     Task<FoundryDeploymentResponse> CreateDeploymentAsync(CreateFoundryDeploymentRequest request, CancellationToken cancellationToken);
 
     /// <summary>
     /// Starts deleting a deployment. <see langword="true"/> when ARM accepted the delete,
-    /// <see langword="false"/> when no such deployment existed (ARM 404) — nothing is retried or
+    /// <see langword="false"/> when no such deployment existed — nothing is retried or
     /// recreated either way.
     /// </summary>
+    /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
     Task<bool> DeleteDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken);
 }

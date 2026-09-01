@@ -6,11 +6,12 @@ namespace FoundryGate.Tests.Predeployment.Support;
 
 /// <summary>
 /// In-memory <see cref="IFoundryManagementClient"/>: a dictionary of accounts → deployments that
-/// behaves like the ARM seam's contract (unknown account → <see cref="KeyNotFoundException"/> on
-/// list, absent deployment → <see langword="null"/>/<see langword="false"/>, existing name on
-/// create → <see cref="ConflictException"/>) and records every mutation so tests can assert the
-/// service never re-PUTs, never recreates, and never reaches ARM when it should refuse first.
-/// No live Azure in tests (CLAUDE.md) — this is the only Foundry client the test host ever sees.
+/// behaves like the ARM seam's contract (unknown account → <see cref="FoundryAccountNotFoundException"/>
+/// from every method, absent deployment → <see langword="null"/>/<see langword="false"/>, existing
+/// name on create → <see cref="ConflictException"/>) and records every call so tests can assert the
+/// service never re-PUTs, never recreates, never reaches ARM when it should refuse first, and hits
+/// the cache when it should. No live Azure in tests (CLAUDE.md) — this is the only Foundry client
+/// the test host ever sees.
 /// </summary>
 public sealed class FakeFoundryManagementClient : IFoundryManagementClient
 {
@@ -18,6 +19,9 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
 
     private readonly Dictionary<string, Dictionary<string, FoundryDeploymentResponse>> _accounts =
         new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every account the service asked to list, in order.</summary>
+    public List<string> ListCalls { get; } = [];
 
     /// <summary>Every create the service asked for, in order.</summary>
     public List<CreateFoundryDeploymentRequest> CreateCalls { get; } = [];
@@ -30,6 +34,12 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
 
     /// <summary>When set, <see cref="CreateDeploymentAsync"/> throws this instead of creating — simulates an ARM rejection.</summary>
     public Exception? ThrowOnCreate { get; set; }
+
+    /// <summary>Runs inside <see cref="CreateDeploymentAsync"/> after the create is recorded — e.g. to cancel the request token "while ARM was working".</summary>
+    public Action<CreateFoundryDeploymentRequest>? OnCreate { get; set; }
+
+    /// <summary>Runs inside <see cref="DeleteDeploymentAsync"/> after the delete is recorded.</summary>
+    public Action<string, string>? OnDelete { get; set; }
 
     /// <summary>Makes <paramref name="accountName"/> a known (possibly empty) account.</summary>
     public void AddAccount(string accountName)
@@ -70,20 +80,14 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
     /// <inheritdoc />
     public Task<IReadOnlyList<FoundryDeploymentResponse>> ListDeploymentsAsync(string accountName, CancellationToken cancellationToken)
     {
-        if (!_accounts.TryGetValue(accountName, out var deployments))
-        {
-            throw new KeyNotFoundException($"Fake: Foundry account '{accountName}' does not exist.");
-        }
-
-        return Task.FromResult<IReadOnlyList<FoundryDeploymentResponse>>(deployments.Values.ToList());
+        ListCalls.Add(accountName);
+        return Task.FromResult<IReadOnlyList<FoundryDeploymentResponse>>(RequireAccount(accountName).Values.ToList());
     }
 
     /// <inheritdoc />
     public Task<FoundryDeploymentResponse?> GetDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken)
     {
-        var found = _accounts.TryGetValue(accountName, out var deployments) && deployments.TryGetValue(deploymentName, out var deployment)
-            ? deployment
-            : null;
+        var found = RequireAccount(accountName).TryGetValue(deploymentName, out var deployment) ? deployment : null;
         return Task.FromResult(found);
     }
 
@@ -92,14 +96,14 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
     {
         ArgumentNullException.ThrowIfNull(request);
         CreateCalls.Add(request);
+        OnCreate?.Invoke(request);
 
         if (ThrowOnCreate is not null)
         {
             throw ThrowOnCreate;
         }
 
-        AddAccount(request.AccountName);
-        if (_accounts[request.AccountName].ContainsKey(request.DeploymentName))
+        if (RequireAccount(request.AccountName).ContainsKey(request.DeploymentName))
         {
             throw new ConflictException($"Fake: deployment '{request.DeploymentName}' already exists in '{request.AccountName}' (ARM 409).");
         }
@@ -120,7 +124,12 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
     public Task<bool> DeleteDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken)
     {
         DeleteCalls.Add((accountName, deploymentName));
-        var removed = _accounts.TryGetValue(accountName, out var deployments) && deployments.Remove(deploymentName);
-        return Task.FromResult(removed);
+        OnDelete?.Invoke(accountName, deploymentName);
+        return Task.FromResult(RequireAccount(accountName).Remove(deploymentName));
     }
+
+    private Dictionary<string, FoundryDeploymentResponse> RequireAccount(string accountName) =>
+        _accounts.TryGetValue(accountName, out var deployments)
+            ? deployments
+            : throw new FoundryAccountNotFoundException(accountName);
 }

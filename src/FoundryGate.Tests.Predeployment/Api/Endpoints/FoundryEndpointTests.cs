@@ -256,6 +256,22 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
     }
 
     [Fact]
+    public async Task Delete_of_an_Anthropic_deployment_returns_400_pointing_at_126_and_deletes_nothing()
+    {
+        var admin = await factory.SeedUserAsync(displayName: "Admin Ada");
+        using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
+        var name = Marker();
+        factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, name, "Anthropic", "claude-haiku-4-5", "20251001");
+
+        var response = await client.DeleteAsync(new Uri($"{DeploymentsPath}/{ApiTestFactory.PrimaryFoundryAccount}/{name}", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ApiError>(JsonOptions);
+        Assert.Contains("#126", problem?.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(factory.FoundryClient.DeleteCalls, c => c.DeploymentName == name);
+    }
+
+    [Fact]
     public async Task Delete_of_a_missing_deployment_returns_404()
     {
         var admin = await factory.SeedUserAsync(displayName: "Admin Ada");
