@@ -23,6 +23,7 @@ export default defineConfig({
         './src/styles/typography.css',
         './src/styles/starlight-theme.css',
         './src/styles/motion.css',
+        './src/styles/diagrams.css',
       ],
       social: {
         github: 'https://github.com/kolatts/foundry-gate',

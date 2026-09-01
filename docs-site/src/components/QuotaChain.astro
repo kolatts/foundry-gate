@@ -1,5 +1,8 @@
 ---
-// No props — hardcoded five-level quota resolution waterfall
+// Five-level quota resolution → tier product assignment.
+// No props: the waterfall is fixed by foundrygate-spec §3.2; the tier stage is the
+// gateway-centric outcome (#7 direction update, plans/24): the resolved budget picks an
+// APIM product, and the product's llm-token-limit policy is what enforces it.
 interface Level {
   num: number;
   rule: string;
@@ -11,13 +14,13 @@ const levels: Level[] = [
   {
     num: 1,
     rule: 'User.IsUnlimited = true',
-    result: 'Unlimited (no cap)',
+    result: 'Unlimited (no monthly cap)',
     resultVariant: 'unlimited',
   },
   {
     num: 2,
     rule: 'User.MonthlyTokenQuota is set',
-    result: 'User-specific value',
+    result: 'User-specific budget',
     resultVariant: 'user',
   },
   {
@@ -29,39 +32,79 @@ const levels: Level[] = [
   {
     num: 4,
     rule: 'Max(Group.MonthlyTokenQuota) across all user groups',
-    result: 'Highest group quota',
+    result: 'Highest group budget',
     resultVariant: 'group',
   },
   {
     num: 5,
     rule: 'SystemConfiguration["DefaultMonthlyTokenQuota"]',
-    result: 'System-wide default (e.g. 1 M)',
+    result: 'System-wide default',
     resultVariant: 'system',
   },
 ];
+
+const ariaLabel =
+  'Quota resolution. Five levels, first match wins: 1, User.IsUnlimited gives unlimited; 2, a user-specific ' +
+  'MonthlyTokenQuota; 3, any group with IsUnlimited gives unlimited; 4, the highest group MonthlyTokenQuota; ' +
+  '5, the SystemConfiguration default. The resolved budget selects a tier product: Standard at 5 million tokens ' +
+  'per month and 20 thousand tokens per minute, Power at 20 million and 40 thousand, or Unlimited with no ' +
+  'monthly cap and 100 thousand tokens per minute. The developer\'s APIM subscription is created under, or ' +
+  'moved to, that product, and the product\'s llm-token-limit policy enforces it in real time: 403 when the ' +
+  'monthly quota is exhausted, 429 with Retry-After on the per-minute cap. The subscription state never changes.';
 ---
 
-<div class="qc-wrapper not-content">
+<figure class="fgd fgd-qc not-content" role="group" aria-labelledby="fgd-qc-title" aria-describedby="fgd-qc-desc">
+  <p id="fgd-qc-title" class="fgd-sr-only">Quota resolution — five levels to a tier product</p>
+  <p id="fgd-qc-desc" class="fgd-sr-only">{ariaLabel}</p>
   <ol class="qc-list">
     {levels.map((level) => (
       <li class="qc-row">
         <span class={`qc-badge qc-badge--${level.resultVariant}`}>{level.num}</span>
-        <code class="qc-rule">{level.rule}</code>
+        <code class="qc-rule fgd-wrap">{level.rule}</code>
         <span class={`qc-result qc-result--${level.resultVariant}`}>{level.result}</span>
       </li>
     ))}
   </ol>
-  <p class="qc-note">
-    First match wins — evaluation stops at the first level that resolves.
-  </p>
-</div>
+  <p class="qc-note">First match wins — evaluation stops at the first level that resolves.</p>
+
+  <div class="fgd-arrow">
+    <span class="fgd-arrow__line"></span>
+    <span class="fgd-arrow__label"><strong>resolved budget → tier product</strong> — the control plane maps the value to the tier that carries it</span>
+    <span class="fgd-arrow__head"></span>
+  </div>
+
+  <div class="fgd-row fgd-row--3">
+    <div class="fgd-node fgd-node--azure">
+      <div class="fgd-node__title">Standard</div>
+      <div class="fgd-node__sub">5M tokens / month<br />20K tokens / minute</div>
+    </div>
+    <div class="fgd-node fgd-node--azure">
+      <div class="fgd-node__title">Power</div>
+      <div class="fgd-node__sub">20M tokens / month<br />40K tokens / minute</div>
+    </div>
+    <div class="fgd-node fgd-node--azure qc-tier--unlimited">
+      <div class="fgd-node__title">Unlimited</div>
+      <div class="fgd-node__sub">no monthly cap<br />100K tokens / minute</div>
+    </div>
+  </div>
+
+  <div class="fgd-arrow">
+    <span class="fgd-arrow__line"></span>
+    <span class="fgd-arrow__label">APIM subscription created under — or moved to — that product</span>
+    <span class="fgd-arrow__head"></span>
+  </div>
+
+  <div class="qc-enforce">
+    <div class="qc-enforce__title">Enforced by the product's <code>llm-token-limit</code> policy, per subscription, in real time</div>
+    <div class="qc-enforce__badges">
+      <span class="fgd-badge fgd-badge--hot">403 · monthly quota exhausted</span>
+      <span class="fgd-badge fgd-badge--ember">429 + Retry-After · per-minute cap</span>
+      <span class="fgd-badge fgd-badge--muted">subscription state unchanged</span>
+    </div>
+  </div>
+</figure>
 
 <style>
-  .qc-wrapper {
-    margin: 1.25rem 0;
-    font-family: system-ui, sans-serif;
-  }
-
   .qc-list {
     list-style: none;
     margin: 0;
@@ -69,28 +112,23 @@ const levels: Level[] = [
     display: flex;
     flex-direction: column;
     gap: 0;
-    border: 1px solid var(--fg-border-subtle, #1E2D42);
+    border: 1px solid var(--fg-border-subtle, #1C2E44);
     border-radius: 10px;
     overflow: hidden;
   }
 
   .qc-row {
     display: grid;
-    grid-template-columns: 2.4rem 1fr auto;
+    grid-template-columns: 2.4rem minmax(0, 1fr) auto;
     align-items: center;
     gap: 0.75rem;
     padding: 0.65rem 1rem;
-    background: var(--fg-bg-surface, #0D1520);
-    border-bottom: 1px solid var(--fg-border-subtle, #1E2D42);
+    background: var(--fg-bg-surface, #0C1420);
+    border-bottom: 1px solid var(--fg-border-subtle, #1C2E44);
   }
 
-  .qc-row:last-child {
-    border-bottom: none;
-  }
-
-  .qc-row:nth-child(odd) {
-    background: var(--fg-bg-raised, #111927);
-  }
+  .qc-row:last-child { border-bottom: none; }
+  .qc-row:nth-child(odd) { background: var(--fg-bg-raised, #101B2A); }
 
   .qc-badge {
     width: 2rem;
@@ -107,64 +145,91 @@ const levels: Level[] = [
   }
 
   .qc-rule {
-    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-    font-size: 0.8rem;
-    color: var(--fg-text-muted, #6B7E94);
+    font-family: 'Monaspace Argon', ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.78rem;
+    color: var(--fg-text-secondary, #C4D0DC);
     background: none;
     border: none;
     padding: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  @media (max-width: 580px) {
-    .qc-row {
-      grid-template-columns: 2.4rem 1fr;
-      grid-template-rows: auto auto;
-    }
-    .qc-result {
-      grid-column: 2;
-    }
+    min-width: 0;
+    white-space: normal; /* rules are sentences, not identifiers — let them wrap */
+    overflow-wrap: anywhere;
   }
 
   .qc-result {
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     font-weight: 600;
     padding: 0.2rem 0.6rem;
     border-radius: 4px;
     white-space: nowrap;
   }
 
+  @media (max-width: 580px) {
+    .qc-row {
+      grid-template-columns: 2.4rem minmax(0, 1fr);
+      grid-template-rows: auto auto;
+      row-gap: 0.35rem;
+    }
+    .qc-result {
+      grid-column: 2;
+      justify-self: start;
+      white-space: normal;
+    }
+  }
+
   .qc-result--unlimited,
   .qc-result--group-unlimited {
     color: var(--fg-success, #22C55E);
-    background: rgba(34, 197, 94, 0.12);
-    border: 1px solid rgba(34, 197, 94, 0.25);
+    background: color-mix(in srgb, var(--fg-success, #22C55E) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg-success, #22C55E) 25%, transparent);
   }
 
   .qc-result--user {
     color: var(--fg-azure-neon, #4DCFFF);
-    background: rgba(77, 207, 255, 0.1);
-    border: 1px solid rgba(77, 207, 255, 0.2);
+    background: color-mix(in srgb, var(--fg-azure-neon, #4DCFFF) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg-azure-neon, #4DCFFF) 20%, transparent);
   }
 
   .qc-result--group {
     color: var(--fg-azure-hover, #3BA3E8);
-    background: rgba(59, 163, 232, 0.1);
-    border: 1px solid rgba(59, 163, 232, 0.2);
+    background: color-mix(in srgb, var(--fg-azure-hover, #3BA3E8) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg-azure-hover, #3BA3E8) 20%, transparent);
   }
 
   .qc-result--system {
-    color: var(--fg-ember, #F58025);
-    background: rgba(245, 128, 37, 0.1);
-    border: 1px solid rgba(245, 128, 37, 0.2);
+    color: var(--fg-ember-soft, #FFB347);
+    background: color-mix(in srgb, var(--fg-ember, #F58025) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg-ember, #F58025) 25%, transparent);
   }
 
   .qc-note {
-    margin-top: 0.6rem;
-    font-size: 0.8rem;
-    color: var(--fg-text-muted, #6B7E94);
+    margin: 0.6rem 0 0;
+    font-size: 0.78rem;
+    color: var(--fg-text-muted, #7E96AD);
     font-style: italic;
+  }
+
+  .qc-tier--unlimited { border-color: var(--fg-success, #22C55E); }
+
+  .qc-enforce {
+    text-align: center;
+    padding: 0.6rem 0.75rem;
+    border: 1px dashed color-mix(in srgb, var(--fg-ember, #F58025) 45%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--fg-ember, #F58025) 6%, transparent);
+  }
+
+  .qc-enforce__title {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--fg-text-secondary, #C4D0DC);
+  }
+
+  .qc-enforce__badges {
+    margin-top: 0.4rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.35rem 0.5rem;
   }
 </style>

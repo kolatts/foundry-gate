@@ -6,6 +6,7 @@ sidebar:
 ---
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import SystemDiagram from '../../../components/SystemDiagram.astro';
 
 *This is the most detailed rung of the "how it works" ladder — start with [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/) for the plain-English version or the [system overview](/foundry-gate/architecture/overview/) for the middle level.*
 
@@ -97,6 +98,15 @@ approvals, deployment provisioning/resizing, dashboards, audit.
 **Data plane (APIM v2 gateway)** — everything on the request path: subscription-key
 auth, per-developer TPM caps and monthly budgets, token metric emission, backend
 pool routing with circuit breakers, retry-across-deployments on 429.
+
+<SystemDiagram />
+
+The solid path is the only thing a developer's request ever touches. The telemetry path
+(diagnostics → Log Analytics → reconciliation Function) can lag or fail without changing
+what the gateway enforces — it reports, it does not decide. The control plane's
+management-plane calls are different: they *select* what the gateway enforces (which tier
+product a subscription lives under), so a failed call means the intended change never
+lands — but the previously configured limits keep being enforced meanwhile.
 
 <CardGrid>
   <Card title="Quota tiers as products" icon="bars">
