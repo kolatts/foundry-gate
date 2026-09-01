@@ -10,6 +10,7 @@ using FoundryGate.Domain.Keys.Contracts;
 using FoundryGate.Domain.Quota.Contracts;
 using FoundryGate.Domain.Requests.Contracts;
 using FoundryGate.Domain.Users.Contracts;
+using Microsoft.AspNetCore.Components.WebAssembly.Authentication;
 
 namespace FoundryGate.Web.Services;
 
@@ -189,6 +190,15 @@ public sealed class FoundryGateApiClient(HttpClient httpClient) : IFoundryGateAp
 
             return await ReadFailureAsync<T>(response, ct);
         }
+        catch (AccessTokenNotAvailableException)
+        {
+            // MSAL's AuthorizationMessageHandler throws this when it can't silently
+            // acquire/refresh a token (expired session, blocked third-party cookies, ...).
+            // Deliberately NOT calling ex.Redirect() here: this is a data client, not a
+            // navigation surface — the caller decides what "sign in again" looks like from
+            // the Unauthorized status (see Pages/Home.razor).
+            return ApiCallResult<T>.Fail(ApiCallStatus.Unauthorized, FriendlyMessage(ApiCallStatus.Unauthorized, error: null));
+        }
         catch (HttpRequestException ex)
         {
             return ApiCallResult<T>.Fail(ApiCallStatus.Unavailable, UnavailableMessage, TransportError(ex));
@@ -219,6 +229,11 @@ public sealed class FoundryGateApiClient(HttpClient httpClient) : IFoundryGateAp
             return response.IsSuccessStatusCode
                 ? ApiCallResult<bool>.Ok(true)
                 : await ReadFailureAsync<bool>(response, ct);
+        }
+        catch (AccessTokenNotAvailableException)
+        {
+            // See the matching catch in SendAsync<T> — same reasoning, no ex.Redirect().
+            return ApiCallResult<bool>.Fail(ApiCallStatus.Unauthorized, FriendlyMessage(ApiCallStatus.Unauthorized, error: null));
         }
         catch (HttpRequestException ex)
         {

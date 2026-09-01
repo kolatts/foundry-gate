@@ -32,6 +32,14 @@
                         </MudText>
                     }
                 }
+                else if (_status == ApiCallStatus.Unauthorized)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Icon="@Icons.Material.Filled.LockClock">
+                        Your session has expired.
+                        <MudLink Href="authentication/login" Underline="Underline.Always">Sign in again</MudLink>
+                        to see your quota.
+                    </MudAlert>
+                }
                 else
                 {
                     <MudAlert Severity="Severity.Info" Dense="true" Icon="@Icons.Material.Filled.CloudOff">@_statusMessage</MudAlert>
@@ -58,6 +66,7 @@
     private UserProfileResponse? _profile;
     private bool _loading = true;
     private string _statusMessage = string.Empty;
+    private ApiCallStatus _status = ApiCallStatus.Success;
 
     protected override async Task OnInitializedAsync()
     {
@@ -80,6 +89,7 @@
         }
         else
         {
+            _status = result.Status;
             _statusMessage = result.Message ?? "Foundry Gate's API isn't available right now.";
         }
     }

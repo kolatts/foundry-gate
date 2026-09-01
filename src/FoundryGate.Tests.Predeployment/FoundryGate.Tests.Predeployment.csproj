@@ -20,6 +20,14 @@
     <ProjectReference Include="..\FoundryGate.Api\FoundryGate.Api.csproj" />
     <ProjectReference Include="..\FoundryGate.Data\FoundryGate.Data.csproj" />
     <ProjectReference Include="..\FoundryGate.Domain\FoundryGate.Domain.csproj" />
+    <ProjectReference Include="..\FoundryGate.Web\FoundryGate.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Only needed to construct AccessTokenNotAvailableException/NavigationManager test
+         doubles for FoundryGateApiClientTests (see PR #98 review) — FoundryGate.Web itself
+         already references these via the ProjectReference above. -->
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Authentication" />
   </ItemGroup>
 
 </Project>

@@ -22,6 +22,14 @@ public static class FoundryGateTheme
             PrimaryLighten = "#4DCFFF", // --fg-azure-neon (focus ring / accent)
             PrimaryDarken = "#0558A0", // --fg-azure-dim (disabled state)
 
+            // MudBlazor's Secondary color has no brand token of its own — pin it to
+            // --fg-azure-dim rather than leaving it at MudBlazor's default pink, which
+            // would leak an off-brand color into any component that defaults to
+            // Color.Secondary (e.g. MudText Color="Color.Secondary" — see PR #98 review;
+            // muted body text uses the "mud-text-secondary" CSS class instead, which reads
+            // TextSecondary, not this).
+            Secondary = "#0558A0", // --fg-azure-dim
+
             // Semantic (quota / spend / alerts use the ember scale; see QuotaGauge in a later epic)
             Warning = "#FFB347", // --fg-ember-soft — approaching limit
             Error = "#FF5400", // --fg-ember-hot — over limit / critical

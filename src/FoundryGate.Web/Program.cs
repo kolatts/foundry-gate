@@ -30,6 +30,19 @@ builder.Services.AddMudServices(config =>
 
 var apiBaseUrl = builder.Configuration["Api:BaseUrl"]
     ?? throw new InvalidOperationException("Configuration key 'Api:BaseUrl' is required (wwwroot/appsettings.json).");
+
+// HttpClient.BaseAddress resolves relative request URIs (e.g. "users/me", see
+// FoundryGateApiClient) per RFC 3986 §5: without a trailing slash, the last path segment
+// of BaseAddress is dropped instead of kept, so "https://host/api/v1" + "users/me"
+// silently resolves to "https://host/api/users/me" (the "v1" is gone), not
+// "https://host/api/v1/users/me". Normalize once here so every relative route in the
+// client resolves against the full configured path regardless of how the operator wrote
+// Api:BaseUrl in appsettings.json.
+if (!apiBaseUrl.EndsWith('/'))
+{
+    apiBaseUrl += "/";
+}
+
 var apiScopes = builder.Configuration.GetSection("Api:Scopes").Get<string[]>() ?? [];
 
 // Typed client over FoundryGate.Api (spec §4). AuthorizationMessageHandler (registered by

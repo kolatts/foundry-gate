@@ -14,7 +14,15 @@ public enum ApiCallStatus
     /// <summary>2xx with a body that deserialized successfully.</summary>
     Success,
 
-    /// <summary>401 — the bearer token was missing, expired, or rejected.</summary>
+    /// <summary>
+    /// 401 — the bearer token was missing, expired, or rejected by the API — or MSAL
+    /// itself couldn't silently acquire/refresh one (an
+    /// <see cref="Microsoft.AspNetCore.Components.WebAssembly.Authentication.AccessTokenNotAvailableException"/>
+    /// from <c>AuthorizationMessageHandler</c>: expired session, blocked third-party
+    /// cookies, ...). Either way the caller's session needs re-establishing; the client
+    /// deliberately does not navigate on this itself — see
+    /// <see cref="FoundryGateApiClient"/>'s catch clauses.
+    /// </summary>
     Unauthorized,
 
     /// <summary>403 — authenticated, but not authorized for this resource.</summary>
