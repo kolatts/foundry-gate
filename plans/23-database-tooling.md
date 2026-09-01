@@ -24,10 +24,14 @@ Table file names below also use each table's actual (plural) name —
 `AppDbContext`'s `DbSet` names and the file-name-equals-table-name convention the parity test
 depends on.
 
-The parity test's documented gaps (no data type/length/precision checking, no composite-FK
-support, no index-composition validation beyond the `UNIQUE` flag) and the `db compare` deferral
-above are tracked as follow-up work in
-[#100](https://github.com/kolatts/foundry-gate/issues/100) rather than left as inline TODOs, per
+The parity test's originally documented gaps (no data type/length/precision checking, no
+composite-FK support, no index-composition validation beyond the `UNIQUE` flag) were closed by
+[#100](https://github.com/kolatts/foundry-gate/issues/100): the test now builds the EF model with
+the SQL Server provider (design-time model, no connection opened) and compares store types incl.
+length/precision, `IDENTITY`, PK name/columns/clustering, FK columns/principal/`ON DELETE`
+(composite-capable), index `UNIQUE`/columns/order/direction, plus extra indexes, FKs, and orphaned
+`.sql` files. The `db compare` deferral is tracked separately in
+[#103](https://github.com/kolatts/foundry-gate/issues/103) rather than left as an inline TODO, per
 CLAUDE.md's "everything is a GitHub issue" rule.
 
 ## Overview
@@ -241,7 +245,14 @@ A separate `db-deploy.yml` workflow (reusable, `workflow_call`) downloads the da
 - [ ] `Foundry Gate db compare` — **not implemented** (see the Status update note above): DacFx
       schema-compare is Windows-only and there is no live-database-to-compare-from in the
       EnsureCreated-based pipeline this repo actually uses. The `SchemaParityTests` Predeployment
-      test is the substitute drift check, and it runs cross-platform in CI.
+      test is the substitute drift check, and it runs cross-platform in CI. Tracked as a
+      developer-convenience follow-up in #103.
+- [x] `SchemaParityTests` type-level parity (#100) — verified it bites, not just passes: injected
+      five deliberate drifts at once (`Users.DisplayName` shrunk `NVARCHAR (200)` → `(50)`, a stray
+      `IX_Users_Email` index, `IX_QuotaAllocations_*` columns reordered + one `DESC`, `IDENTITY`
+      dropped from `Groups.GroupId`, `ON DELETE CASCADE` removed from
+      `FK_QuotaAllocations_Users_UserId`) and the single aggregate assertion reported exactly five
+      bullets naming each; reverted, 82/82 green.
 - [x] `foundrygate ip setup` is a documented stub (issues #96 tracks the real implementation) that
       prints guidance and exits 1 rather than doing anything; the reusable
       `.github/workflows/_deploy-database.yml` (#79) calls it with `continue-on-error: true` and a
