@@ -1,4 +1,5 @@
 using Azure.Core;
+using Azure.Security.KeyVault.Keys;
 using Azure.Security.KeyVault.Keys.Cryptography;
 using FoundryGate.Api.Configuration;
 using FoundryGate.Domain.Common;
@@ -17,8 +18,9 @@ public static class KeyProtectorFactory
 {
     /// <summary>
     /// Rules: <see cref="KeyProtectionProviderType.KeyVault"/> needs
-    /// <see cref="GatewayOptions.KeyEncryptionKeyUri"/>; <see cref="KeyProtectionProviderType.DataProtection"/>
-    /// is permitted in <see cref="AppEnvironment.Types.local"/> only.
+    /// <see cref="GatewayOptions.KeyEncryptionKeyUri"/> (an https Key Vault key URI);
+    /// <see cref="KeyProtectionProviderType.DataProtection"/> is permitted in
+    /// <see cref="AppEnvironment.Types.local"/> only.
     /// </summary>
     /// <exception cref="ConfigurationValidationException">A rule above is violated.</exception>
     public static IKeyProtector Create(
@@ -26,26 +28,35 @@ public static class KeyProtectorFactory
         GatewayOptions gateway,
         AppEnvironment.Types environment,
         TokenCredential credential,
-        IDataProtectionProvider dataProtectionProvider)
+        IDataProtectionProvider dataProtectionProvider,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(keyProtection);
         ArgumentNullException.ThrowIfNull(gateway);
         ArgumentNullException.ThrowIfNull(credential);
         ArgumentNullException.ThrowIfNull(dataProtectionProvider);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         switch (keyProtection.Provider)
         {
             case KeyProtectionProviderType.KeyVault:
-                if (!Uri.TryCreate(gateway.KeyEncryptionKeyUri, UriKind.Absolute, out var keyUri))
+                if (!Uri.TryCreate(gateway.KeyEncryptionKeyUri, UriKind.Absolute, out var keyUri)
+                    || keyUri.Scheme != Uri.UriSchemeHttps
+                    || KeyVaultKeyProtector.KeyNameOf(keyUri) is null)
                 {
                     throw new ConfigurationValidationException(
-                        "KeyProtection:Provider is 'KeyVault' but Gateway:KeyEncryptionKeyUri is not set. " +
-                        "Set it to the versionless URI of the Key Vault key that wraps APIM subscription keys " +
+                        "KeyProtection:Provider is 'KeyVault' but Gateway:KeyEncryptionKeyUri is not a Key Vault key URI. " +
+                        "Set it to the versionless URI (https://{vault}/keys/{name}) of the Key Vault key that wraps APIM subscription keys " +
                         "(infra output 'keyEncryptionKeyUri' / env var Gateway__KeyEncryptionKeyUri), or use " +
                         "KeyProtection:Provider = 'DataProtection' in the local environment only.");
                 }
 
-                return new KeyVaultKeyProtector(keyUri, keyId => new CryptographyClient(keyId, credential));
+                var vaultUri = new Uri(keyUri.GetLeftPart(UriPartial.Authority));
+                return new KeyVaultKeyProtector(
+                    keyUri,
+                    new KeyClient(vaultUri, credential),
+                    keyId => new CryptographyClient(keyId, credential),
+                    timeProvider);
 
             case KeyProtectionProviderType.DataProtection:
                 if (environment != AppEnvironment.Types.local)

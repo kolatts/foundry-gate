@@ -25,6 +25,7 @@ public sealed class KeysController(IApimKeyService keys) : ApiControllerBase
     /// Decrypts and returns the caller's full key once (spec &#167;11: fetched directly, never stored in
     /// the browser). Audited as <c>key.revealed</c>. 404 when the caller has no key.
     /// </summary>
+    /// <remarks>Not yet rate-limited — a leaked bearer token can call this repeatedly; #136 adds a per-user limiter.</remarks>
     [HttpPost("me/reveal")]
     [ProducesResponseType<ApiKeyRevealResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

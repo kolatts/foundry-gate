@@ -183,6 +183,142 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
         Assert.Equal(string.Empty, developer.ApimSubscriptionId);
         Assert.Equal(string.Empty, developer.ApimSubscriptionKey);
         Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.TargetId == developer.UserId.ToString()).ToListAsync());
+        // The provisioning claim was written before APIM was called and must have rolled back with the transaction.
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Equal(string.Empty, saved.ApimSubscriptionId);
+        Assert.Null(Context.Database.CurrentTransaction);
+
+        // ...and the user is provisionable once APIM is healthy again.
+        _apim.ThrowOnCreate = null;
+        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Provision_throws_Conflict_when_a_concurrent_request_already_claimed_the_row_and_never_calls_APIM()
+    {
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Dev", "d@contoso.test");
+        // Another request (other scope) won the race: the database row now carries a claim while this
+        // request's tracked entity still says "no key".
+        _ = await Context.Users.Where(u => u.UserId == developer.UserId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(u => u.ApimSubscriptionId, "claimed-by-the-other-request"));
+        Assert.Equal(string.Empty, developer.ApimSubscriptionId);
+
+        await Assert.ThrowsAsync<ConflictException>(() => service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None));
+
+        Assert.Empty(_apim.Calls);
+        Assert.Null(Context.Database.CurrentTransaction);
+    }
+
+    [Fact]
+    public async Task Provision_joins_a_transaction_the_caller_already_opened_instead_of_starting_its_own()
+    {
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Dev", "d@contoso.test");
+
+        await using var transaction = await Context.Database.BeginTransactionAsync();
+        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        Assert.Same(transaction, Context.Database.CurrentTransaction); // still ours, not committed by the service
+        await transaction.RollbackAsync();
+
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Equal(string.Empty, saved.ApimSubscriptionId); // the orchestrator's rollback took the provision with it
+    }
+
+    [Fact]
+    public async Task Provision_replaces_an_orphan_that_is_not_active_instead_of_adopting_it()
+    {
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Dev", "d@contoso.test");
+        var name = ApimSubscriptionNames.ForUser(developer.UserId);
+        _ = _apim.Seed(name, GatewayTiers.Standard);
+        _apim.SetState(name, "suspended");
+
+        var reveal = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+
+        Assert.Contains($"Delete:{name}", _apim.Calls);
+        Assert.Contains($"CreateOrUpdate:{name}:standard", _apim.Calls);
+        Assert.DoesNotContain(_apim.Calls, call => call.StartsWith("Regenerate", StringComparison.Ordinal));
+        var subscription = await _apim.GetSubscriptionAsync(name, CancellationToken.None);
+        Assert.Equal("active", subscription!.State);
+        Assert.Equal(_apim.KeysOf(name).PrimaryKey, reveal.PlaintextKey);
+        var audit = await SingleAuditAsync(AuditActions.KeyProvisioned, developer.UserId);
+        Assert.Contains("\"reusedOrphan\":false", audit.Details, StringComparison.Ordinal);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("suspended", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Rotate_failure_after_APIM_regenerated_keeps_the_previous_ciphertext_logs_an_error_and_audits_rotation_failed()
+    {
+        var (service, admin) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Dev", "d@contoso.test");
+        var provisioned = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var envelopeBefore = developer.ApimSubscriptionKey;
+        _apim.ThrowOnListSecrets = new IOException("ARM timed out");
+
+        var exception = await Assert.ThrowsAsync<IOException>(() => service.RotateAsync(developer, CancellationToken.None));
+
+        Assert.Equal("ARM timed out", exception.Message);
+        // Row is self-consistent (previous values), even though APIM now holds different keys.
+        Assert.Equal(envelopeBefore, developer.ApimSubscriptionKey);
+        Assert.Equal(provisioned.PlaintextKey[^4..], developer.ApimSubscriptionKeyHint);
+        Assert.Equal(provisioned.IssuedDate, developer.ApimKeyIssuedDate);
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Equal(envelopeBefore, saved.ApimSubscriptionKey);
+        // Trail: no key.rotated, one key.rotation-failed naming the remedy, and an Error log.
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotated).ToListAsync());
+        var failed = await SingleAuditAsync(AuditActions.KeyRotationFailed, developer.UserId);
+        Assert.Equal(admin.UserId, failed.ActorUserId);
+        Assert.Contains("rotate again", failed.Details, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"error\":\"IOException\"", failed.Details, StringComparison.Ordinal);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("STALE", StringComparison.Ordinal) && entry.Contains("Rotate again", StringComparison.Ordinal));
+
+        // Remedy works: a second rotate stores a fresh, revealable key.
+        _apim.ThrowOnListSecrets = null;
+        var rotated = await service.RotateAsync(developer, CancellationToken.None);
+        Assert.Equal(rotated.PlaintextKey, (await service.RevealAsync(developer, CancellationToken.None)).PlaintextKey);
+    }
+
+    [Fact]
+    public async Task RevokeAsSystem_deletes_the_subscription_and_writes_a_system_audit_row_without_any_HTTP_caller()
+    {
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Dev", "d@contoso.test");
+        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var name = ApimSubscriptionNames.ForUser(developer.UserId);
+        var callerless = CreateCallerlessService();
+
+        // The caller-attributed variant cannot run here; the system variant can.
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => callerless.RevokeAsync(developer, CancellationToken.None));
+        Assert.True(_apim.Contains(name));
+
+        var revoked = await callerless.RevokeAsSystemAsync(developer, "entra-departure", CancellationToken.None);
+
+        Assert.True(revoked);
+        Assert.False(_apim.Contains(name));
+        Assert.Equal(string.Empty, developer.ApimSubscriptionId);
+        Assert.True(developer.IsActive);
+        var audit = await SingleAuditAsync(AuditActions.KeyRevoked, developer.UserId);
+        Assert.Null(audit.ActorUserId);
+        Assert.Contains("\"reason\":\"entra-departure\"", audit.Details, StringComparison.Ordinal);
+        Assert.Contains("\"existedInApim\":true", audit.Details, StringComparison.Ordinal);
+
+        Assert.False(await callerless.RevokeAsSystemAsync(developer, "entra-departure", CancellationToken.None)); // idempotent
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => callerless.RevokeAsSystemAsync(developer, " ", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Reveal_refuses_a_row_that_has_a_key_but_no_issued_date_rather_than_inventing_one()
+    {
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Dev", "d@contoso.test");
+        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        developer.ApimKeyIssuedDate = null;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.RevealAsync(developer, CancellationToken.None));
+
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRevealed).ToListAsync());
     }
 
     [Fact]
@@ -496,10 +632,20 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
             nameType: ClaimConstants.Name,
             roleType: ClaimConstants.Roles);
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(new DefaultHttpContext { User = new ClaimsPrincipal(identity) }), Context);
-        var audit = new AuditService(Context, new AuditWriter(Context, _timeProvider), accessor);
+        var writer = new AuditWriter(Context, _timeProvider);
+        var audit = new AuditService(Context, writer, accessor);
 
-        var service = new ApimKeyService(Context, _apim, _protector, audit, accessor, _timeProvider, _logs.CreateLogger<ApimKeyService>());
+        var service = new ApimKeyService(Context, _apim, _protector, audit, writer, accessor, _timeProvider, _logs.CreateLogger<ApimKeyService>());
         return (service, admin);
+    }
+
+    /// <summary>A service with no HTTP caller at all — what a sync job or a Functions host would build.</summary>
+    private ApimKeyService CreateCallerlessService()
+    {
+        var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(null), Context);
+        var writer = new AuditWriter(Context, _timeProvider);
+        var audit = new AuditService(Context, writer, accessor);
+        return new ApimKeyService(Context, _apim, _protector, audit, writer, accessor, _timeProvider, _logs.CreateLogger<ApimKeyService>());
     }
 
     private async Task<User> SeedUserAsync(string displayName, string email, bool isActive = true)

@@ -15,6 +15,10 @@ public sealed class UnconfiguredApimManagementClient : IApimManagementClient
         "(infra sets Gateway__* on the Container App) to enable APIM subscription-key operations.";
 
     /// <inheritdoc />
+    public string GetSubscriptionResourceId(string subscriptionName) =>
+        throw new InvalidOperationException(Message);
+
+    /// <inheritdoc />
     public Task<ApimSubscriptionWithKeys> CreateOrUpdateSubscriptionAsync(string subscriptionName, string displayName, string productId, CancellationToken cancellationToken) =>
         throw new InvalidOperationException(Message);
 

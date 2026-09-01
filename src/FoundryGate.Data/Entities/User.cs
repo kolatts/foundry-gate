@@ -14,9 +14,11 @@ public class User : ICreatedDate
     public int UserId { get; set; }
 
     /// <summary>
-    /// Stable id referenced by external systems that need to name resources after this user
-    /// without exposing the identity/mutable <see cref="UserId"/> (e.g. the APIM subscription
-    /// name minted for this developer).
+    /// Stable, non-sequential id for external systems that should not learn the identity-generated
+    /// <see cref="UserId"/> (CONVENTIONS.md <c>{Entity}Unique</c> rule). Not used for the APIM
+    /// subscription name — that is <c>foundrygate-{UserId}</c> (<c>Domain.Keys.ApimSubscriptionNames</c>),
+    /// because plan 21 names it so and the usage-reconciliation job needs the trivial inverse mapping;
+    /// the int is already exposed in every admin URL. Nothing names anything after this Guid yet.
     /// </summary>
     public Guid UserUnique { get; set; } = Guid.NewGuid();
 

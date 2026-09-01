@@ -47,6 +47,14 @@ public sealed class ArmApimManagementClient : IApimManagementClient
     }
 
     /// <inheritdoc />
+    public string GetSubscriptionResourceId(string subscriptionName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(subscriptionName);
+
+        return ApiManagementSubscriptionResource.CreateResourceIdentifier(_subscriptionId, _resourceGroup, _apimName, subscriptionName).ToString();
+    }
+
+    /// <inheritdoc />
     public async Task<ApimSubscriptionWithKeys> CreateOrUpdateSubscriptionAsync(string subscriptionName, string displayName, string productId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(subscriptionName);

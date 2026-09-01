@@ -12,11 +12,15 @@ public class KeyProtectorFactoryTests
 {
     private const string KeyUri = "https://kv-fg-dev-abc12.vault.azure.net/keys/fg-apim-key-encryption";
 
-    [Fact]
-    public void KeyVault_provider_without_a_key_uri_is_a_startup_configuration_error()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("http://kv-fg-dev-abc12.vault.azure.net/keys/fg-apim-key-encryption")]
+    [InlineData("https://kv-fg-dev-abc12.vault.azure.net/secrets/fg-apim-key-encryption")]
+    public void KeyVault_provider_without_a_key_uri_is_a_startup_configuration_error(string? keyUri)
     {
         var exception = Assert.Throws<ConfigurationValidationException>(() =>
-            Create(KeyProtectionProviderType.KeyVault, keyUri: null, AppEnvironment.Types.prod));
+            Create(KeyProtectionProviderType.KeyVault, keyUri, AppEnvironment.Types.prod));
 
         Assert.Contains("Gateway:KeyEncryptionKeyUri", exception.Message, StringComparison.Ordinal);
     }
@@ -54,5 +58,6 @@ public class KeyProtectorFactoryTests
             new GatewayOptions { KeyEncryptionKeyUri = keyUri },
             environment,
             new StaticTokenCredential(),
-            new EphemeralDataProtectionProvider());
+            new EphemeralDataProtectionProvider(),
+            TimeProvider.System);
 }

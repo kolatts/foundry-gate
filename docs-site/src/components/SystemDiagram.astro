@@ -18,7 +18,7 @@ const ariaLabel =
   'Azure Static Web Apps calls FoundryGate.Api on Azure Container Apps, which stores state in Azure SQL ' +
   'through EF Core; FoundryGate.Functions run the monthly reset and usage reconciliation, reading ' +
   'ApiManagementGatewayLlmLog from Log Analytics; Key Vault holds secrets. The API manages APIM ' +
-  'subscriptions through the Management API: create under a tier product, regenerate key, move tier, delete. ' +
+  'subscriptions through the Management API: create under a tier product, regenerate both keys, move tier, delete. ' +
   'Legend: solid azure arrows are the real-time enforcement path on the request; dashed grey arrows are telemetry ' +
   'and reconciliation, out of band; dashed amber arrows are control-plane calls for lifecycle and tiers.';
 ---
@@ -153,7 +153,7 @@ const ariaLabel =
     <div class="fgd-arrow fgd-arrow--app fgd-arrow--up">
       <span class="fgd-arrow__label">
         <strong>APIM Management API</strong> — create subscription under a tier product ·
-        <code>regeneratePrimaryKey</code> · move tier · delete
+        regenerate both keys · move tier · delete
       </span>
       <span class="fgd-arrow__line"></span>
       <span class="fgd-arrow__head"></span>

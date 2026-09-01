@@ -39,7 +39,11 @@ Files:
 - [x] `dotnet build FoundryGate.sln -c Release` passes with zero warnings
 - [x] Provisioning creates an APIM subscription under the tier product and returns the key value once (`ApimKeyServiceTests`, `KeysEndpointTests`)
 - [x] A second provision attempt while a key is active returns `409`; an unknown tier `400`; a deactivated user `409`
-- [x] An orphan subscription is reused (re-scoped, both keys regenerated) instead of erroring
+- [x] An orphan subscription is reused (re-scoped, both keys regenerated) instead of erroring; a non-`active` orphan is deleted and recreated
+- [x] Two concurrent provisions cannot both PUT: the row is claimed (`ApimSubscriptionId = '' → resource id`) in a transaction before APIM is called; the loser gets `409`, an APIM failure rolls the claim back, and an orchestrator-owned transaction is joined rather than nested
+- [x] A rotation that fails after APIM regenerated the keys restores the previous row values, logs an Error naming the remedy, and writes a `key.rotation-failed` audit row
+- [x] `RevokeAsSystemAsync` revokes with a system-attributed audit row and no HTTP caller (plan 21 Trigger B)
+- [x] Key Vault protector resolves the key's current version per wrap (5-minute cache) and refuses to unwrap with a key id outside the configured vault/key
 - [x] Rotation regenerates both keys, updates `ApimKeyIssuedDate`, and the old plaintext no longer matches
 - [x] Revocation deletes the subscription, clears every key field, leaves `IsActive = true`, and is idempotent (`204`)
 - [x] `GET /keys/me` never exposes more than the last four characters; reveal returns the full key and is audited

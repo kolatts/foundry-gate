@@ -35,6 +35,21 @@ public sealed class FakeApimManagementClient : IApimManagementClient
     /// <summary>When set, <see cref="CreateOrUpdateSubscriptionAsync"/> throws it instead of creating — simulates an ARM failure.</summary>
     public Exception? ThrowOnCreate { get; set; }
 
+    /// <summary>When set, <see cref="ListSecretsAsync"/> throws it — simulates ARM failing between "keys regenerated" and "new key read".</summary>
+    public Exception? ThrowOnListSecrets { get; set; }
+
+    /// <summary>Changes a subscription's state behind the key service's back (e.g. <c>"suspended"</c> for a hand-made orphan).</summary>
+    public void SetState(string subscriptionName, string state)
+    {
+        lock (_gate)
+        {
+            _subscriptions[subscriptionName].State = state;
+        }
+    }
+
+    /// <inheritdoc />
+    public string GetSubscriptionResourceId(string subscriptionName) => $"{ServiceId}/subscriptions/{subscriptionName}";
+
     /// <summary>Pre-creates a subscription (an "orphan" from the key service's point of view) and returns its current keys.</summary>
     public ApimSubscriptionKeys Seed(string subscriptionName, string productId, string displayName = "orphan")
     {
@@ -125,6 +140,11 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         lock (_gate)
         {
             _calls.Add($"ListSecrets:{subscriptionName}");
+            if (ThrowOnListSecrets is { } exception)
+            {
+                throw exception;
+            }
+
             var entry = Require(subscriptionName);
             return Task.FromResult(new ApimSubscriptionKeys(entry.PrimaryKey, entry.SecondaryKey));
         }
@@ -185,7 +205,7 @@ public sealed class FakeApimManagementClient : IApimManagementClient
             entry.DisplayName,
             $"{ServiceId}/products/{entry.ProductId}",
             entry.ProductId,
-            "active");
+            entry.State);
 
     /// <summary>APIM keys are 32 characters; 16 random bytes as lower-case hex has the same shape.</summary>
     private static string NewKey() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
@@ -199,5 +219,7 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         public string PrimaryKey { get; set; } = primaryKey;
 
         public string SecondaryKey { get; set; } = secondaryKey;
+
+        public string State { get; set; } = "active";
     }
 }

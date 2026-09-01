@@ -17,6 +17,13 @@ namespace FoundryGate.Api.Services.Keys;
 public interface IApimManagementClient
 {
     /// <summary>
+    /// The ARM resource id a subscription named <paramref name="subscriptionName"/> has (or would have)
+    /// on the configured APIM instance — deterministic, no call made. The key service writes it into
+    /// <c>User.ApimSubscriptionId</c> as the provisioning claim <em>before</em> the APIM PUT.
+    /// </summary>
+    string GetSubscriptionResourceId(string subscriptionName);
+
+    /// <summary>
     /// Creates (or, if a subscription with this name exists, re-PUTs) an <c>active</c> subscription
     /// scoped to <c>/products/{productId}</c> and returns it with both of its keys — the one call
     /// that returns key material without a separate secrets read.

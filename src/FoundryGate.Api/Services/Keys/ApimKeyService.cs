@@ -3,11 +3,13 @@ using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Data;
+using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Keys;
 using FoundryGate.Domain.Keys.Contracts;
+using Microsoft.EntityFrameworkCore;
 
 namespace FoundryGate.Api.Services.Keys;
 
@@ -17,17 +19,19 @@ namespace FoundryGate.Api.Services.Keys;
 /// key protector it composes are singletons.
 /// </summary>
 /// <remarks>
-/// Failure ordering, per plan 21's compensation table: APIM is called <em>before</em> the row is
-/// touched, so an APIM failure leaves the database untouched (the caller sees the ARM error), and a
-/// database failure after APIM succeeded leaves an orphan subscription that the next
-/// <see cref="ProvisionAsync"/> finds by name and reuses (regenerating its keys). Nothing here is
-/// retried; ARM's own retry policy covers transient faults.
+/// Failure ordering, per plan 21's compensation table: the row is claimed (provision) or the actor
+/// resolved first, APIM is called next, and the row is written last — so an APIM failure leaves the
+/// database as it was (the provision claim rolls back with its transaction), and a database failure
+/// after APIM succeeded leaves an orphan subscription that the next <see cref="ProvisionAsync"/>
+/// finds by name and adopts (regenerating its keys). Nothing here is retried; ARM's own retry policy
+/// covers transient faults.
 /// </remarks>
 public sealed class ApimKeyService(
     AppDbContext dbContext,
     IApimManagementClient apim,
     IKeyProtector keyProtector,
     IAuditService audit,
+    IAuditWriter auditWriter,
     ICurrentUserAccessor currentUser,
     TimeProvider timeProvider,
     ILogger<ApimKeyService> logger) : IApimKeyService
@@ -37,6 +41,11 @@ public sealed class ApimKeyService(
 
     /// <summary>APIM caps a subscription's display name at 100 characters.</summary>
     private const int ApimDisplayNameMaxLength = 100;
+
+    /// <summary>The only APIM subscription state a developer key is usable in.</summary>
+    private const string ActiveState = "active";
+
+    private const string RotationFailureRemedy = "Rotate again (POST /keys/{userId}/rotate) or revoke and re-provision (DELETE /keys/{userId}, then POST /keys/{userId}/provision).";
 
     /// <inheritdoc />
     public async Task<ApiKeyRevealResponse> ProvisionAsync(User user, string tierProductId, CancellationToken cancellationToken)
@@ -51,16 +60,44 @@ public sealed class ApimKeyService(
 
         if (HasKey(user))
         {
-            throw new ConflictException(
-                $"User {user.UserId} already has an APIM key. Rotate it (POST /keys/{user.UserId}/rotate) or revoke it (DELETE /keys/{user.UserId}) before provisioning a new one.");
+            throw AlreadyHasKey(user);
         }
 
         await EnsureActorAsync(cancellationToken);
         var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
+        var resourceId = apim.GetSubscriptionResourceId(subscriptionName);
+
+        // Claim the row before touching APIM. Inside a transaction we own — unless the caller (plan 21's
+        // orchestrator) already opened one, in which case the claim and the save simply join it — so an
+        // APIM failure below rolls the claim back and never leaves a half-provisioned row. On SQL Server
+        // the claimed row stays locked until commit, so a concurrent provisioner blocks, then sees 0 rows.
+        await using var transaction = dbContext.Database.CurrentTransaction is null
+            ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
+        var claimed = await dbContext.Users
+            .Where(u => u.UserId == user.UserId && u.ApimSubscriptionId == string.Empty)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(u => u.ApimSubscriptionId, resourceId), cancellationToken);
+        if (claimed == 0)
+        {
+            throw AlreadyHasKey(user);
+        }
 
         // Orphan detection (plan 21 / #66): a previous provision may have created the subscription and
-        // then failed to save. Reuse it rather than erroring — but never trust its existing keys.
+        // then failed to save. Reuse it rather than erroring — but never trust its existing keys, and
+        // never adopt one that is not active (its regenerated key would still 401 at the gateway).
         var existing = await apim.GetSubscriptionAsync(subscriptionName, cancellationToken);
+        if (existing is not null && !string.Equals(existing.State, ActiveState, StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogWarning(
+                "Orphan APIM subscription {SubscriptionName} for user {UserId} is in state '{State}', not active; deleting it and creating a fresh one.",
+                subscriptionName,
+                user.UserId,
+                existing.State);
+            _ = await apim.DeleteSubscriptionAsync(subscriptionName, cancellationToken);
+            existing = null;
+        }
+
         ApimSubscription subscription;
         ApimSubscriptionKeys keys;
         var reusedOrphan = existing is not null;
@@ -95,6 +132,11 @@ public sealed class ApimKeyService(
             cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
 
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
+
         logger.LogInformation(
             "Provisioned APIM subscription {SubscriptionName} for user {UserId} under product {ProductId} (orphan reused: {ReusedOrphan}).",
             subscriptionName,
@@ -113,7 +155,6 @@ public sealed class ApimKeyService(
         await EnsureActorAsync(cancellationToken);
 
         var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
-        ApimSubscriptionKeys keys;
 
         try
         {
@@ -121,23 +162,39 @@ public sealed class ApimKeyService(
             // live credential whose lifetime exceeds every primary the developer has ever held.
             await apim.RegeneratePrimaryKeyAsync(subscriptionName, cancellationToken);
             await apim.RegenerateSecondaryKeyAsync(subscriptionName, cancellationToken);
-            keys = await apim.ListSecretsAsync(subscriptionName, cancellationToken);
         }
         catch (ApimSubscriptionNotFoundException exception)
         {
             throw SubscriptionMissing(user, exception);
         }
 
-        var issuedDate = timeProvider.GetUtcNow();
-        await StoreKeyAsync(user, user.ApimSubscriptionId, keys.PrimaryKey, issuedDate, cancellationToken);
+        // From here on APIM holds new keys; anything that stops us storing the new primary leaves the
+        // row's ciphertext stale. Keep the previous values so the failure path can restore them and
+        // leave a trail instead of a silently unrevealable key.
+        var previous = (user.ApimSubscriptionKey, user.ApimSubscriptionKeyHint, user.ApimKeyIssuedDate);
+        AuditLog? rotatedRow = null;
+        DateTimeOffset issuedDate;
+        ApimSubscriptionKeys keys;
 
-        await audit.LogAsync(
-            AuditActions.KeyRotated,
-            AuditTargetTypes.ApiKey,
-            TargetId(user),
-            new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, keysRegenerated = new[] { "primary", "secondary" } },
-            cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            keys = await apim.ListSecretsAsync(subscriptionName, cancellationToken);
+            issuedDate = timeProvider.GetUtcNow();
+            await StoreKeyAsync(user, user.ApimSubscriptionId, keys.PrimaryKey, issuedDate, cancellationToken);
+
+            rotatedRow = await audit.LogAsync(
+                AuditActions.KeyRotated,
+                AuditTargetTypes.ApiKey,
+                TargetId(user),
+                new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, keysRegenerated = new[] { "primary", "secondary" } },
+                cancellationToken);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await RecordRotationFailureAsync(user, subscriptionName, previous, rotatedRow, exception, cancellationToken);
+            throw;
+        }
 
         logger.LogInformation("Rotated APIM subscription {SubscriptionName} for user {UserId} (primary and secondary regenerated).", subscriptionName, user.UserId);
 
@@ -155,27 +212,28 @@ public sealed class ApimKeyService(
         }
 
         await EnsureActorAsync(cancellationToken);
-        var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
-        var apimSubscriptionId = user.ApimSubscriptionId;
 
-        var existedInApim = await apim.DeleteSubscriptionAsync(subscriptionName, cancellationToken);
-
-        user.ApimSubscriptionId = string.Empty;
-        user.ApimSubscriptionKey = string.Empty;
-        user.ApimSubscriptionKeyHint = string.Empty;
-        user.ApimKeyIssuedDate = null;
-
-        await audit.LogAsync(
-            AuditActions.KeyRevoked,
-            AuditTargetTypes.ApiKey,
-            TargetId(user),
-            new { apimSubscriptionId, subscriptionName, existedInApim },
+        return await RevokeCoreAsync(
+            user,
+            details => audit.LogAsync(AuditActions.KeyRevoked, AuditTargetTypes.ApiKey, TargetId(user), new { details.apimSubscriptionId, details.subscriptionName, details.existedInApim }, cancellationToken),
             cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
+    }
 
-        logger.LogInformation("Revoked APIM subscription {SubscriptionName} for user {UserId} (existed in APIM: {ExistedInApim}); user remains {IsActive}.", subscriptionName, user.UserId, existedInApim, user.IsActive ? "active" : "inactive");
+    /// <inheritdoc />
+    public async Task<bool> RevokeAsSystemAsync(User user, string reason, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
 
-        return true;
+        if (!HasKey(user))
+        {
+            return false;
+        }
+
+        return await RevokeCoreAsync(
+            user,
+            details => Task.FromResult(auditWriter.AddSystem(AuditActions.KeyRevoked, AuditTargetTypes.ApiKey, TargetId(user), new { details.apimSubscriptionId, details.subscriptionName, details.existedInApim, reason })),
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -232,6 +290,11 @@ public sealed class ApimKeyService(
         RequireKey(user);
         await EnsureActorAsync(cancellationToken);
 
+        // HasKey ⇒ ApimKeyIssuedDate set is an invariant this service writes; a violation is corrupt
+        // data to surface, not a date to make up.
+        var issuedDate = user.ApimKeyIssuedDate
+            ?? throw new InvalidOperationException($"User {user.UserId} has an APIM key but no ApimKeyIssuedDate; the row is inconsistent.");
+
         var plaintext = await keyProtector.UnprotectAsync(user.ApimSubscriptionKey, cancellationToken);
 
         await audit.LogAsync(
@@ -244,7 +307,7 @@ public sealed class ApimKeyService(
 
         logger.LogInformation("Revealed APIM key for user {UserId}.", user.UserId);
 
-        return Reveal(user, plaintext, user.ApimKeyIssuedDate ?? timeProvider.GetUtcNow());
+        return Reveal(user, plaintext, issuedDate);
     }
 
     /// <inheritdoc />
@@ -279,6 +342,81 @@ public sealed class ApimKeyService(
     /// <inheritdoc />
     public async Task<bool> RevokeForUserAsync(int userId, CancellationToken cancellationToken) =>
         await RevokeAsync(await FindUserAsync(userId, cancellationToken), cancellationToken);
+
+    /// <summary>The shared revoke body; <paramref name="addAudit"/> decides who the row is attributed to.</summary>
+    private async Task<bool> RevokeCoreAsync(
+        User user,
+        Func<(string apimSubscriptionId, string subscriptionName, bool existedInApim), Task<AuditLog>> addAudit,
+        CancellationToken cancellationToken)
+    {
+        var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
+        var apimSubscriptionId = user.ApimSubscriptionId;
+
+        var existedInApim = await apim.DeleteSubscriptionAsync(subscriptionName, cancellationToken);
+
+        user.ApimSubscriptionId = string.Empty;
+        user.ApimSubscriptionKey = string.Empty;
+        user.ApimSubscriptionKeyHint = string.Empty;
+        user.ApimKeyIssuedDate = null;
+
+        _ = await addAudit((apimSubscriptionId, subscriptionName, existedInApim));
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Revoked APIM subscription {SubscriptionName} for user {UserId} (existed in APIM: {ExistedInApim}); user remains {ActiveState}.",
+            subscriptionName,
+            user.UserId,
+            existedInApim,
+            user.IsActive ? "active" : "inactive");
+
+        return true;
+    }
+
+    /// <summary>
+    /// APIM regenerated the keys but the new primary was not stored. Restore the previous (stale)
+    /// values so the row is at least self-consistent, drop the unsaved <c>key.rotated</c> row, log at
+    /// Error with the remedy, and try to leave a <c>key.rotation-failed</c> audit row (best effort — the
+    /// database itself may be what failed).
+    /// </summary>
+    private async Task RecordRotationFailureAsync(
+        User user,
+        string subscriptionName,
+        (string Key, string Hint, DateTimeOffset? IssuedDate) previous,
+        AuditLog? rotatedRow,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        user.ApimSubscriptionKey = previous.Key;
+        user.ApimSubscriptionKeyHint = previous.Hint;
+        user.ApimKeyIssuedDate = previous.IssuedDate;
+
+        if (rotatedRow is not null)
+        {
+            dbContext.Entry(rotatedRow).State = EntityState.Detached;
+        }
+
+        logger.LogError(
+            exception,
+            "APIM regenerated the keys of subscription {SubscriptionName} but the new key could not be stored; the ciphertext on user {UserId} is now STALE and reveal will return a dead key. {Remedy}",
+            subscriptionName,
+            user.UserId,
+            RotationFailureRemedy);
+
+        try
+        {
+            await audit.LogAsync(
+                AuditActions.KeyRotationFailed,
+                AuditTargetTypes.ApiKey,
+                TargetId(user),
+                new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, error = exception.GetType().Name, remedy = RotationFailureRemedy },
+                cancellationToken);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception auditException) when (auditException is not OperationCanceledException)
+        {
+            logger.LogError(auditException, "Could not record the key.rotation-failed audit row for user {UserId}; the log line above is the only trail.", user.UserId);
+        }
+    }
 
     /// <summary>
     /// Resolves the audit actor <em>before</em> any APIM side effect. <c>IAuditService.LogAsync</c> would
@@ -329,6 +467,9 @@ public sealed class ApimKeyService(
             throw new KeyNotFoundException($"User {user.UserId} has no APIM key. An administrator can provision one with POST /keys/{user.UserId}/provision.");
         }
     }
+
+    private static ConflictException AlreadyHasKey(User user) =>
+        new($"User {user.UserId} already has an APIM key (or one is being provisioned right now). Rotate it (POST /keys/{user.UserId}/rotate) or revoke it (DELETE /keys/{user.UserId}) before provisioning a new one.");
 
     private static ConflictException SubscriptionMissing(User user, ApimSubscriptionNotFoundException inner) =>
         new(

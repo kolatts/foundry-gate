@@ -28,7 +28,8 @@ public static class SecurityServiceCollectionExtensions
                 settings.Gateway,
                 serviceProvider.GetRequiredService<AppEnvironment.Types>(),
                 serviceProvider.GetRequiredService<TokenCredential>(),
-                serviceProvider.GetRequiredService<IDataProtectionProvider>());
+                serviceProvider.GetRequiredService<IDataProtectionProvider>(),
+                serviceProvider.GetRequiredService<TimeProvider>());
         });
         services.AddResolveOnStartup<IKeyProtector>();
 

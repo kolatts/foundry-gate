@@ -132,9 +132,9 @@ public class KeyProtectionOptions
     /// Defaults to <see cref="KeyProtectionProviderType.KeyVault"/> so a cloud environment that
     /// forgets the section fails closed (missing key URI → startup error) rather than silently
     /// falling back to a machine-local key ring; <c>appsettings.local.json</c> opts into
-    /// <see cref="KeyProtectionProviderType.DataProtection"/>.
+    /// <see cref="KeyProtectionProviderType.DataProtection"/>. (No <c>[Required]</c>: it is a no-op
+    /// on a non-nullable enum; the binder rejects unknown names and the default is the safe one.)
     /// </summary>
-    [Required]
     public KeyProtectionProviderType Provider { get; set; } = KeyProtectionProviderType.KeyVault;
 }
 
