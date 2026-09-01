@@ -87,7 +87,7 @@ Admins can link a FoundryGate group to an Entra group ID. Running `POST /groups/
 />
 
 <Aside type="caution">
-**Departures are hard**: when a developer leaves the Entra group, their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional. Quota exhaustion only suspends; Entra departure permanently revokes.
+**Departures are hard**: when a developer leaves the Entra group, their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional. Quota exhaustion never touches the subscription at all — it's a real-time `403` at the gateway that clears on reset or approval; Entra departure permanently revokes.
 </Aside>
 
 ### Bulk user sync

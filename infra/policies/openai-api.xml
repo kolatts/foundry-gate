@@ -2,15 +2,22 @@
   <inbound>
     <base />
     <!-- The client's api-key was consumed by APIM as the subscription key; delete it
-         and any Authorization header so only the backend credential reaches Foundry. -->
+         and any other auth headers so only the gateway's identity reaches Foundry. -->
     <set-header name="api-key" exists-action="delete" />
+    <set-header name="x-api-key" exists-action="delete" />
     <set-header name="Authorization" exists-action="delete" />
+    <!-- Backend auth: APIM's system-assigned managed identity (Cognitive Services User
+         on the Foundry account). No account keys anywhere in config or ARM history. -->
+    <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
+    <!-- Same enforcement shape as the Anthropic policy; when editing either file,
+         mirror the change (a shared policy fragment lands with the #86 alias work). -->
     <llm-token-limit counter-key="@(context.Subscription.Id)"
                      tokens-per-minute="__DEVELOPER_TPM__"
                      estimate-prompt-tokens="false"
                      remaining-tokens-header-name="x-fg-remaining-tpm"
                      tokens-consumed-header-name="x-fg-tokens-consumed"
-                     retry-after-header-name="Retry-After" />
+                     retry-after-header-name="Retry-After"
+                     __QUOTA_ATTRS__ />
     <llm-emit-token-metric namespace="FoundryGate">
       <dimension name="Subscription ID" />
       <dimension name="API ID" />
@@ -18,10 +25,10 @@
     <set-backend-service backend-id="__OPENAI_BACKEND_ID__" />
   </inbound>
   <backend>
-    <retry condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode == 503))"
-           count="2" interval="1" first-fast-retry="true">
-      <forward-request buffer-request-body="true" />
-    </retry>
+    <!-- No retry here: this is a single backend with no pool — retrying a 429 would
+         only hammer an already-throttled deployment. buffer-response=false keeps SSE
+         streaming unbuffered. -->
+    <forward-request buffer-response="false" />
   </backend>
   <outbound>
     <base />

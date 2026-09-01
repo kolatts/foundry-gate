@@ -668,7 +668,11 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     .aurora-nebula {
       position: absolute;
       inset: 0;
-      background: url('/foundry-gate/nebula.webp') center / cover no-repeat;
+      background-position: center;
+      background-size: cover;
+      background-repeat: no-repeat;
+      /* background-image set inline on the element via ${base} so the page stays
+         relocatable — the image is the one asset CSS can't reach base for. */
       opacity: 0.32;
       mix-blend-mode: screen;
     }
@@ -792,7 +796,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 
 <!-- ─── Ambient background ───────────────────────────────── -->
 <div class="aurora" aria-hidden="true">
-  <div class="aurora-nebula"></div>
+  <div class="aurora-nebula" style={`background-image:url('${base}nebula.webp')`}></div>
   <div class="aurora-orb aurora-1"></div>
   <div class="aurora-orb aurora-2"></div>
   <div class="aurora-orb aurora-3"></div>

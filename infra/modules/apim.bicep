@@ -52,7 +52,10 @@ resource appInsightsDiagnostic 'Microsoft.ApiManagement/service/diagnostics@2024
   name: 'applicationinsights'
   properties: {
     loggerId: appInsightsLogger.id
-    sampling: { samplingType: 'fixed', percentage: 100 }
+    // 10% + allErrors: App Insights is the debugging lens; billing-grade accounting
+    // lives in the 100% GatewayLlmLogs pipeline below. 100% here would double-ingest
+    // every agent request for no additional truth.
+    sampling: { samplingType: 'fixed', percentage: 10 }
     alwaysLog: 'allErrors'
     metrics: true // required for llm-emit-token-metric to land in customMetrics
   }

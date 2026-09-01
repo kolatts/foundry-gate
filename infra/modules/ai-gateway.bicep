@@ -10,20 +10,22 @@ param apimName string
 param foundryAccounts array // [{ name, endpoint }]
 param defaultDeveloperTpm int
 param defaultDeveloperMonthlyTokenQuota int
-#disable-next-line no-unused-params
-param appInsightsLoggerId string // reserved: API-level diagnostics wiring
+
+// Monthly quota attributes are injected only when a quota is configured; token-quota
+// accepts literals only (expressions rejected — validated live 2026-09-01), so
+// per-tier values arrive as separate product policies, not per-user expressions.
+var quotaAttrs = defaultDeveloperMonthlyTokenQuota > 0
+  ? 'token-quota="${defaultDeveloperMonthlyTokenQuota}" token-quota-period="Monthly" remaining-quota-tokens-header-name="x-fg-remaining-quota"'
+  : ''
 
 resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' existing = {
   name: apimName
 }
 
-resource accounts 'Microsoft.CognitiveServices/accounts@2026-07-01' existing = [
-  for fa in foundryAccounts: {
-    name: fa.name
-  }
-]
-
 // ---- Backends: one Anthropic-path backend per Foundry account ------------------
+// Auth to Foundry uses APIM's managed identity (authentication-managed-identity in
+// the policies) — backends carry no credentials, so no account key ever lands in
+// ARM deployment history or the backend objects.
 resource anthropicBackends 'Microsoft.ApiManagement/service/backends@2024-06-01-preview' = [
   for (fa, i) in foundryAccounts: {
     parent: apim
@@ -31,11 +33,6 @@ resource anthropicBackends 'Microsoft.ApiManagement/service/backends@2024-06-01-
     properties: {
       protocol: 'http'
       url: '${fa.endpoint}anthropic'
-      credentials: {
-        header: {
-          'x-api-key': [accounts[i].listKeys().key1]
-        }
-      }
       circuitBreaker: {
         rules: [
           {
@@ -83,11 +80,6 @@ resource openaiBackend 'Microsoft.ApiManagement/service/backends@2024-06-01-prev
   properties: {
     protocol: 'http'
     url: '${foundryAccounts[0].endpoint}openai/v1'
-    credentials: {
-      header: {
-        'api-key': [accounts[0].listKeys().key1]
-      }
-    }
   }
 }
 
@@ -137,15 +129,18 @@ resource anthropicPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-06-
     format: 'rawxml'
     value: replace(
       replace(
-        loadTextContent('../policies/anthropic-api.xml'),
-        '__DEVELOPER_TPM__',
-        string(defaultDeveloperTpm)
+        replace(
+          loadTextContent('../policies/anthropic-api.xml'),
+          '__DEVELOPER_TPM__',
+          string(defaultDeveloperTpm)
+        ),
+        '__QUOTA_ATTRS__',
+        quotaAttrs
       ),
-      '__MONTHLY_TOKEN_QUOTA__',
-      string(defaultDeveloperMonthlyTokenQuota)
+      '__ANTHROPIC_POOL_ID__',
+      anthropicPool.name
     )
   }
-  dependsOn: [anthropicPool]
 }
 
 // ---- OpenAI v1 API (Codex CLI and OpenAI-compatible clients) -------------------
@@ -197,8 +192,8 @@ resource openaiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-06-01-
           '__DEVELOPER_TPM__',
           string(defaultDeveloperTpm)
         ),
-        '__MONTHLY_TOKEN_QUOTA__',
-        string(defaultDeveloperMonthlyTokenQuota)
+        '__QUOTA_ATTRS__',
+        quotaAttrs
       ),
       '__OPENAI_BACKEND_ID__',
       openaiBackend.name

@@ -24,6 +24,11 @@ param publisherName string = 'FoundryGate'
 @description('Regions to place Foundry accounts in. Two+ regions multiply TPM/RPM headroom via the APIM backend pool.')
 param foundryRegions array = ['eastus2', 'swedencentral']
 
+// NOTE on the model-placement contract: these params cover DAY-0 provisioning only
+// ("everywhere" or "primary region"). Ongoing model lifecycle — adding models,
+// per-model region subsets, capacity changes — is deliberately the control plane's
+// job (#60/#64): Anthropic deployments are create-once under ARM (see
+// modules/foundry.bicep), so ARM re-runs must not manage them.
 @description('Model deployments created in EVERY Foundry account (pooled models). format matches Microsoft.CognitiveServices deployment model.format.')
 param pooledModelDeployments array = [
   {
@@ -67,6 +72,21 @@ param createModelDeployments bool = true
 // per-subscription per-model, so extra subscriptions — not extra same-subscription
 // deployments — are what multiply Claude headroom). Tags make cross-subscription cost
 // and inventory queries uniform: filter on workload + environment + fg-role.
+// Short region names for resource naming; unknown regions fall back to the full name.
+var regionShortNames = {
+  eastus: 'eus'
+  eastus2: 'eus2'
+  westus: 'wus'
+  westus2: 'wus2'
+  westus3: 'wus3'
+  swedencentral: 'swc'
+  westeurope: 'weu'
+  northeurope: 'neu'
+  uksouth: 'uks'
+  japaneast: 'jpe'
+  australiaeast: 'aue'
+}
+
 var standardTags = {
   workload: 'foundrygate'
   environment: environmentName
@@ -98,7 +118,7 @@ module foundry 'modules/foundry.bicep' = [
     name: 'foundrygate-foundry-${region}'
     scope: rg
     params: {
-      accountName: 'fg${environmentName}-${nameSuffix}-${region == 'eastus2' ? 'eus2' : region == 'swedencentral' ? 'swc' : region}'
+      accountName: 'fg${environmentName}-${nameSuffix}-${regionShortNames[?region] ?? region}'
       location: region
       modelDeployments: i == 0 ? concat(pooledModelDeployments, primaryOnlyModelDeployments) : pooledModelDeployments
       anthropicProviderData: anthropicProviderData
@@ -126,6 +146,18 @@ module apim 'modules/apim.bicep' = {
   }
 }
 
+// Gateway MI -> Foundry data-plane access (replaces account keys entirely).
+module foundryRbac 'modules/foundry-rbac.bicep' = [
+  for (region, i) in foundryRegions: {
+    name: 'foundrygate-rbac-${region}'
+    scope: rg
+    params: {
+      accountName: foundry[i].outputs.accountName
+      apimPrincipalId: apim.outputs.principalId
+    }
+  }
+]
+
 module gateway 'modules/ai-gateway.bicep' = {
   name: 'foundrygate-ai-gateway'
   scope: rg
@@ -139,10 +171,19 @@ module gateway 'modules/ai-gateway.bicep' = {
     ]
     defaultDeveloperTpm: defaultDeveloperTpm
     defaultDeveloperMonthlyTokenQuota: defaultDeveloperMonthlyTokenQuota
-    appInsightsLoggerId: apim.outputs.appInsightsLoggerId
   }
+  dependsOn: [foundryRbac]
 }
 
+// Everything a control plane needs to attach: gateway addresses, the product that
+// developer subscriptions scope to, the workspace holding billing-grade token logs,
+// and the identities/names for further role assignments.
 output apimGatewayUrl string = apim.outputs.gatewayUrl
 output apimName string = apim.outputs.apimName
+output apimPrincipalId string = apim.outputs.principalId
+output anthropicApiUrl string = gateway.outputs.anthropicApiUrl
+output openaiApiUrl string = gateway.outputs.openaiApiUrl
+output productId string = gateway.outputs.productId
+output logAnalyticsWorkspaceId string = monitoring.outputs.workspaceId
+output resourceGroupName string = rg.name
 output foundryAccountNames array = [for (region, i) in foundryRegions: foundry[i].outputs.accountName]

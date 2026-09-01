@@ -8,7 +8,9 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   tags: tags
   properties: {
     sku: { name: 'PerGB2018' }
-    retentionInDays: 30
+    // Two full calendar months: reconciliation of a monthly quota period must be able
+    // to run late without having lost the start of the period.
+    retentionInDays: 62
   }
 }
 

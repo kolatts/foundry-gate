@@ -2,29 +2,37 @@
   <inbound>
     <base />
     <!-- The client's x-api-key was consumed by APIM as the subscription key; delete it
-         and any Authorization header so only the backend credential reaches Foundry. -->
+         and any other auth headers so only the gateway's identity reaches Foundry. -->
     <set-header name="x-api-key" exists-action="delete" />
     <set-header name="api-key" exists-action="delete" />
     <set-header name="Authorization" exists-action="delete" />
-    <!-- Real-time per-developer enforcement, keyed on the APIM subscription. -->
+    <!-- Backend auth: APIM's system-assigned managed identity (Cognitive Services User
+         on each Foundry account). No account keys anywhere in config or ARM history. -->
+    <authentication-managed-identity resource="https://cognitiveservices.azure.com" />
+    <!-- Real-time per-developer enforcement, keyed on the APIM subscription.
+         __QUOTA_ATTRS__ is replaced by Bicep with token-quota attributes (monthly
+         budget → 403) when a quota is configured, or with nothing when disabled. -->
     <llm-token-limit counter-key="@(context.Subscription.Id)"
                      tokens-per-minute="__DEVELOPER_TPM__"
                      estimate-prompt-tokens="false"
                      remaining-tokens-header-name="x-fg-remaining-tpm"
                      tokens-consumed-header-name="x-fg-tokens-consumed"
-                     retry-after-header-name="Retry-After" />
+                     retry-after-header-name="Retry-After"
+                     __QUOTA_ATTRS__ />
     <llm-emit-token-metric namespace="FoundryGate">
       <dimension name="Subscription ID" />
       <dimension name="API ID" />
     </llm-emit-token-metric>
-    <set-backend-service backend-id="foundry-anthropic-pool" />
+    <set-backend-service backend-id="__ANTHROPIC_POOL_ID__" />
   </inbound>
   <backend>
     <!-- Retries re-enter the pool; a circuit-broken (429-saturated) backend is skipped,
-         so the retry lands on the healthy region. -->
+         so the retry lands on the healthy region. buffer-request-body is required to
+         resend the body and is a real memory input to APIM capacity planning (agent
+         harness requests run 50-200KB). buffer-response=false keeps SSE streaming. -->
     <retry condition="@(context.Response != null &amp;&amp; (context.Response.StatusCode == 429 || context.Response.StatusCode == 503))"
            count="2" interval="1" first-fast-retry="true">
-      <forward-request buffer-request-body="true" />
+      <forward-request buffer-request-body="true" buffer-response="false" />
     </retry>
   </backend>
   <outbound>

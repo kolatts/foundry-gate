@@ -12,6 +12,9 @@ param createModelDeployments bool = true
 
 param tags object = {}
 
+@description('Disable account-key auth so the ONLY data-plane path is Entra ID (the gateway managed identity). Keys would let anyone bypass every per-developer meter.')
+param disableLocalAuth bool = true
+
 resource account 'Microsoft.CognitiveServices/accounts@2026-07-01' = {
   name: accountName
   location: location
@@ -22,6 +25,7 @@ resource account 'Microsoft.CognitiveServices/accounts@2026-07-01' = {
   properties: {
     customSubDomainName: accountName
     publicNetworkAccess: 'Enabled'
+    disableLocalAuth: disableLocalAuth
   }
 }
 

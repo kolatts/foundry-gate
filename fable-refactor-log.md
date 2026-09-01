@@ -61,7 +61,7 @@ is zero-risk.
 
 ## Empirical findings (live Azure, Imagile Paid, 2026-09-01)
 
-- **E-001:** Subscription `3d0b1b83-8540-44c5-97af-fa338056f73a` (tenant `67fdff67`),
+- **E-001:** Subscription `3d0b1b83-<redacted>` (tenant `67fdff67`),
   RG `imagile-foundry` holds an existing `AIServices` account `imagile-foundry` (S0,
   eastus2) with one deployment: `gpt-4.1-mini` @ Standard capacity 100 (100K TPM /
   100 RPM... actually 100 requests/min per its rateLimits).
