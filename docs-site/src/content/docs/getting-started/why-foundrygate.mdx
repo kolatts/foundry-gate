@@ -80,13 +80,13 @@ FoundryGate sits in front of your existing Azure AI Foundry deployment. It does 
   </div>
   <div class="fg-flow-arrow">
     <span class="fg-flow-arrow-line"></span>
-    <span class="fg-flow-arrow-label">HTTPS + api-key</span>
+    <span class="fg-flow-arrow-label">HTTPS + personal key</span>
     <span class="fg-flow-arrow-head">▶</span>
   </div>
   <div class="fg-flow-box fg-flow-box--apim">
     <span class="fg-flow-icon">🔀</span>
     <strong>APIM</strong>
-    <span class="fg-flow-sub">FoundryGate product</span>
+    <span class="fg-flow-sub">budget tier · limits</span>
   </div>
   <div class="fg-flow-arrow">
     <span class="fg-flow-arrow-line"></span>
@@ -185,7 +185,7 @@ FoundryGate sits in front of your existing Azure AI Foundry deployment. It does 
   }
 `}</style>
 
-**Key provisioning**: When a developer first signs in, FoundryGate calls the APIM Management API to create an APIM subscription scoped to the FoundryGate product. The key is issued to the developer. Foundry never knows about individual developers — APIM does.
+**Key provisioning**: When a developer first signs in, FoundryGate calls the APIM Management API to create an APIM subscription under the developer's budget tier (Standard, Power or Unlimited). The key is issued to the developer. Foundry never knows about individual developers — APIM does.
 
 **Quota enforcement**: The gateway itself enforces each developer's budget in real time. APIM's `llm-token-limit` policy, keyed on the developer's subscription, carries their monthly token quota (requests return `403` the moment it's spent — no polling lag) and a per-minute token cap (bursts get `429 + Retry-After`, which coding CLIs back off on automatically). Budgets reset with the UTC calendar month on their own. A reconciliation Function keeps the dashboard's usage and cost figures authoritative from the gateway's request logs.
 

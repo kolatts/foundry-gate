@@ -6,6 +6,7 @@ sidebar:
 ---
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import SystemDiagram from '../../../components/SystemDiagram.astro';
 
 *This is the most detailed rung of the "how it works" ladder — start with [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/) for the plain-English version or the [system overview](/foundry-gate/architecture/overview/) for the middle level.*
 
@@ -97,6 +98,12 @@ approvals, deployment provisioning/resizing, dashboards, audit.
 **Data plane (APIM v2 gateway)** — everything on the request path: subscription-key
 auth, per-developer TPM caps and monthly budgets, token metric emission, backend
 pool routing with circuit breakers, retry-across-deployments on 429.
+
+<SystemDiagram />
+
+The solid path is the only thing a developer's request ever touches; the dashed paths
+(diagnostics → Log Analytics → reconciliation Function, and the API's management-plane
+calls into APIM) can lag or fail without changing what the gateway enforces.
 
 <CardGrid>
   <Card title="Quota tiers as products" icon="bars">

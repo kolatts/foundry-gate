@@ -6,18 +6,34 @@ sidebar:
 ---
 
 import { Aside } from '@astrojs/starlight/components';
-import ArchDiagram from '../../../components/ArchDiagram.astro';
+import SystemDiagram from '../../../components/SystemDiagram.astro';
+import DeployPipeline from '../../../components/DeployPipeline.astro';
 import Pipeline from '../../../components/Pipeline.astro';
 import QuotaChain from '../../../components/QuotaChain.astro';
 import KeyLifecycle from '../../../components/KeyLifecycle.astro';
 
 *The plain-English version of this page is [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/); the full platform detail lives in [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) and the [reference section](/foundry-gate/reference/configuration/).*
 
-FoundryGate is a governance and access-management layer that sits in front of your existing Azure AI Foundry deployment. It does not replace APIM or Foundry — it adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
+FoundryGate is a governance and access-management layer for Azure AI Foundry. It provisions the gateway and the model deployments, then adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
 
-## Component diagram
+## System diagram
 
-<ArchDiagram />
+The system splits into two planes. The **data plane** is the APIM v2 gateway: every
+developer request passes through it, and every limit is enforced there, in real time. The
+**control plane** is the FoundryGate app: it never sees a model request — it decides who
+gets a key, which tier product that key lives under, and reconciles what the gateway
+reported afterwards. Solid arrows are the request path; dashed arrows are out of band.
+
+<SystemDiagram />
+
+Two details on the diagram are ground truths worth stating plainly:
+
+- **Enforcement is the solid path.** `llm-token-limit` in each tier product's policy
+  decides `403` / `429` on the request itself, keyed on the developer's APIM subscription.
+  Nothing in the control plane is consulted per request.
+- **Reconciliation is the dashed path.** The Functions read the gateway's
+  `ApiManagementGatewayLlmLog` table to keep `QuotaAllocation.TokensUsed`, dashboards, and
+  cost figures authoritative. If that sync stopped, enforcement would continue unchanged.
 
 ---
 
@@ -42,13 +58,13 @@ When a developer signs in through the Blazor UI for the first time, `GET /users/
     },
     {
       title: "If not found — fetch from Graph and create user record",
-      detail: "Call Graph GET /users/{oid} to fetch displayName, mail, employeeId. INSERT User row and resolve monthly token quota (five-level resolution).",
-      code: "Graph GET /users/{oid}\n  → INSERT User row\n  → resolve monthly token quota",
+      detail: "Call Graph GET /users/{oid} to fetch displayName, mail, employeeId. INSERT User row and resolve the monthly token quota (five-level resolution) to a tier product.",
+      code: "Graph GET /users/{oid}\n  → INSERT User row\n  → resolve quota → tier (standard / power / unlimited)",
     },
     {
       title: "Create APIM subscription via Management API",
-      detail: "Call APIM Management: POST /subscriptions, scoped to /products/foundrygate. Name: foundrygate-{userId}.",
-      code: "APIM Management API\n  POST /subscriptions\n    name:  foundrygate-{userId}\n    scope: /products/foundrygate",
+      detail: "Call APIM Management: POST /subscriptions, scoped to the developer's tier product. Name: foundrygate-{userId}. The product's llm-token-limit policy is what will enforce their budget.",
+      code: "APIM Management API\n  POST /subscriptions\n    name:  foundrygate-{userId}\n    scope: /products/{tier}",
     },
     {
       title: "Store encrypted APIM key and create quota allocation",
@@ -98,11 +114,11 @@ Admins can link a FoundryGate group to an Entra group ID. Running `POST /groups/
 
 ## Five-level quota resolution
 
-When a developer's allocation is created or updated, `IQuotaResolutionService` walks this chain — first match wins:
+When a developer's allocation is created or updated, `IQuotaResolutionService` walks this chain — first match wins — and the result selects the **tier product** the developer's APIM subscription lives under:
 
 <QuotaChain />
 
-The resolved value is written to `QuotaAllocation` for the current period. Admins can see which level resolved each developer's quota in the user detail view.
+The resolved value is written to `QuotaAllocation` for the current period, and the subscription is created under (or moved to) the matching tier product. Admins can see which level resolved each developer's quota in the user detail view. Tiers exist because APIM's `token-quota` attribute accepts only literals — one policy cannot read a per-user number — so each tier is a product with its own rendered policy.
 
 ---
 
@@ -164,8 +180,8 @@ for the mitigation architecture.
       detail: "For each active developer, run the five-level quota resolution for the new month and INSERT a fresh QuotaAllocation row.",
     },
     {
-      title: "Clear hard-stop flags",
-      detail: "Gateway token-quota counters reset themselves at the UTC month boundary — no APIM counter manipulation needed. The Function clears IsHardStopped mirrors and re-activates any subscriptions whose deactivation window ended.",
+      title: "Clear hard-stop mirrors",
+      detail: "Gateway token-quota counters reset themselves at the UTC month boundary — no APIM counter manipulation needed. The Function only clears the IsHardStopped mirror (the 403 state reported by reconciliation) so dashboards start the month clean. It never touches subscription state.",
     },
     {
       title: "Write audit log entry",
@@ -178,17 +194,47 @@ for the mitigation architecture.
 
 ## APIM key lifecycle
 
+A developer's key *is* an APIM subscription, created under their tier product. Only
+people-lifecycle events change its state:
+
 <KeyLifecycle />
 
-**Quota exhausted** — the gateway's `token-quota` returns `403` for the rest of the
-calendar month. The subscription stays `active`; the key keeps working the moment the
-window resets. No state change to undo.
+**Rotate** — `POST /keys/me/rotate` (or an admin's `POST /keys/{userId}/rotate`) calls
+`regeneratePrimaryKey` on the subscription. The old key dies instantly, the new one is
+shown once, and the subscription stays `active` with its counters intact.
+
+**Change quota** — the control plane moves the subscription to another tier product.
+The new product's `llm-token-limit` applies from the next request; no state change.
+
+**Quota exhausted / burst** — the gateway's `token-quota` returns `403` for the rest of
+the calendar month; the per-minute cap returns `429 + Retry-After`. The subscription stays
+`active`; the key keeps working the moment the window resets. Nothing to undo.
 
 **Suspend** — admin deactivation (reversible): APIM subscription state → `suspended`.
 Key exists but APIM rejects it. Re-enabled by an admin action, not by the monthly reset.
 
-**Delete** — offboarding or Entra departure: APIM subscription deleted entirely. Key
-stops working immediately and cannot be restored without a full re-provision.
+**Delete** — offboarding or Entra departure: `DELETE /subscriptions/{sid}` removes the
+subscription entirely. The key stops working immediately and cannot be restored without a
+full re-provision.
+
+---
+
+## Deploy pipeline
+
+Everything ships through GitHub Actions with OIDC federated credentials — no long-lived
+Azure secrets. A pull request is gated by build, tests, format and review; merging to
+`main` deploys the whole stack in dependency order through GitHub Environment gates
+(`dev`, then `production`):
+
+<DeployPipeline />
+
+The database stage is the one with moving parts: the runner's IP is whitelisted on the SQL
+server, the workflow waits for firewall propagation and probes port 1433, then the
+`FoundryGate.Database` dacpac is deployed with DacFx (data-loss blocked unless a reviewed
+`allow-data-loss` override is passed) and reference data is seeded. Bicep re-runs pass
+`createModelDeployments=false` because Anthropic model deployments are create-once under
+ARM. The shape is fixed in `CONVENTIONS.md`; the workflow files live under
+`.github/workflows/`.
 
 ---
 
@@ -196,10 +242,12 @@ stops working immediately and cannot be restored without a full re-provision.
 
 | Project | Role |
 |---|---|
-| `FoundryGate.Api` | REST API, Azure Container App, Entra auth |
-| `FoundryGate.Data` | EF Core entities, DbContext, migrations |
+| `FoundryGate.Api` | REST API + services, Azure Container Apps, Entra auth, APIM management-plane calls |
+| `FoundryGate.Data` | EF Core entities, `AppDbContext`, seeding — schema ships as a dacpac, no EF migrations |
 | `FoundryGate.Domain` | Shared DTOs and enums — no framework deps |
-| `FoundryGate.Functions` | Timer-triggered Azure Functions (reset + usage sync) |
-| `FoundryGate.Web` | Blazor WASM frontend (MudBlazor), Azure Static Web Apps |
-| `FoundryGate.Database` | SQL Server project (.sqlproj) — builds dacpac for CI/CD |
-| `FoundryGate.Cli` | `foundrygate` dotnet tool — schema compare, deploy, seed |
+| `FoundryGate.Functions` | Timer-triggered Azure Functions (monthly reset + usage reconciliation) |
+| `FoundryGate.Web` | Blazor WASM frontend (MudBlazor), Azure Static Web Apps — references Domain only |
+| `FoundryGate.Database` | SQL Server project (.sqlproj) — builds the dacpac for CI/CD |
+| `FoundryGate.Cli` | `foundrygate` dotnet tool — local setup, db deploy, seed |
+| `FoundryGate.Tests.Predeployment` | xUnit + SQLite in-memory + convention tests; gates every PR |
+| `FoundryGate.Tests.Postdeployment` | Playwright against a deployed environment, desktop + mobile |
