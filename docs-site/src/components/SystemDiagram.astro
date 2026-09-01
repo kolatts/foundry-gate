@@ -1,0 +1,282 @@
+---
+// System diagram — gateway data plane (request path) + FoundryGate control plane.
+// No props: the diagram is a hand-maintained picture of the CURRENT architecture
+// (CONVENTIONS.md §Architecture diagrams). Values mirror infra/main.bicep defaults.
+// Shared primitives live in src/styles/diagrams.css (.fgd-*).
+const ariaLabel =
+  'FoundryGate system diagram. Real-time path: developer CLIs (Claude Code sends x-api-key, ' +
+  'Codex CLI sends api-key) call the Azure API Management v2 gateway over HTTPS with a personal ' +
+  'subscription key. The gateway has two front doors, /anthropic and /openai/v1, requires the ' +
+  'subscription to belong to a tier product (Standard 5M tokens per month and 20K tokens per minute, ' +
+  'Power 20M and 40K, Unlimited with 100K tokens per minute only), applies the tier model allowlist and ' +
+  'the llm-token-limit policy which returns 403 when the monthly quota is exhausted and 429 with ' +
+  'Retry-After when the per-minute cap is hit, then routes with managed identity to backend pools with ' +
+  'circuit breakers (Anthropic pool: priority 1 eastus2, priority 2 swedencentral; single OpenAI backend) ' +
+  'and on to Azure AI Foundry accounts hosting Claude and GPT model deployments. Gateway diagnostics ' +
+  'stream LLM logs and token metrics to Log Analytics and Application Insights. Control plane, out of ' +
+  'the request path: Entra ID signs users in and is the source of users and groups; the Blazor UI on ' +
+  'Azure Static Web Apps calls FoundryGate.Api on Azure Container Apps, which stores state in Azure SQL ' +
+  'through EF Core; FoundryGate.Functions run the monthly reset and usage reconciliation, reading ' +
+  'ApiManagementGatewayLlmLog from Log Analytics; Key Vault holds secrets. The API manages APIM ' +
+  'subscriptions through the Management API: create under a tier product, regenerate key, move tier, delete. ' +
+  'Legend: solid azure arrows are the real-time enforcement path on the request; dashed grey arrows are telemetry ' +
+  'and reconciliation, out of band; dashed amber arrows are control-plane calls for lifecycle and tiers.';
+---
+
+<figure class="fgd fgd-system not-content" role="group" aria-labelledby="fgd-system-title" aria-describedby="fgd-system-desc">
+  <p id="fgd-system-title" class="fgd-sr-only">FoundryGate system diagram — data plane and control plane</p>
+  <p id="fgd-system-desc" class="fgd-sr-only">{ariaLabel}</p>
+  <!-- Developers -->
+  <div class="fgd-center">
+    <div class="fgd-node fgd-node--ext fgd-system__devs">
+      <div class="fgd-node__title">Developer workstations</div>
+      <div class="fgd-node__sub">
+        Claude Code → <code>x-api-key</code> · Codex CLI → <code>api-key</code>
+        · one personal APIM subscription key per developer
+      </div>
+    </div>
+  </div>
+
+  <div class="fgd-arrow">
+    <span class="fgd-arrow__label"><strong>HTTPS</strong> — every request carries the developer's key</span>
+    <span class="fgd-arrow__line"></span>
+    <span class="fgd-arrow__head"></span>
+  </div>
+
+  <!-- ── DATA PLANE ─────────────────────────────────────────── -->
+  <section class="fgd-plane fgd-plane--data">
+    <div class="fgd-plane__label">Data plane <small>Azure API Management v2 · the request path · enforcement happens here</small></div>
+
+    <div class="fgd-row fgd-row--2">
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Front door <code>/anthropic/*</code></div>
+        <div class="fgd-node__sub">Anthropic Messages API — Claude Code</div>
+      </div>
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Front door <code>/openai/v1</code></div>
+        <div class="fgd-node__sub">Responses / Chat Completions — Codex CLI</div>
+      </div>
+    </div>
+
+    <div class="fgd-arrow">
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__label"><code>fg-require-product</code> — a key with no tier product is refused (403)</span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+
+    <div class="fgd-row fgd-row--3">
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Standard</div>
+        <div class="fgd-node__sub">5M tokens / month<br />20K tokens / minute</div>
+      </div>
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Power</div>
+        <div class="fgd-node__sub">20M tokens / month<br />40K tokens / minute</div>
+      </div>
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Unlimited</div>
+        <div class="fgd-node__sub">no monthly cap<br />100K tokens / minute</div>
+      </div>
+    </div>
+
+    <div class="fgd-system__policy">
+      <div class="fgd-system__policy-title">
+        Tier products — one <code>llm-token-limit</code> policy each, counter keyed on the subscription
+      </div>
+      <div class="fgd-system__policy-body">
+        model alias + allowlist →
+        <span class="fgd-badge fgd-badge--hot">403 monthly quota exhausted</span>
+        <span class="fgd-badge fgd-badge--ember">429 + Retry-After per-minute cap</span>
+      </div>
+    </div>
+
+    <div class="fgd-arrow">
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__label">gateway <strong>managed identity</strong> → Foundry (no account keys anywhere)</span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+
+    <div class="fgd-row fgd-row--2">
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Anthropic backend pool</div>
+        <div class="fgd-node__sub">
+          priority 1 <code>eastus2</code> → priority 2 <code>swedencentral</code><br />
+          circuit breaker per backend: 3 × 429/5xx in 30 s trips it, honours Retry-After · retry ×2 across the pool
+        </div>
+      </div>
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">OpenAI backend</div>
+        <div class="fgd-node__sub">primary region only</div>
+      </div>
+    </div>
+
+    <div class="fgd-arrow">
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+
+    <div class="fgd-row fgd-row--2">
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Azure AI Foundry — eastus2 (primary)</div>
+        <div class="fgd-node__sub">
+          <code>claude-sonnet-4-5</code> · <code>claude-haiku-4-5</code> · <code>claude-opus-4-5</code> · <code>gpt-4.1-mini</code>
+        </div>
+      </div>
+      <div class="fgd-node fgd-node--azure">
+        <div class="fgd-node__title">Azure AI Foundry — swedencentral (pool member)</div>
+        <div class="fgd-node__sub">
+          <code>claude-sonnet-4-5</code> · <code>claude-haiku-4-5</code> · <code>claude-opus-4-5</code>
+        </div>
+      </div>
+    </div>
+
+    <!-- Telemetry emitted by the gateway (async, not on the request path) -->
+    <div class="fgd-arrow fgd-arrow--dashed">
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__label">
+        <strong>APIM diagnostic settings</strong> — LLM logs + token metrics, emitted by the gateway asynchronously
+      </span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+
+    <div class="fgd-node fgd-node--muted">
+      <div class="fgd-node__title">Log Analytics + Application Insights</div>
+      <div class="fgd-node__sub">
+        <code>ApiManagementGatewayLlmLog</code> — per-request prompt / completion tokens, joined to the subscription (billing-grade)
+        · <code>llm-emit-token-metric</code> — near-real-time dashboards
+      </div>
+    </div>
+  </section>
+
+  <!-- ── BRIDGE: out-of-band links between the planes ───────── -->
+  <div class="fgd-system__bridge">
+    <div class="fgd-arrow fgd-arrow--app fgd-arrow--up">
+      <span class="fgd-arrow__label">
+        <strong>APIM Management API</strong> — create subscription under a tier product ·
+        <code>regeneratePrimaryKey</code> · move tier · delete
+      </span>
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+    <div class="fgd-arrow fgd-arrow--dashed">
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__label">
+        <strong>KQL rollup</strong> of <code>ApiManagementGatewayLlmLog</code> → usage reconciliation, every 15 min
+      </span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+  </div>
+
+  <!-- ── CONTROL PLANE ──────────────────────────────────────── -->
+  <section class="fgd-plane fgd-plane--control">
+    <div class="fgd-plane__label">Control plane <small>FoundryGate app · out of the request path · lifecycle, tiers, reporting</small></div>
+
+    <div class="fgd-chain">
+      <div class="fgd-node fgd-node--ext">
+        <div class="fgd-node__title">Microsoft Entra ID</div>
+        <div class="fgd-node__sub">users · groups · sign-in · Graph sync</div>
+      </div>
+      <div class="fgd-arrow fgd-arrow--app fgd-arrow--h">
+        <span class="fgd-arrow__label">JWT</span>
+        <span class="fgd-arrow__line"></span>
+        <span class="fgd-arrow__head"></span>
+      </div>
+      <div class="fgd-node fgd-node--app">
+        <div class="fgd-node__title">FoundryGate.Web</div>
+        <div class="fgd-node__sub">Blazor WASM · Static Web Apps</div>
+      </div>
+      <div class="fgd-arrow fgd-arrow--app fgd-arrow--h">
+        <span class="fgd-arrow__label">REST</span>
+        <span class="fgd-arrow__line"></span>
+        <span class="fgd-arrow__head"></span>
+      </div>
+      <div class="fgd-node fgd-node--app">
+        <div class="fgd-node__title">FoundryGate.Api</div>
+        <div class="fgd-node__sub">ASP.NET Core · Container Apps · managed identity</div>
+      </div>
+      <div class="fgd-arrow fgd-arrow--app fgd-arrow--h">
+        <span class="fgd-arrow__label">EF Core</span>
+        <span class="fgd-arrow__line"></span>
+        <span class="fgd-arrow__head"></span>
+      </div>
+      <div class="fgd-node fgd-node--app">
+        <div class="fgd-node__title">Azure SQL</div>
+        <div class="fgd-node__sub">Users · Groups · QuotaAllocations · Requests · AuditLog</div>
+      </div>
+    </div>
+
+    <div class="fgd-row fgd-row--2 fgd-system__control-bottom">
+      <div class="fgd-node fgd-node--app">
+        <div class="fgd-node__title">FoundryGate.Functions</div>
+        <div class="fgd-node__sub">
+          MonthlyReset — 00:01 UTC on the 1st · UsageSync — reconciliation<br />
+          .NET isolated worker + storage account (runtime) → Azure SQL via EF Core
+        </div>
+      </div>
+      <div class="fgd-node fgd-node--app">
+        <div class="fgd-node__title">Azure Key Vault</div>
+        <div class="fgd-node__sub">
+          Graph client secret · connection secrets<br />
+          <code>@KeyVault(...)</code> references resolved at startup
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <figcaption class="fgd-legend">
+    <span class="fgd-legend__item"><span class="fgd-legend__swatch"></span> real-time enforcement — on the request path</span>
+    <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--dashed"></span> telemetry &amp; reconciliation — out of band</span>
+    <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--app"></span> control-plane calls — lifecycle &amp; tiers</span>
+  </figcaption>
+</figure>
+
+<style>
+  .fgd-system__devs {
+    max-width: 34rem;
+    width: 100%;
+  }
+
+  .fgd-system__policy {
+    margin: 0.6rem 0 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px dashed color-mix(in srgb, var(--fg-azure-neon, #4DCFFF) 45%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--fg-azure, #0078D4) 10%, transparent);
+    text-align: center;
+  }
+
+  .fgd-system__policy-title {
+    color: var(--fg-text-secondary, #C4D0DC);
+    font-size: 0.74rem;
+    font-weight: 600;
+  }
+
+  .fgd-system__policy-body {
+    margin-top: 0.35rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0.35rem 0.5rem;
+    font-size: 0.72rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  .fgd-system__bridge {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.25rem 1.5rem;
+    padding: 0.2rem 1.25rem;
+  }
+
+  .fgd-system__bridge .fgd-arrow { min-height: 4.2rem; }
+
+  .fgd-system__control-bottom { margin-top: 0.6rem; }
+
+  @media (min-width: 720px) {
+    .fgd-system__bridge {
+      grid-template-columns: 1fr 1fr;
+      padding: 0.2rem 0.9rem;
+    }
+  }
+</style>

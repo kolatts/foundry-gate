@@ -259,4 +259,4 @@ Files expected to be created or modified:
 - [ ] Code blocks render in Monaspace Argon
 - [ ] Body text renders in Inter
 - [ ] `content/**` path change triggers a docs rebuild in CI
-- [ ] Mermaid diagrams render without errors
+- [x] Architecture diagrams are Astro components (`SystemDiagram`, `DeployPipeline`, `QuotaChain`, `KeyLifecycle`) on `--fg-*` tokens; render on `architecture/overview` at 1280px and 390px with no horizontal page scroll (#89)
