@@ -43,3 +43,10 @@ Merging: `gh pr merge N --merge --admin` (protection requires a review no second
 One issue-set per agent in an isolated worktree → verifiable gates (zero-warning build, Predeployment tests, format, live proof where possible) → PR with `Closes #N` in the BODY → review (consolidated single-pass reviewer; ≥70-confidence threshold; Major/Minor/Nit) → fix pass by the same agent → merge → epics closed when children close. Everything discovered mid-work becomes a GitHub issue immediately.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+---
+
+## Shutdown delta (added at final wrap)
+
+All three PRs listed above as open completed their cycles and MERGED before shutdown: #97 (closed #77/#78/#79, epic #76, #94), #99 (closed #26/#27, epic #4; conflict resolved — appsettings.Development.json deleted, 127.0.0.1 in appsettings.local.json; follow-up #102 filed), #98 (closed #48, epic #15). No open PRs remain; 66 issues open. Next actionable wave: the endpoint epics (#28-#37, #40-#42, #61) on the now-complete API foundation, per the dependency order above.
+
