@@ -25,6 +25,10 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
+@description('ARM resource id of the workspace (diagnostic settings, role assignments, LogsQueryClient.QueryResourceAsync).')
 output workspaceId string = law.id
+output workspaceName string = law.name
+@description('The workspace GUID ("workspace id" in the Log Analytics query API — LogsQueryClient.QueryWorkspaceAsync, /v1/workspaces/{id}/query). Not the ARM id.')
+output workspaceCustomerId string = law.properties.customerId
 output appInsightsId string = appInsights.id
 output appInsightsConnectionString string = appInsights.properties.ConnectionString
