@@ -31,17 +31,26 @@ namespace FoundryGate.Tests.Predeployment.Data.Conventions;
 /// including length/precision/scale — <c>nvarchar(200)</c> vs <c>nvarchar(50)</c>,
 /// <c>nvarchar(max)</c>, <c>decimal(p,s)</c>, <c>bigint</c> vs <c>int</c>, etc. Comparison is
 /// case- and whitespace-insensitive, and SQL Server's implicit default precision is normalised
-/// (<c>DATETIMEOFFSET (7)</c> in the script equals EF's bare <c>datetimeoffset</c>).</item>
+/// (<c>DATETIMEOFFSET (7)</c> in the script equals EF's bare <c>datetimeoffset</c>). A column
+/// line that does not parse is reported as unparseable (quoting the line), never as
+/// "missing".</item>
+/// <item><c>DEFAULT</c> constraint <i>presence</i> per column matches the model
+/// (<c>HasDefaultValue</c>/<c>HasDefaultValueSql</c>); both the DacFx/SSDT placement
+/// (<c>CONSTRAINT [DF_x] DEFAULT ((1)) NOT NULL</c>) and EF's (<c>NOT NULL DEFAULT (...)</c>) are
+/// accepted. The default <i>expression</i> is not compared.</item>
 /// <item><c>IDENTITY</c> presence per column matches the model's SQL Server value-generation
 /// strategy (int <c>{Entity}Id</c> PKs are identity; composite/natural keys are not).</item>
-/// <item>Primary key constraint name, column composition and order, and clustering.</item>
+/// <item>Primary key constraint name, column composition and order, and clustering — declared
+/// either as <c>ALTER TABLE ... ADD CONSTRAINT [PK_*]</c> (this repo's style) or inline inside
+/// <c>CREATE TABLE</c> (what DacFx/SSDT scripting emits).</item>
 /// <item>Every foreign key (single- or multi-column) by constraint name: dependent columns,
 /// principal table and columns, and the <c>ON DELETE</c> action implied by its configured
 /// <see cref="DeleteBehavior"/>. Also flags FK constraints in the .sql file that the model does not
 /// declare.</item>
 /// <item>Every index EF's model declares (explicit <c>[Index]</c> attributes and EF's own implicit
-/// per-FK indexes) by database name: <c>UNIQUE</c> flag, column composition, column order, and
-/// sort direction. Also flags indexes in the .sql file that the model does not declare.</item>
+/// per-FK indexes) by database name: <c>UNIQUE</c> flag, <c>CLUSTERED</c>/<c>NONCLUSTERED</c>,
+/// column composition, column order, and sort direction. Also flags indexes in the .sql file that
+/// the model does not declare.</item>
 /// </list>
 /// <para><b>Deliberate remaining limits (documented, not accidental gaps):</b></para>
 /// <list type="bullet">
@@ -50,10 +59,10 @@ namespace FoundryGate.Tests.Predeployment.Data.Conventions;
 /// table, one column per line). Hand-authored .sql that strays from that style can produce false
 /// positives/negatives here instead of a clean parser error — this is a drift <i>alarm</i>, not a
 /// schema validator.</item>
-/// <item>Does not check schema features the model does not use today: default/check constraints,
-/// computed columns, collations, filtered indexes, <c>INCLUDE</c> columns, fill factor, or
-/// per-index clustering. Adding any of those to an entity means extending this test in the same
-/// PR.</item>
+/// <item>Does not check schema features the model does not use today: default-constraint
+/// <i>expressions</i> (only presence is compared), check constraints, computed columns,
+/// collations, filtered indexes, <c>INCLUDE</c> columns, or fill factor. Adding any of those to an
+/// entity means extending this test in the same PR.</item>
 /// <item>Compares the model to the checked-in scripts only, never to a live database. DacFx
 /// schema-compare against a deployed database remains the authoritative (Windows-only) tool if
 /// that is ever needed.</item>
@@ -62,16 +71,43 @@ namespace FoundryGate.Tests.Predeployment.Data.Conventions;
 public class SchemaParityTests
 {
     /// <summary>
+    /// A parenthesised expression with arbitrarily nested parens (.NET balancing groups), e.g. the
+    /// <c>((1))</c> or <c>(getutcdate())</c> DacFx emits for default constraints.
+    /// </summary>
+    private const string BalancedParens = @"\((?>[^()]+|\((?<depth>)|\)(?<-depth>))*(?(depth)(?!))\)";
+
+    /// <summary>Optional named <c>CONSTRAINT [DF_x]</c> prefix, then <c>DEFAULT (expr)</c>.</summary>
+    private const string DefaultClause = @"(?:CONSTRAINT \[[A-Za-z0-9_]+\]\s+)?DEFAULT\s*" + BalancedParens;
+
+    /// <summary>
     /// One column definition line inside the <c>CREATE TABLE (...)</c> body: name, store type
-    /// (with its optional parenthesised length/precision), optional <c>IDENTITY (...)</c>, then
-    /// the nullability keyword.
+    /// (with its optional parenthesised length/precision), optional <c>IDENTITY (...)</c>, an
+    /// optional default constraint either before the nullability keyword (DacFx/SSDT placement) or
+    /// after it (EF's own DDL placement), and the nullability keyword itself.
     /// </summary>
     private static readonly Regex ColumnLineRegex = new(
-        @"^\s*\[(?<name>[A-Za-z0-9_]+)\]\s+(?<type>[A-Za-z0-9_]+(?:\s*\([^)]*\))?)\s+(?:(?<identity>IDENTITY(?:\s*\([^)]*\))?)\s+)?(?<null>NOT NULL|NULL)\b",
+        @"^\s*\[(?<name>[A-Za-z0-9_]+)\]\s+(?<type>[A-Za-z0-9_]+(?:\s*\([^)]*\))?)" +
+        @"(?:\s+(?<identity>IDENTITY(?:\s*\([^)]*\))?))?" +
+        @"(?:\s+(?<default>" + DefaultClause + @"))?" +
+        @"\s+(?<null>NOT NULL|NULL)\b" +
+        @"(?:\s+(?<default>" + DefaultClause + @"))?",
         RegexOptions.Compiled);
 
+    /// <summary>
+    /// Anything that starts like a column definition. Lines matching this but not
+    /// <see cref="ColumnLineRegex"/> are reported as unparseable rather than silently skipped
+    /// (which would otherwise surface as a misleading "column missing").
+    /// </summary>
+    private static readonly Regex ColumnLineStartRegex = new(
+        @"^\s*\[(?<name>[A-Za-z0-9_]+)\]",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Matches both this repo's <c>ALTER TABLE ... ADD CONSTRAINT [PK_*]</c> style and an inline
+    /// <c>CONSTRAINT [PK_*] PRIMARY KEY</c> table constraint inside <c>CREATE TABLE</c>.
+    /// </summary>
     private static readonly Regex PrimaryKeyRegex = new(
-        @"ADD CONSTRAINT \[(?<name>PK_[A-Za-z0-9_]+)\] PRIMARY KEY (?<clustered>CLUSTERED|NONCLUSTERED)\s*\((?<cols>[^)]*)\)",
+        @"(?:ADD\s+)?CONSTRAINT \[(?<name>PK_[A-Za-z0-9_]+)\] PRIMARY KEY (?<clustered>CLUSTERED|NONCLUSTERED)\s*\((?<cols>[^)]*)\)",
         RegexOptions.Compiled);
 
     private static readonly Regex ForeignKeyRegex = new(
@@ -159,14 +195,26 @@ public class SchemaParityTests
         string sql,
         List<string> violations)
     {
-        var sqlColumns = ParseColumns(sql);
+        (var sqlColumns, var unparsedLines) = ParseColumns(sql);
+
+        foreach ((string unparsedName, string unparsedLine) in unparsedLines)
+        {
+            violations.Add(
+                $"{tableName}.sql: column line for [{unparsedName}] could not be parsed by the parity regex " +
+                $"(expected '[Name] TYPE [IDENTITY (..)] [CONSTRAINT [DF_x] DEFAULT (..)] NULL|NOT NULL'): '{unparsedLine}'");
+        }
 
         foreach (var property in entityType.GetProperties())
         {
             string columnName = property.GetColumnName();
             if (!sqlColumns.TryGetValue(columnName, out SqlColumn? sqlColumn))
             {
-                violations.Add($"{tableName}.{columnName}: column missing from {tableName}.sql");
+                if (!unparsedLines.ContainsKey(columnName))
+                {
+                    // Already reported above as unparseable when the line exists but didn't parse.
+                    violations.Add($"{tableName}.{columnName}: column missing from {tableName}.sql");
+                }
+
                 continue;
             }
 
@@ -196,6 +244,17 @@ public class SchemaParityTests
                     $"{tableName}.{columnName}: model {(identityInModel ? "is" : "is not")} an IDENTITY column " +
                     $"but {tableName}.sql {(sqlColumn.IsIdentity ? "declares" : "does not declare")} IDENTITY");
             }
+
+            // Annotation check, not GetDefaultValue(): that API falls back to the CLR default for every
+            // non-nullable value type, which would flag every int/bool/Guid column as "has default".
+            bool defaultInModel = property.FindAnnotation(RelationalAnnotationNames.DefaultValue) is not null
+                || property.GetDefaultValueSql() is not null;
+            if (defaultInModel != sqlColumn.HasDefault)
+            {
+                violations.Add(
+                    $"{tableName}.{columnName}: model {(defaultInModel ? "has" : "has no")} default value " +
+                    $"but {tableName}.sql {(sqlColumn.HasDefault ? "declares" : "does not declare")} a DEFAULT constraint");
+            }
         }
 
         var modelColumnNames = entityType.GetProperties().Select(p => p.GetColumnName()).ToHashSet(StringComparer.Ordinal);
@@ -222,7 +281,9 @@ public class SchemaParityTests
         Match match = PrimaryKeyRegex.Match(sql);
         if (!match.Success)
         {
-            violations.Add($"{tableName}: no 'ADD CONSTRAINT [PK_*] PRIMARY KEY' statement found in {tableName}.sql");
+            violations.Add(
+                $"{tableName}: no PRIMARY KEY constraint found in {tableName}.sql (neither " +
+                "'ALTER TABLE ... ADD CONSTRAINT [PK_*] PRIMARY KEY' nor an inline 'CONSTRAINT [PK_*] PRIMARY KEY' in CREATE TABLE)");
             return;
         }
 
@@ -332,6 +393,15 @@ public class SchemaParityTests
                     $"{sqlIndex.IsUnique} in {tableName}.sql");
             }
 
+            // SQL Server's default for a secondary index is nonclustered; EF leaves IsClustered() null unless overridden.
+            bool clusteredInModel = index.IsClustered() ?? false;
+            if (clusteredInModel != sqlIndex.IsClustered)
+            {
+                violations.Add(
+                    $"{tableName}: index {indexName} is {(clusteredInModel ? "CLUSTERED" : "NONCLUSTERED")} in the model but " +
+                    $"{(sqlIndex.IsClustered ? "CLUSTERED" : "NONCLUSTERED")} in {tableName}.sql");
+            }
+
             var modelColumns = index.Properties
                 .Select((p, i) => new SqlIndexColumn(p.GetColumnName(), IsDescending(index, i)))
                 .ToList();
@@ -395,10 +465,14 @@ public class SchemaParityTests
     private static string FormatColumns(IEnumerable<SqlIndexColumn> columns) =>
         $"({string.Join(", ", columns.Select(c => $"[{c.Name}] {(c.IsDescending ? "DESC" : "ASC")}"))})";
 
-    /// <summary>Column name -> parsed definition from the CREATE TABLE body.</summary>
-    private static Dictionary<string, SqlColumn> ParseColumns(string sql)
+    /// <summary>
+    /// Column name -> parsed definition from the CREATE TABLE body, plus column name -> raw line
+    /// for any line that starts like a column definition but did not parse.
+    /// </summary>
+    private static (Dictionary<string, SqlColumn> Columns, Dictionary<string, string> UnparsedLines) ParseColumns(string sql)
     {
         var columns = new Dictionary<string, SqlColumn>(StringComparer.Ordinal);
+        var unparsedLines = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // Table body is everything between "CREATE TABLE [dbo].[...] (" and the matching ");" —
         // column type parens (e.g. "IDENTITY (1, 1)") never appear immediately before a semicolon
@@ -406,7 +480,7 @@ public class SchemaParityTests
         Match tableMatch = TableBodyRegex.Match(sql);
         if (!tableMatch.Success)
         {
-            return columns;
+            return (columns, unparsedLines);
         }
 
         foreach (string line in tableMatch.Groups["body"].Value.Split('\n'))
@@ -414,16 +488,23 @@ public class SchemaParityTests
             Match match = ColumnLineRegex.Match(line);
             if (!match.Success)
             {
+                Match start = ColumnLineStartRegex.Match(line);
+                if (start.Success)
+                {
+                    unparsedLines[start.Groups["name"].Value] = line.Trim();
+                }
+
                 continue;
             }
 
             columns[match.Groups["name"].Value] = new SqlColumn(
                 match.Groups["type"].Value,
                 match.Groups["null"].Value == "NOT NULL",
-                match.Groups["identity"].Success);
+                match.Groups["identity"].Success,
+                match.Groups["default"].Success);
         }
 
-        return columns;
+        return (columns, unparsedLines);
     }
 
     /// <summary>FK constraint name -> parsed shape.</summary>
@@ -452,6 +533,7 @@ public class SchemaParityTests
         {
             indexes[match.Groups["name"].Value] = new SqlIndex(
                 match.Groups["unique"].Success,
+                match.Groups["clustered"].Value == "CLUSTERED",
                 ParseColumnList(match.Groups["cols"].Value));
         }
 
@@ -483,7 +565,7 @@ public class SchemaParityTests
         return Path.Combine(directory.FullName, "src", "FoundryGate.Database", "dbo", "Tables");
     }
 
-    private sealed record SqlColumn(string Type, bool NotNull, bool IsIdentity);
+    private sealed record SqlColumn(string Type, bool NotNull, bool IsIdentity, bool HasDefault);
 
     private sealed record SqlForeignKey(
         List<string> Columns,
@@ -491,7 +573,7 @@ public class SchemaParityTests
         List<string> PrincipalColumns,
         string OnDelete);
 
-    private sealed record SqlIndex(bool IsUnique, List<SqlIndexColumn> Columns);
+    private sealed record SqlIndex(bool IsUnique, bool IsClustered, List<SqlIndexColumn> Columns);
 
     private sealed record SqlIndexColumn(string Name, bool IsDescending);
 }
