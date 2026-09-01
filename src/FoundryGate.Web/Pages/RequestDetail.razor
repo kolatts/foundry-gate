@@ -1,0 +1,12 @@
+@page "/requests/{Id:int}"
+@attribute [Authorize]
+
+<PageTitle>Request #@Id — Foundry Gate</PageTitle>
+
+<UnderConstruction Title="@($"Request #{Id}")" />
+
+@code {
+    /// <summary>QuotaIncreaseRequestId from the route.</summary>
+    [Parameter]
+    public int Id { get; set; }
+}

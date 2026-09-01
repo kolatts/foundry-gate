@@ -1,0 +1,18 @@
+@* Shared placeholder for every route in the spec §8.1 skeleton whose feature page hasn't
+   landed yet. Individual Pages/*.razor stubs supply @page routes (and the matching
+   [Authorize] shape) and render this with their own title. *@
+
+<MudContainer MaxWidth="MaxWidth.Medium" Class="d-flex flex-column align-center justify-center ga-3" Style="min-height: 50vh; text-align: center;">
+    <MudIcon Icon="@Icons.Material.Filled.Construction" Color="Color.Warning" Size="Size.Large" />
+    <MudText Typo="Typo.h5">@Title</MudText>
+    <MudText Typo="Typo.body1" Class="mud-text-secondary">
+        This page is part of the Foundry Gate route skeleton — the feature lands in a
+        later epic. You're signed in and authorized to be here.
+    </MudText>
+</MudContainer>
+
+@code {
+    /// <summary>Heading shown above the placeholder body, e.g. "Admin Dashboard".</summary>
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = string.Empty;
+}

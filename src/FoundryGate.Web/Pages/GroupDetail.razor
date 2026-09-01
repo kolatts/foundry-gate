@@ -1,0 +1,12 @@
+@page "/groups/{Id:int}"
+@attribute [Authorize(Roles = RoleNames.Admin)]
+
+<PageTitle>Group #@Id — Foundry Gate</PageTitle>
+
+<UnderConstruction Title="@($"Group #{Id}")" />
+
+@code {
+    /// <summary>GroupId from the route.</summary>
+    [Parameter]
+    public int Id { get; set; }
+}

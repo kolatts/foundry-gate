@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "preview", "--prefix", "docs-site"],
       "port": 4321
+    },
+    {
+      "name": "foundrygate-web",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/FoundryGate.Web", "--urls", "http://localhost:5276"],
+      "port": 5276
     }
   ]
 }
