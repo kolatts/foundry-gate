@@ -6,8 +6,9 @@ namespace FoundryGate.Api.Services.Quota;
 public static class QuotaServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the validated <see cref="GatewayTierOptions"/> (singleton, lifted off the already-registered
-    /// <see cref="AppSettings"/>), the pure <see cref="GatewayTierMapper"/> (singleton), the
+    /// Registers the validated <see cref="GatewayOptions"/> (singleton, lifted off the already-registered
+    /// <see cref="AppSettings"/> — the tier table lives on <see cref="GatewayOptions.Tiers"/>), the pure
+    /// <see cref="GatewayTierMapper"/> (singleton), the
     /// <see cref="IGatewayTierSync"/> seam (currently <see cref="NullGatewayTierSync"/> — #118 replaces
     /// this registration with the APIM implementation), and the two scoped services that share the
     /// request's <c>AppDbContext</c>: <see cref="IQuotaResolutionService"/> and <see cref="IQuotaAllocationService"/>.

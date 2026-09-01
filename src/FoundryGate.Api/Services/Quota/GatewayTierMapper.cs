@@ -7,7 +7,7 @@ namespace FoundryGate.Api.Services.Quota;
 /// The rule that a developer's monthly budget <em>is</em> a gateway tier (D-013): every numeric quota
 /// the control plane accepts must equal a configured tier cap or be unlimited, because APIM's
 /// <c>token-quota</c> is a per-product literal and the tier product is the only thing the gateway
-/// can enforce. Pure and singleton — the tier table comes from <see cref="GatewayTierOptions"/> once at
+/// can enforce. Pure and singleton — the tier table comes from <see cref="GatewayOptions"/> once at
 /// startup.
 /// </summary>
 /// <remarks>
@@ -28,7 +28,7 @@ public sealed class GatewayTierMapper
     private readonly GatewayTier _unlimitedTier;
 
     /// <summary>Creates a mapper over <paramref name="options"/>, which must already have passed validation.</summary>
-    public GatewayTierMapper(GatewayTierOptions options)
+    public GatewayTierMapper(GatewayOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 

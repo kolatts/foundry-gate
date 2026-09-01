@@ -9,7 +9,9 @@ CREATE TABLE [dbo].[Users] (
     [IsUnlimited]         BIT               NOT NULL,
     [MonthlyTokenQuota]   BIGINT            NULL,
     [ApimSubscriptionId]  NVARCHAR (500)    NOT NULL,
-    [ApimSubscriptionKey] NVARCHAR (500)    NOT NULL,
+    [ApimSubscriptionKey] NVARCHAR (1000)   NOT NULL,
+    [ApimSubscriptionKeyHint] NVARCHAR (4)  NOT NULL,
+    [ApimKeyIssuedDate]   DATETIMEOFFSET (7) NULL,
     [CreatedDate]         DATETIMEOFFSET (7) NOT NULL,
     [LastSyncedDate]      DATETIMEOFFSET (7) NULL
 );

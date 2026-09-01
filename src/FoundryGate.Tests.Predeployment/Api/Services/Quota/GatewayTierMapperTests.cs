@@ -108,11 +108,11 @@ public class GatewayTierMapperTests
     [Fact]
     public void Constructor_rejects_a_table_with_no_unlimited_tier_or_no_finite_tier()
     {
-        var noUnlimited = new GatewayTierOptions
+        var noUnlimited = new GatewayOptions
         {
             Tiers = [new GatewayTier { ProductId = GatewayTiers.Standard, MonthlyTokenQuota = 1 }],
         };
-        var noFinite = new GatewayTierOptions
+        var noFinite = new GatewayOptions
         {
             Tiers = [new GatewayTier { ProductId = GatewayTiers.Unlimited, MonthlyTokenQuota = 0 }],
         };

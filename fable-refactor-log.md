@@ -224,6 +224,8 @@ same template per subscription — because Claude Global Standard quota is poole
 per-subscription per-model, extra subscriptions (not extra same-subscription
 deployments) are what multiply Claude headroom. Cross-subscription cost/inventory
 queries filter on workload+environment+fg-role uniformly.
+**Extended (#43/#44, PR #111):** control-plane resources carry `fg-role=control-plane`
+plus `fg-component` (api|sql|keyvault|registry|functions|storage|ui).
 **Why:** Asked for explicitly by the user mid-session; also required for the cost
 rate-card work (#84) to attribute Claude Marketplace meters across stacks.
 - **E-009:** APIM backend pools reject `url`/`protocol` on the pool resource (only

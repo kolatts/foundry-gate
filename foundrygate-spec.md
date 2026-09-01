@@ -227,10 +227,11 @@ PUT    /requests/{id}/reject         Admin only
 
 ```
 GET    /keys/me                      Any: get own APIM key (masked except last 4)
-POST   /keys/me/rotate               Any: rotate own APIM subscription key
+POST   /keys/me/reveal               Any: decrypt and return own full key once (audited)
+POST   /keys/me/rotate               Any: rotate own APIM subscription key (both APIM keys regenerated)
 POST   /keys/{userId}/rotate         Admin: rotate key for any user
-POST   /keys/{userId}/provision      Admin: provision a new APIM key for a user
-DELETE /keys/{userId}                Admin: revoke APIM key (hard deactivate)
+POST   /keys/{userId}/provision      Admin: provision a new APIM key for a user (?tier=standard|power|unlimited)
+DELETE /keys/{userId}                Admin: revoke APIM key only — user stays active (deactivation is PUT /users/{id}/deactivate)
 ```
 
 ### 4.6 Admin / Configuration
@@ -253,34 +254,46 @@ Managed Identity credential (Container App system-assigned identity).
 
 ```
 1. Admin activates a user or user auto-provisions on first login
-2. API calls APIM Management: POST /subscriptions
-   - Name: "foundrygate-{userId}"
-   - Scope: /products/{productId}  (a single APIM Product covering all Foundry routes)
-   - DisplayName: user's email
-3. APIM returns primary + secondary keys
-4. API encrypts the primary key with Azure Key Vault and stores in User.ApimSubscriptionKey
-5. User.ApimSubscriptionId is set to the APIM subscription resource ID
+2. API checks APIM for an existing subscription named "foundrygate-{userId}" (an orphan from a
+   failed earlier save); if found it is reused — re-scoped to the tier and both keys regenerated
+3. Otherwise API calls APIM Management: PUT /subscriptions/foundrygate-{userId}
+   - Scope: /products/{tierProductId}  (the user's quota-tier product: standard | power | unlimited, #82)
+   - DisplayName: "FoundryGate {email}"
+   - State: active
+4. APIM returns primary + secondary keys; only the primary is ever issued or stored
+5. API wraps the primary key with the Key Vault RSA key (RSA-OAEP-256, versioned envelope) and
+   stores it in User.ApimSubscriptionKey; User.ApimSubscriptionKeyHint = last 4 chars;
+   User.ApimKeyIssuedDate = now
+6. User.ApimSubscriptionId is set to the APIM subscription resource ID (not secret, stored plain)
+7. Audit key.provisioned; the plaintext is returned once in the response and never again
 ```
 
 ### 5.2 Key rotation flow
 
 ```
-1. User or admin calls POST /keys/{userId}/rotate
-2. API calls APIM Management: POST /subscriptions/{sid}/regeneratePrimaryKey
-3. API fetches new primary key, re-encrypts, updates DB
+1. User calls POST /keys/me/rotate, or admin calls POST /keys/{userId}/rotate
+2. API calls APIM Management: POST /subscriptions/{sid}/regeneratePrimaryKey AND
+   POST /subscriptions/{sid}/regenerateSecondaryKey — both keys, so the never-issued secondary
+   cannot outlive the primary (#117)
+3. API fetches the new primary key (listSecrets), re-encrypts, updates DB (key, hint, issued date)
 4. Old key is immediately invalidated by APIM
-5. Audit log entry written
+5. Audit key.rotated; the new value is returned once
 ```
 
-### 5.3 Key revocation flow
+### 5.3 Key revocation flow (key-only)
 
 ```
-1. Admin deactivates user or DELETE /keys/{userId}
-2. API calls APIM Management: DELETE /subscriptions/{sid}
-3. User.ApimSubscriptionId and User.ApimSubscriptionKey set to NULL
-4. User.IsActive set to false
-5. QuotaAllocation.IsHardStopped set to true for current period
+1. Admin calls DELETE /keys/{userId}  (or the deactivation pipeline calls IApimKeyService.RevokeAsync as its first step)
+2. API calls APIM Management: DELETE /subscriptions/{sid}  (already-gone is tolerated)
+3. User.ApimSubscriptionId, ApimSubscriptionKey, ApimSubscriptionKeyHint cleared; ApimKeyIssuedDate = NULL
+4. Audit key.revoked
+5. User.IsActive is NOT changed — the user can be re-provisioned with POST /keys/{userId}/provision.
+   Deactivation (IsActive = false, QuotaAllocation.IsHardStopped = true, pending requests cancelled)
+   is PUT /users/{id}/deactivate's job (plans/21-provision-deprovision.md), which runs this flow first.
 ```
+
+There is no "suspend" state: quota exhaustion is a real-time gateway `403` (§5.4, #81), and every
+people-lifecycle exit deletes the subscription (#116).
 
 ### 5.4 Monthly token usage sync (amended: reconciliation, not enforcement)
 

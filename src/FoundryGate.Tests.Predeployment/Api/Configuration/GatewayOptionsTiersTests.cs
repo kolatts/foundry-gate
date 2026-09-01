@@ -9,12 +9,13 @@ using Microsoft.Extensions.Configuration;
 namespace FoundryGate.Tests.Predeployment.Api.Configuration;
 
 /// <summary>
-/// <see cref="GatewayTierOptions"/> validation, plus the parity check that the tier caps shipped in
+/// The quota-tier half of <see cref="GatewayOptions"/> validation (the addressing half is in
+/// <see cref="AppSettingsValidationTests"/>), plus the parity check that the tier caps shipped in
 /// <c>appsettings.json</c> match the products <c>infra/main.bicep</c>'s <c>quotaTiers</c> actually
 /// creates — mirroring <c>GatewayTiersTests</c> for the ids. A cap that drifts between the two means
 /// resolution maps a quota onto a product whose policy enforces a different number.
 /// </summary>
-public class GatewayTierOptionsTests
+public class GatewayOptionsTiersTests
 {
     [Fact]
     public void Shipped_defaults_are_valid()
@@ -25,7 +26,7 @@ public class GatewayTierOptionsTests
     [Fact]
     public void Empty_tier_list_is_rejected()
     {
-        var options = new GatewayTierOptions();
+        var options = new GatewayOptions();
 
         var error = Assert.Single(Validate(options));
         Assert.Contains("at least one tier", error.ErrorMessage, StringComparison.Ordinal);
@@ -72,7 +73,7 @@ public class GatewayTierOptionsTests
     [Fact]
     public void Only_an_unlimited_tier_is_rejected()
     {
-        var options = new GatewayTierOptions
+        var options = new GatewayOptions
         {
             Tiers = [new GatewayTier { ProductId = GatewayTiers.Unlimited, MonthlyTokenQuota = 0 }],
         };
@@ -104,14 +105,20 @@ public class GatewayTierOptionsTests
     }
 
     [Fact]
-    public void ValidateRecursively_on_AppSettings_surfaces_a_negative_tier_cap_the_startup_path()
+    public void Tier_rules_do_not_disturb_valid_addressing()
     {
-        var appSettings = AppSettingsValidationTests.ValidAppSettings();
-        appSettings.Gateway.Tiers[0].MonthlyTokenQuota = -5_000_000;
+        // Both halves of the merged class validate independently: full Foundry + APIM addressing plus
+        // the shipped tiers is exactly what a deployed host looks like.
+        var options = TestGatewayTiers.Options();
+        options.SubscriptionId = "00000000-0000-0000-0000-000000000001";
+        options.ResourceGroup = "rg-foundrygate-test";
+        options.ApimName = "apim-foundrygate-test";
+        options.FoundryAccountNames = ["fgtest-eus2"];
+        options.KeyEncryptionKeyUri = "https://kv.vault.azure.net/keys/fg-apim-key-encryption";
 
-        var exception = Assert.Throws<Imagile.Framework.Configuration.Exceptions.ConfigurationValidationException>(appSettings.ValidateRecursively);
-
-        Assert.Contains("MonthlyTokenQuota", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(Validate(options));
+        Assert.True(options.IsApimConfigured);
+        Assert.True(options.IsFoundryConfigured);
     }
 
     [Fact]
@@ -139,7 +146,7 @@ public class GatewayTierOptionsTests
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(Path.Combine(repoRoot, "src", "FoundryGate.Api", "appsettings.json"), optional: false)
             .Build();
-        var options = configuration.GetSection("Gateway").Get<GatewayTierOptions>();
+        var options = configuration.GetSection("Gateway").Get<GatewayOptions>();
         Assert.NotNull(options);
         Assert.Empty(Validate(options));
 
@@ -158,7 +165,7 @@ public class GatewayTierOptionsTests
         Assert.Equal(bicepTiers, options.Tiers.Select(t => (t.ProductId, t.MonthlyTokenQuota)));
     }
 
-    private static IList<ValidationResult> Validate(GatewayTierOptions options)
+    private static IList<ValidationResult> Validate(GatewayOptions options)
     {
         var results = new List<ValidationResult>();
         Validator.TryValidateObject(options, new ValidationContext(options), results, validateAllProperties: true);

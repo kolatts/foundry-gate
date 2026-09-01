@@ -5,16 +5,17 @@ using FoundryGate.Domain.Constants;
 namespace FoundryGate.Tests.Predeployment.Support;
 
 /// <summary>
-/// The tier table as shipped in <c>appsettings.json</c> / <c>infra/main.bicep</c> (Standard 5M, Power
-/// 20M, Unlimited), for service-level tests that construct <see cref="GatewayTierMapper"/> directly.
-/// Endpoint tests get the same values through the real <c>appsettings.json</c>.
+/// A <see cref="GatewayOptions"/> carrying only the tier table as shipped in <c>appsettings.json</c> /
+/// <c>infra/main.bicep</c> (Standard 5M, Power 20M, Unlimited) and no gateway addressing — the local
+/// shape. For service-level tests that construct <see cref="GatewayTierMapper"/> directly; endpoint
+/// tests get the same values through the real <c>appsettings.json</c>.
 /// </summary>
 public static class TestGatewayTiers
 {
     public const long StandardCap = 5_000_000;
     public const long PowerCap = 20_000_000;
 
-    public static GatewayTierOptions Options() => new()
+    public static GatewayOptions Options() => new()
     {
         Tiers =
         [

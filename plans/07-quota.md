@@ -34,7 +34,7 @@ is APIM's `llm-token-limit` on **tier products**, `token-quota` accepts literals
 
 - `Services/Quota/QuotaResolutionService` walks the five levels and upserts `QuotaAllocation`, now
   recording `ResolvedLevelType`, `TierProductId` and `IsGatewayCapped`. The numeric quota is mapped to
-  a tier by `GatewayTierMapper` from `Gateway:Tiers` (`Configuration/GatewayTierOptions.cs`, defaults
+  a tier by `GatewayTierMapper` from `Gateway:Tiers` (`GatewayOptions.Tiers` in `Configuration/GatewayOptions.cs`, defaults
   in `appsettings.json` mirroring `infra/main.bicep`, parity-tested). **A budget is a tier
   (D-013):** a quota must equal a tier cap or be unlimited — `GatewayTierMapper.EnsureValidQuota`
   guards every write path (400 otherwise), `GET /quota/tiers` lists the choices, and a legacy value
