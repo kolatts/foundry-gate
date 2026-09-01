@@ -14,47 +14,58 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 | `DefaultMonthlyTokenQuota` | `"1000000"` | Per-user monthly token budget when no user or group override applies. |
 | `ApimResourceId` | `""` | ARM resource ID of the APIM instance (`/subscriptions/.../Microsoft.ApiManagement/service/...`). Informational — the key service addresses APIM through the `Gateway__*` environment variables below, not this value. |
 | `ApimGatewayUrl` | `""` | APIM gateway base URL shown to developers on `/me` for CLI configuration (e.g., `https://my-apim.azure-api.net`). |
-| `ApimProductId` | `"foundrygate"` | Legacy single-product name. Superseded: a developer's subscription is created under their **quota-tier product** (`standard`, `power`, `unlimited`), not this one. Kept for the seeded reference data. |
-| `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. Used by `IFoundryDeploymentService` for model deployment management. |
+| `ApimProductId` | `"foundrygate"` | Legacy single-product name. **Superseded**: a developer's subscription is created under their **quota-tier product** (`standard`, `power`, `unlimited`), not this one. Kept as seeded reference data. |
+| `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. **Superseded** for deployment management by the `Gateway__*` environment variables below (the gateway runs one account per region, and infra sets them, so nothing has to be typed here); kept as seeded reference data. |
 | `EntraTenantId` | `""` | Azure AD tenant ID used by the Microsoft Graph SDK for bulk user sync. |
 | `EntraGroupSyncEnabled` | `"false"` | Set to `"true"` to enable automatic Entra group member sync. When `false`, group sync must be triggered manually from the admin UI. |
 | `ResetDayOfMonth` | `"1"` | Day the monthly quota reset fires. Always `"1"` in v1 — changing this is unsupported and reserved for a future release. |
 
 <Aside type="caution">
-Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl`, `ApimProductId`, and `FoundryResourceId` are set to real values.
+Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl` and `ApimProductId` are set to real values. Foundry deployment management reads the `Gateway__*` variables instead, which infra sets automatically.
 </Aside>
 
 ---
 
 ## API environment variables / appsettings
 
-These are set as Container App environment variables (sourced from Key Vault references for secrets).
+Set as Container App environment variables by `infra/modules/control-plane.bicep` — the
+Bicep is the source of truth for names and values, and the
+[Infrastructure Reference](/foundry-gate/reference/infrastructure/) lists them per host.
+None of them is a secret: SQL uses Entra authentication, so even the connection string is
+plain configuration. Secrets, when one is ever needed, are set out of band in Key Vault
+and referenced from appsettings as `@KeyVault(SecretName)`.
 
 | Key | Source | Description |
 |---|---|---|
-| `ConnectionStrings__Foundry Gate` | Key Vault secret | Azure SQL connection string |
-| `AzureAd__TenantId` | Config / env var | Entra tenant ID for bearer token validation |
-| `AzureAd__ClientId` | Config / env var | Entra App Registration client ID |
-| `AzureAd__Audience` | Config / env var | Token audience (usually `api://{clientId}`) |
-| `Azure__KeyVaultUrl` | Config / env var | Key Vault URI for resolving `@KeyVault(SecretName)` references in appsettings. Optional locally |
-| `Gateway__SubscriptionId` | Set by infra | Azure subscription id holding the APIM instance. With the next two, addresses the APIM management plane for subscription-key operations; all three or none |
-| `Gateway__ResourceGroup` | Set by infra | Resource group of the APIM instance |
-| `Gateway__ApimName` | Set by infra | APIM service name (short name, not the full resource ID) |
-| `Gateway__KeyEncryptionKeyUri` | Set by infra | Versionless URI of the Key Vault RSA key (`fg-apim-key-encryption`) that wraps stored APIM subscription keys (RSA-OAEP-256). Required when `KeyProtection__Provider` is `KeyVault` |
-| `KeyProtection__Provider` | Config / env var | `KeyVault` (default; cloud) or `DataProtection` (machine-local key ring — accepted in the `local` environment only; the API refuses to start with it anywhere else) |
-| `Azure__FoundrySubscriptionId` | Config / env var | Azure subscription ID containing Foundry |
-| `Azure__FoundryResourceGroup` | Config / env var | Resource group containing the Foundry account |
-| `Azure__FoundryAccountName` | Config / env var | Foundry account name (short name) |
-| `Graph__ClientId` | Config / env var | App registration client ID for Graph SDK (may differ from AzureAd__ClientId) |
-| `Graph__ClientSecret` | Key Vault secret | Client secret for Graph app-only credentials |
+| `ASPNETCORE_ENVIRONMENT` | env var | `qa` or `prod` (lowercase; `local` is docker-only) |
+| `AZURE_CLIENT_ID` | env var | Client id of the API's user-assigned managed identity — selects it in the token credential chain |
+| `Azure__KeyVaultUrl` | env var | Key Vault URI for `@KeyVault()` reference resolution; absent locally, which skips resolution |
+| `ConnectionStrings__FoundryGate` | env var | Azure SQL connection string, `Authentication=Active Directory Default` (no password) |
+| `AzureAd__Instance` | env var | Entra cloud instance (`https://login.microsoftonline.com/` in the public cloud) |
+| `AzureAd__TenantId` | env var | Entra tenant ID for bearer token validation |
+| `AzureAd__ClientId` | env var | Entra App Registration client ID |
+| `AzureAd__Audience` | env var | Token audience (usually `api://{clientId}`) |
+| `Cors__AllowedOrigins__0` | env var | The Static Web App origin allowed to call `/api/v1` |
+| `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | env var | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` |
+| `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl` | env var | Where the APIM instance lives — for subscription create/rotate/delete and alias named-value edits. `ApimName` without the subscription/resource group fails startup; with all three absent the `/keys/*` routes answer `503` locally (and a `qa`/`prod` host refuses to start) |
+| `Gateway__FoundryAccountNames__{i}` | env var | Foundry account names in pool order (index 0 = primary) — the API manages OpenAI model deployments in exactly these accounts. The whole `Gateway` section may be absent locally (no gateway to manage; `/foundry/*` then answers `503`); account names without a subscription/resource group fail startup |
+| `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | env var | Workspace GUID (what the Log Analytics query API calls the workspace id) / ARM resource id |
+| `Gateway__KeyEncryptionKeyUri` | env var | Versionless URI of the Key Vault RSA key (`fg-apim-key-encryption`) that wraps stored APIM subscription keys (RSA-OAEP-256). The API resolves the key's current version per wrap (5-minute cache) and pins each stored value to the version that wrapped it, so a Key Vault key rotation needs no redeploy or re-encryption. Required when `KeyProtection__Provider` is `KeyVault` |
+| `KeyProtection__Provider` | env var | `KeyVault` (default; cloud) or `DataProtection` (machine-local key ring — accepted in the `local` environment only; the API refuses to start with it anywhere else) |
+| `Entra__Enabled` | env var | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` (see the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)). While `false`, the sync endpoints return `400`. |
+| `Entra__ServicePrincipalObjectId` | env var | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application. |
+| `Entra__GraphBaseUrl` | env var | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it). |
 
 ---
 
 ## Function App settings
 
-Azure Functions shares the SQL connection string and Azure identity settings but adds:
+Azure Functions (Flex Consumption) gets the same `Azure__*`, `ConnectionStrings__*`,
+`OpenTelemetry__*` and `Gateway__*` settings as the API, with its own identity in
+`AZURE_CLIENT_ID`, plus:
 
 | Key | Description |
 |---|---|
-| `Azure__MonitorWorkspaceId` | Log Analytics workspace ID used by `UsageSyncFunction` to query token metrics |
-| `AzureWebJobsStorage` | Storage account connection string (required by Functions runtime) |
+| `AZURE_FUNCTIONS_ENVIRONMENT` / `DOTNET_ENVIRONMENT` | `qa` or `prod` — the Functions host reads the first, the isolated worker's generic host the second |
+| `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage__credential=managedidentity` / `AzureWebJobsStorage__clientId` | Identity-based host storage. There is no storage connection string: shared-key access is disabled on the account |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Functions host telemetry |

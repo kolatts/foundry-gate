@@ -122,6 +122,18 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   New action/target kinds are constants in Domain's `AuditActions` / `AuditTargetTypes`,
   never inline strings. `details` is JSON-serialized (camelCase, cycles ignored) — pass
   the fields you mean rather than a tracked entity, and never a key or token.
+- **External side effects have a commit point.** When a service mutates something outside
+  the database (ARM, APIM, Graph), resolve the actor and do every refusal *before* the
+  call; once the external system has accepted the change, the audit row and
+  `SaveChangesAsync` run on `CancellationToken.None` — a client that disconnects mid-call
+  must not turn an accepted change into an unaudited one. The residual "save failed after
+  the external system accepted" orphan is logged at Error with the change's full identity
+  and rethrown (precedent: `FoundryDeploymentService.AuditAfterCommitAsync`).
+- **Optional external features throw `FeatureNotConfiguredException` (503)** — from
+  `FoundryGate.Domain.Exceptions` — when their configuration is absent or names a resource
+  Azure does not have. It is a server problem the operator fixes from the message, so the
+  message goes on the wire: name configuration keys and resource names, never resource-group
+  names, ids or secrets. Not a 404 (the caller's resource may exist) and not a bare 500.
 - **Paging**: bind `[FromQuery] PagedRequest paging` (alongside any `[FromQuery]` filter
   record) and finish the query with `.OrderBy(...).Select(projection).ToPagedAsync(paging, ct)`
   (`FoundryGate.Data.Extensions`) → `PagedResult<T>`. Order deterministically first;
@@ -141,7 +153,14 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   ordering and date-range filters translate; the SQL Server model is untouched. Known
   test-only divergence: values read back from SQLite always carry `+00:00` (the instant
   is preserved, the original offset is not), where SQL Server's `datetimeoffset` keeps
-  it — assert on instants, never on `.Offset`.
+  it — assert on instants, never on `.Offset`. **Factory configuration goes through
+  `IWebHostBuilder.UseSetting`, never `ConfigureAppConfiguration`**: with minimal hosting
+  the latter's sources are appended only after `Program.cs` has already run
+  `Configuration.Get<AppSettings>()` and registered the singleton, so they reach
+  `IConfiguration` but not the bound options (verified); host settings are in place before
+  `Program.cs`'s first line, which is also how `UseEnvironment` gets through. External
+  systems (ARM, APIM, Graph) are fakes owned by the factory (`FoundryClient` is the
+  precedent) — never a live client.
 
 ## Schema pipeline (no EF migrations)
 

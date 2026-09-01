@@ -17,7 +17,7 @@ const ariaLabel =
   'the request path: Entra ID signs users in and is the source of users and groups; the Blazor UI on ' +
   'Azure Static Web Apps calls FoundryGate.Api on Azure Container Apps, which stores state in Azure SQL ' +
   'through EF Core; FoundryGate.Functions run the monthly reset and usage reconciliation, reading ' +
-  'ApiManagementGatewayLlmLog from Log Analytics; Key Vault holds secrets. The API manages APIM ' +
+  'ApiManagementGatewayLlmLog from Log Analytics; Key Vault holds the APIM key-encryption key (no client secrets; Graph is called as the API identity). The API manages APIM ' +
   'subscriptions through the Management API: create under a tier product, regenerate both keys, move tier, delete. ' +
   'Legend: solid azure arrows are the real-time enforcement path on the request; dashed grey arrows are telemetry ' +
   'and reconciliation, out of band; dashed amber arrows are control-plane calls for lifecycle and tiers.';
@@ -216,7 +216,7 @@ const ariaLabel =
       <div class="fgd-node fgd-node--app">
         <div class="fgd-node__title">Azure Key Vault</div>
         <div class="fgd-node__sub">
-          Graph client secret · connection secrets<br />
+          <code>fg-apim-key-encryption</code> key · no app secrets (Graph uses the API identity)<br />
           <code>@KeyVault(...)</code> references resolved at startup
         </div>
       </div>

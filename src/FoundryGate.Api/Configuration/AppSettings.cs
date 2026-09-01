@@ -35,77 +35,16 @@ public class AppSettings
     /// with docker SQL and no Azure connectivity at all.</summary>
     public AzureOptions Azure { get; set; } = new();
 
-    /// <summary>
-    /// Where the gateway lives (#108): APIM addressing for subscription lifecycle calls and the
-    /// Key Vault key that wraps stored APIM keys. Set by <c>infra/modules/control-plane.bicep</c> as
-    /// <c>Gateway__*</c> environment variables; optional locally (no APIM → the key endpoints answer
-    /// with a clear "not configured" error, everything else runs).
-    /// </summary>
+    /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108). Optional
+    /// as a whole — absent locally; <c>/foundry/*</c> needs it (see <see cref="GatewayOptions"/>).</summary>
     public GatewayOptions Gateway { get; set; } = new();
+
+    /// <summary>Microsoft Graph directory sync (#40/#41). Off by default so local dev and the test
+    /// host never need Graph connectivity or Graph application roles.</summary>
+    public EntraOptions Entra { get; set; } = new();
 
     /// <summary>How <c>User.ApimSubscriptionKey</c> is encrypted at rest (#95).</summary>
     public KeyProtectionOptions KeyProtection { get; set; } = new();
-}
-
-/// <summary>
-/// Gateway addressing bound from the <c>Gateway</c> section — the keys
-/// <c>infra/modules/control-plane.bicep</c> sets on both hosts (#108), so nobody types ARM ids into
-/// <c>SystemConfiguration</c> by hand. This wave binds the APIM and key-wrapping subset; the Foundry
-/// (#61) and reconciliation (#84) waves add <c>ApimGatewayUrl</c>, <c>LogAnalyticsWorkspaceId</c> and
-/// <c>FoundryAccountNames</c> to this same class.
-/// </summary>
-public class GatewayOptions : IValidatableObject
-{
-    /// <summary>Azure subscription id that holds the APIM instance (<c>Gateway__SubscriptionId</c>).</summary>
-    public string? SubscriptionId { get; set; }
-
-    /// <summary>Resource group of the APIM instance (<c>Gateway__ResourceGroup</c>).</summary>
-    public string? ResourceGroup { get; set; }
-
-    /// <summary>APIM service name — the short name, not the ARM id (<c>Gateway__ApimName</c>).</summary>
-    public string? ApimName { get; set; }
-
-    /// <summary>
-    /// Versionless Key Vault key URI (<c>https://{vault}.vault.azure.net/keys/fg-apim-key-encryption</c>)
-    /// of the RSA key that wraps APIM subscription keys before they are stored (#95;
-    /// <c>Gateway__KeyEncryptionKeyUri</c>). Versionless so a Key Vault key rotation needs no redeploy —
-    /// each stored envelope records the exact key version that wrapped it. Required when
-    /// <see cref="KeyProtectionOptions.Provider"/> is <see cref="KeyProtectionProviderType.KeyVault"/>.
-    /// </summary>
-    public string? KeyEncryptionKeyUri { get; set; }
-
-    /// <summary><see langword="true"/> when all three APIM addressing values are present, i.e. the Api can reach the APIM management plane.</summary>
-    public bool IsApimConfigured =>
-        !string.IsNullOrWhiteSpace(SubscriptionId)
-        && !string.IsNullOrWhiteSpace(ResourceGroup)
-        && !string.IsNullOrWhiteSpace(ApimName);
-
-    /// <summary>
-    /// The three APIM values are all-or-nothing — a partially addressed APIM instance is a
-    /// misconfiguration, not "APIM off" — and the key URI, when present, must be an absolute
-    /// <c>https</c> URI (the shape <c>CryptographyClient</c> accepts).
-    /// </summary>
-    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
-    {
-        var anyApim = !string.IsNullOrWhiteSpace(SubscriptionId)
-            || !string.IsNullOrWhiteSpace(ResourceGroup)
-            || !string.IsNullOrWhiteSpace(ApimName);
-
-        if (anyApim && !IsApimConfigured)
-        {
-            yield return new ValidationResult(
-                $"{nameof(SubscriptionId)}, {nameof(ResourceGroup)} and {nameof(ApimName)} must all be set (or all be empty) to address the APIM instance.",
-                [nameof(SubscriptionId), nameof(ResourceGroup), nameof(ApimName)]);
-        }
-
-        if (!string.IsNullOrWhiteSpace(KeyEncryptionKeyUri)
-            && (!Uri.TryCreate(KeyEncryptionKeyUri, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps))
-        {
-            yield return new ValidationResult(
-                $"{nameof(KeyEncryptionKeyUri)} must be an absolute https URI of a Key Vault key.",
-                [nameof(KeyEncryptionKeyUri)]);
-        }
-    }
 }
 
 /// <summary>Which <c>IKeyProtector</c> encrypts <c>User.ApimSubscriptionKey</c> at rest (#95).</summary>

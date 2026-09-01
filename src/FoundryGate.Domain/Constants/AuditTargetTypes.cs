@@ -27,6 +27,6 @@ public static class AuditTargetTypes
     /// <summary>A <c>SystemConfiguration</c> row; <c>TargetId</c> is the configuration <c>Key</c>.</summary>
     public const string SystemConfiguration = "SystemConfiguration";
 
-    /// <summary>An Azure AI Foundry model deployment; <c>TargetId</c> is the deployment name.</summary>
+    /// <summary>An Azure AI Foundry model deployment; <c>TargetId</c> is <c>{accountName}/{deploymentName}</c> — the gateway runs one account per region, so the name alone is ambiguous for pooled models.</summary>
     public const string FoundryDeployment = "FoundryDeployment";
 }
