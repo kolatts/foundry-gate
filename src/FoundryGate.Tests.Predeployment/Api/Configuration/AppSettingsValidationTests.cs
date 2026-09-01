@@ -44,7 +44,8 @@ public class AppSettingsValidationTests
         Assert.Null(exception);
     }
 
-    private static AppSettings ValidAppSettings() =>
+    /// <summary>A minimal valid settings object — shared with <see cref="GatewayTierOptionsTests"/>, which breaks one section at a time.</summary>
+    internal static AppSettings ValidAppSettings() =>
         new()
         {
             AzureAd = new AzureAdOptions
@@ -57,5 +58,6 @@ public class AppSettingsValidationTests
             {
                 FoundryGate = "Server=localhost;Database=FoundryGate;",
             },
+            Gateway = Support.TestGatewayTiers.Options(),
         };
 }

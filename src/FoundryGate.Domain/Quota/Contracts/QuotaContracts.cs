@@ -19,6 +19,8 @@ namespace FoundryGate.Domain.Quota.Contracts;
 /// <param name="QuotaAllocationId">Surrogate int PK.</param>
 /// <param name="UserId">Owning user's int PK.</param>
 /// <param name="UserUnique">Owning user's externally-shared stable id.</param>
+/// <param name="UserDisplayName">Owning user's display name, denormalized for the admin list (issue #33: "with user info").</param>
+/// <param name="UserEmail">Owning user's email, denormalized for the admin list.</param>
 /// <param name="PeriodYear">Calendar year of the billing period.</param>
 /// <param name="PeriodMonth">Calendar month (1-12) of the billing period.</param>
 /// <param name="IsUnlimited">Derived: true when <paramref name="AllocatedTokens"/> is null.</param>
@@ -30,11 +32,26 @@ namespace FoundryGate.Domain.Quota.Contracts;
 /// quota exhaustion — quota exhaustion alone never sets this; the gateway just starts
 /// returning 403 until the next monthly reset.
 /// </param>
-/// <param name="ResetDate">When this period's allocation row was last (re)computed, e.g. by the monthly reset job.</param>
+/// <param name="ResolvedLevelType">Which level of the five-level precedence chain produced <paramref name="AllocatedTokens"/> — so the UI can say "from your group Platform Engineering" rather than just a number.</param>
+/// <param name="TierProductId">
+/// The APIM tier product (<see cref="Constants.GatewayTiers"/>) the numeric quota mapped to — the
+/// smallest tier whose cap covers it. <b>This is what the gateway enforces</b>, not
+/// <paramref name="AllocatedTokens"/>: APIM's <c>token-quota</c> is a per-product literal, so a
+/// developer on the Standard tier is cut off at that tier's cap, whatever their numeric quota says.
+/// </param>
+/// <param name="IsGatewayCapped">
+/// True when <paramref name="AllocatedTokens"/> exceeds every finite tier's cap, so the developer
+/// landed on the largest finite tier and the gateway will 403 at <em>that tier's</em> cap, below
+/// their numeric quota. Surfaced so admins can see the allocation is not fully honoured and either
+/// raise the tier caps (infra) or grant unlimited.
+/// </param>
+/// <param name="ResetDate">When this period's allocation row was last (re)computed by a monthly/manual reset; null for a row created on demand (first <c>/me</c> of the month).</param>
 public record QuotaAllocationResponse(
     int QuotaAllocationId,
     int UserId,
     Guid UserUnique,
+    string UserDisplayName,
+    string UserEmail,
     int PeriodYear,
     int PeriodMonth,
     bool IsUnlimited,
@@ -42,7 +59,19 @@ public record QuotaAllocationResponse(
     long TokensUsed,
     double? PercentUsed,
     bool IsHardStopped,
+    QuotaLevelType ResolvedLevelType,
+    string TierProductId,
+    bool IsGatewayCapped,
     DateTimeOffset? ResetDate);
 
-/// <summary>Result of POST /quota/reset (spec &#167;6, admin-triggered manual reset).</summary>
-public record QuotaResetResult(int UsersResetCount, DateTimeOffset ResetDate);
+/// <summary>
+/// Result of POST /quota/reset (spec &#167;6, admin-triggered manual reset). Idempotent: every
+/// active user's allocation for the current UTC calendar month is (re)resolved; rows that already
+/// exist keep their reconciled <c>TokensUsed</c> (the gateway's monthly window resets itself — issue
+/// #10 direction update — so zeroing the mirror mid-month would just make the dashboard lie).
+/// </summary>
+/// <param name="UsersResetCount">Active users whose allocation was created or re-resolved.</param>
+/// <param name="PeriodYear">Calendar year (UTC) of the period that was reset.</param>
+/// <param name="PeriodMonth">Calendar month (UTC, 1-12) of the period that was reset.</param>
+/// <param name="ResetDate">When the reset ran — also written to every touched row's <c>ResetDate</c>.</param>
+public record QuotaResetResult(int UsersResetCount, int PeriodYear, int PeriodMonth, DateTimeOffset ResetDate);

@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+using FoundryGate.Domain.Quota;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -9,7 +11,13 @@ namespace FoundryGate.Data.Entities;
 /// this row is what the monthly-reset Function writes after resolving quota tiers, and what
 /// reconciliation compares consumption against; it is not read on the request hot path.
 /// </summary>
+/// <remarks>
+/// The <c>(PeriodYear, PeriodMonth)</c> index backs <c>GET /quota/allocations</c>, whose every page
+/// filters on the current period; the unique index leads with <c>UserId</c> so it cannot serve that
+/// seek.
+/// </remarks>
 [Index(nameof(UserId), nameof(PeriodYear), nameof(PeriodMonth), IsUnique = true)]
+[Index(nameof(PeriodYear), nameof(PeriodMonth))]
 public class QuotaAllocation
 {
     public int QuotaAllocationId { get; set; }
@@ -38,7 +46,28 @@ public class QuotaAllocation
     /// </summary>
     public bool IsHardStopped { get; set; }
 
-    /// <summary><see langword="null"/> until the monthly-reset Function first (re)creates this period's row.</summary>
+    /// <summary>Which level of the five-level precedence chain produced <see cref="AllocatedTokens"/> (issue #32).</summary>
+    public QuotaLevelType ResolvedLevelType { get; set; }
+
+    /// <summary>
+    /// The APIM tier product (<c>FoundryGate.Domain.Constants.GatewayTiers</c>) the resolved quota
+    /// mapped to — the smallest tier whose configured cap covers <see cref="AllocatedTokens"/>, or the
+    /// unlimited tier. This, not the numeric quota, is what the gateway enforces: <c>token-quota</c>
+    /// is a per-product literal (#82), so the developer's subscription is issued against this product.
+    /// </summary>
+    [Required]
+    [StringLength(64)]
+    public string TierProductId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// True when <see cref="AllocatedTokens"/> exceeds every finite tier's cap: the developer landed
+    /// on the largest finite tier and the gateway will 403 at that tier's cap, below their numeric
+    /// quota. A real, user-visible semantic — surfaced so admins know the allocation is not fully
+    /// honoured until the tier caps are raised (infra) or the user is made unlimited.
+    /// </summary>
+    public bool IsGatewayCapped { get; set; }
+
+    /// <summary><see langword="null"/> until a monthly/manual reset first (re)resolves this period's row; a row created on demand (first <c>/me</c> of the month) has none.</summary>
     public DateTimeOffset? ResetDate { get; set; }
 
     // Navigation

@@ -1,5 +1,7 @@
 using Bogus;
 using FoundryGate.Data.Entities;
+using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Quota;
 using FoundryGate.Domain.Requests;
 using Microsoft.EntityFrameworkCore;
 
@@ -116,6 +118,9 @@ public static class TestDataSeeder
                 _ => 0.77
             };
 
+            // Every demo user carries a per-user setting (MonthlyTokenQuota or IsUnlimited), so the
+            // resolution level is always user-level here; the demo quotas (≤ 2M) all fit the Standard
+            // tier's 5M cap as shipped in infra/main.bicep, so nothing is gateway-capped.
             allocations.Add(new QuotaAllocation
             {
                 UserId = user.UserId,
@@ -123,6 +128,8 @@ public static class TestDataSeeder
                 PeriodMonth = now.Month,
                 AllocatedTokens = allocated,
                 TokensUsed = allocated is null ? 42_000 : (long)(allocated.Value * usedFraction),
+                ResolvedLevelType = allocated is null ? QuotaLevelType.UserUnlimited : QuotaLevelType.UserOverride,
+                TierProductId = allocated is null ? GatewayTiers.Unlimited : GatewayTiers.Standard,
                 ResetDate = new DateTimeOffset(now.Year, now.Month, 1, 0, 0, 0, TimeSpan.Zero)
             });
         }

@@ -34,6 +34,16 @@ public class AppSettings
     /// <see cref="AzureOptions.KeyVaultUrl"/> skips resolution entirely so local dev runs
     /// with docker SQL and no Azure connectivity at all.</summary>
     public AzureOptions Azure { get; set; } = new();
+
+    /// <summary>
+    /// The gateway's quota tier products and their monthly caps (<c>Gateway:Tiers</c>), which quota
+    /// resolution maps every numeric allocation onto (issue #32). Always required — every allocation
+    /// needs a tier — with the shipped defaults in <c>appsettings.json</c> mirroring
+    /// <c>infra/main.bicep</c>'s <c>quotaTiers</c>. #108 folds this into a wider <c>GatewayOptions</c>
+    /// (same <c>Gateway</c> section) when the infra-emitted addressing settings land.
+    /// </summary>
+    [Required]
+    public GatewayTierOptions Gateway { get; set; } = new();
 }
 
 /// <summary>

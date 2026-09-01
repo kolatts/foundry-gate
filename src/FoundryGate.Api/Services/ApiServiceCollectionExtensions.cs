@@ -1,5 +1,6 @@
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
+using FoundryGate.Api.Services.Quota;
 
 namespace FoundryGate.Api.Services;
 
@@ -20,6 +21,7 @@ public static class ApiServiceCollectionExtensions
 
         services.AddIdentityServices();
         services.AddAuditServices();
+        services.AddQuotaServices();
 
         return services;
     }
