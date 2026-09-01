@@ -28,19 +28,29 @@ Blank values (`""`) are deliberate placeholders. The system will not function co
 
 ## API environment variables / appsettings
 
-These are set as Container App environment variables (sourced from Key Vault references for secrets).
+Set as Container App environment variables by `infra/modules/control-plane.bicep` — the
+Bicep is the source of truth for names and values, and the
+[Infrastructure Reference](/foundry-gate/reference/infrastructure/) lists them per host.
+None of them is a secret: SQL uses Entra authentication, so even the connection string is
+plain configuration. Secrets, when one is ever needed, are set out of band in Key Vault
+and referenced from appsettings as `@KeyVault(SecretName)`.
 
 | Key | Source | Description |
 |---|---|---|
-| `ConnectionStrings__Foundry Gate` | Key Vault secret | Azure SQL connection string |
-| `AzureAd__TenantId` | Config / env var | Entra tenant ID for bearer token validation |
-| `AzureAd__ClientId` | Config / env var | Entra App Registration client ID |
-| `AzureAd__Audience` | Config / env var | Token audience (usually `api://{clientId}`) |
-| `Azure__ApimResourceGroup` | Config / env var | Resource group containing the APIM instance |
-| `Azure__ApimServiceName` | Config / env var | APIM service name (short name, not full resource ID) |
-| `Azure__FoundrySubscriptionId` | Config / env var | Azure subscription ID containing Foundry |
-| `Azure__FoundryResourceGroup` | Config / env var | Resource group containing the Foundry account |
-| `Azure__FoundryAccountName` | Config / env var | Foundry account name (short name) |
+| `ASPNETCORE_ENVIRONMENT` | env var | `qa` or `prod` (lowercase; `local` is docker-only) |
+| `AZURE_CLIENT_ID` | env var | Client id of the API's user-assigned managed identity — selects it in the token credential chain |
+| `Azure__KeyVaultUrl` | env var | Key Vault URI for `@KeyVault()` reference resolution; absent locally, which skips resolution |
+| `ConnectionStrings__FoundryGate` | env var | Azure SQL connection string, `Authentication=Active Directory Default` (no password) |
+| `AzureAd__Instance` | env var | Entra cloud instance (`https://login.microsoftonline.com/` in the public cloud) |
+| `AzureAd__TenantId` | env var | Entra tenant ID for bearer token validation |
+| `AzureAd__ClientId` | env var | Entra App Registration client ID |
+| `AzureAd__Audience` | env var | Token audience (usually `api://{clientId}`) |
+| `Cors__AllowedOrigins__0` | env var | The Static Web App origin allowed to call `/api/v1` |
+| `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | env var | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` |
+| `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl` | env var | Where the APIM instance lives — for subscription create/rotate/delete and alias named-value edits |
+| `Gateway__FoundryAccountNames__{i}` | env var | Foundry account names in pool order (index 0 = primary) — for model deployment management |
+| `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | env var | Workspace GUID (what the Log Analytics query API calls the workspace id) / ARM resource id |
+| `Gateway__KeyEncryptionKeyUri` | env var | Versionless Key Vault key URI for wrapping APIM subscription keys at rest |
 | `Azure__KeyVaultUri` | Config / env var | Key Vault URI for key wrapping (APIM key encryption) |
 | `Entra__Enabled` | Config / env var | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `User.Read.All`, `GroupMember.Read.All` and `Application.Read.All`. While `false`, the sync endpoints return `400`. |
 | `Entra__ServicePrincipalObjectId` | Config / env var | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application. |
@@ -50,9 +60,12 @@ These are set as Container App environment variables (sourced from Key Vault ref
 
 ## Function App settings
 
-Azure Functions shares the SQL connection string and Azure identity settings but adds:
+Azure Functions (Flex Consumption) gets the same `Azure__*`, `ConnectionStrings__*`,
+`OpenTelemetry__*` and `Gateway__*` settings as the API, with its own identity in
+`AZURE_CLIENT_ID`, plus:
 
 | Key | Description |
 |---|---|
-| `Azure__MonitorWorkspaceId` | Log Analytics workspace ID used by `UsageSyncFunction` to query token metrics |
-| `AzureWebJobsStorage` | Storage account connection string (required by Functions runtime) |
+| `AZURE_FUNCTIONS_ENVIRONMENT` / `DOTNET_ENVIRONMENT` | `qa` or `prod` — the Functions host reads the first, the isolated worker's generic host the second |
+| `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage__credential=managedidentity` / `AzureWebJobsStorage__clientId` | Identity-based host storage. There is no storage connection string: shared-key access is disabled on the account |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Functions host telemetry |
