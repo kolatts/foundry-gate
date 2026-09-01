@@ -169,6 +169,21 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   `Program.cs`'s first line, which is also how `UseEnvironment` gets through. External
   systems (ARM, APIM, Graph) are fakes owned by the factory (`FoundryClient` is the
   precedent) — never a live client.
+- **Request DTOs are init-property records; response DTOs are positional records.** A
+  `*Request` body is `public record X { [Required, StringLength(n)] public string Name
+  { get; init; } = string.Empty; … }` — attributes on the properties, `= string.Empty` on
+  every non-nullable string so a missing JSON field is a field-level `[Required]` 400 rather
+  than a `$`-level deserialization error. Never a positional record with `[property: …]`
+  (MVC throws at bind time → 500 on every body of that type, #128) and never attributes on
+  the constructor parameters (MVC is happy, but `Validator` and Blazor's
+  `DataAnnotationsValidator` read properties, so nothing validates). Responses are never
+  bound by MVC, so they stay positional (`public record Y(int Id, string Name);`).
+  `DomainArchitectureTests` fails the build for either broken placement;
+  `Api/Endpoints/RequestDtoBindingTests` posts each request record through the real pipeline
+  (via a test-only controller the factory registers) and asserts 400, never 500.
+- **Generated URLs are lowercase** (`RouteOptions.LowercaseUrls`, #129): `CreatedAtRoute`'s
+  `Location` reads `/api/v1/foundry/...`, route values included — so anything a route value
+  identifies must resolve case-insensitively (Foundry account and deployment names do).
 
 ## Schema pipeline (no EF migrations)
 
