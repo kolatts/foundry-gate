@@ -3,6 +3,7 @@ using Azure.Security.KeyVault.Secrets;
 using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Extensions;
 using FoundryGate.Api.Middleware;
+using FoundryGate.Api.Services;
 using FoundryGate.Data;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
@@ -49,6 +50,10 @@ builder.Services.AddSingleton(appSettings);
 
 // Data layer (#92): AppDbContext, TimestampInterceptor, TimeProvider.
 builder.Services.AddFoundryGateData(appSettings.ConnectionStrings.FoundryGate);
+
+// Application services: the ONE call for every Services/<Area> group (each area registers itself
+// from Services/ServiceCollectionExtensions.cs — add areas there, not here).
+builder.Services.AddFoundryGateApiServices();
 
 // Entra ID bearer auth (spec §4: "all endpoints require a valid Entra ID bearer token";
 // §11: "FoundryGate.Admin app role in Entra"). PolicyNames.AdminOnly gates admin-only

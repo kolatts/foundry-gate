@@ -14,7 +14,10 @@ namespace FoundryGate.Domain.Constants;
 /// </summary>
 public static class AuditActions
 {
-    // -- Users (spec 4.1) --
+    // -- Users (spec 4.1, 7.1) --
+
+    /// <summary>First-login auto-provisioning via GET /users/me (spec &#167;7.1).</summary>
+    public const string UserProvisioned = "user.provisioned";
 
     /// <summary>PUT /users/{id}/activate.</summary>
     public const string UserActivated = "user.activated";
@@ -44,6 +47,12 @@ public static class AuditActions
     /// <summary>The scheduled monthly reset job (spec &#167;6, exact string from spec).</summary>
     public const string QuotaMonthlyReset = "quota.monthly-reset";
 
+    /// <summary>POST /quota/reset — an admin manually triggering the (idempotent) reset outside the schedule.</summary>
+    public const string QuotaAllocationReset = "quota.reset";
+
+    /// <summary>POST /requests — a developer (or an admin on their behalf) submitting a quota increase request.</summary>
+    public const string QuotaIncreaseSubmitted = "quota.requested";
+
     /// <summary>PUT /requests/{id}/approve (spec &#167;3.1, exact example string from spec).</summary>
     public const string QuotaIncreaseApproved = "quota.approved";
 
@@ -58,6 +67,19 @@ public static class AuditActions
     public const string KeyRotated = "key.rotated";
 
     public const string KeyRevoked = "key.revoked";
+
+    /// <summary>A developer revealing their own full key (spec &#167;11: "reveal action fetches directly, not stored in browser").</summary>
+    public const string KeyRevealed = "key.revealed";
+
+    // -- Usage sync (spec 5.4, issue #39) --
+
+    /// <summary>The Log Analytics → <c>QuotaAllocation.TokensUsed</c> reconciliation job (reconciliation, not enforcement).</summary>
+    public const string UsageSynced = "usage.synced";
+
+    // -- Foundry model deployments (issue #61) --
+
+    public const string FoundryDeploymentCreated = "foundry.deployment.created";
+    public const string FoundryDeploymentDeleted = "foundry.deployment.deleted";
 
     // -- Config (spec 4.6) --
 

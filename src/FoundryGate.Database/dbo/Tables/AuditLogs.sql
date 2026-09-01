@@ -20,3 +20,7 @@ GO
 CREATE NONCLUSTERED INDEX [IX_AuditLogs_ActorUserId]
     ON [dbo].[AuditLogs]([ActorUserId] ASC);
 GO
+
+CREATE NONCLUSTERED INDEX [IX_AuditLogs_OccurredDate]
+    ON [dbo].[AuditLogs]([OccurredDate] ASC);
+GO

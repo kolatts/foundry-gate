@@ -1,6 +1,7 @@
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Interceptors;
+using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.EntityFrameworkCore;
 
 namespace FoundryGate.Tests.Predeployment.Data;
@@ -78,15 +79,5 @@ public class TimestampInterceptorTests : IDisposable
         _context.Database.EnsureDeleted();
         _context.Dispose();
         GC.SuppressFinalize(this);
-    }
-
-    /// <summary>Fake clock whose "now" can be advanced mid-test, unlike a fixed-value stub.</summary>
-    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        private DateTimeOffset _now = now;
-
-        public override DateTimeOffset GetUtcNow() => _now;
-
-        public void SetUtcNow(DateTimeOffset value) => _now = value;
     }
 }
