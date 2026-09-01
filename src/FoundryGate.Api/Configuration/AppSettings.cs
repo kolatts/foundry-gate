@@ -35,6 +35,10 @@ public class AppSettings
     /// with docker SQL and no Azure connectivity at all.</summary>
     public AzureOptions Azure { get; set; } = new();
 
+    /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108). Optional
+    /// as a whole — absent locally; <c>/foundry/*</c> needs it (see <see cref="GatewayOptions"/>).</summary>
+    public GatewayOptions Gateway { get; set; } = new();
+
     /// <summary>Microsoft Graph directory sync (#40/#41). Off by default so local dev and the test
     /// host never need Graph connectivity or Graph application roles.</summary>
     public EntraOptions Entra { get; set; } = new();

@@ -3,6 +3,7 @@
   <ItemGroup>
     <PackageReference Include="Azure.Core" />
     <PackageReference Include="Azure.Monitor.OpenTelemetry.AspNetCore" />
+    <PackageReference Include="Azure.ResourceManager.CognitiveServices" />
     <PackageReference Include="Azure.Security.KeyVault.Secrets" />
     <PackageReference Include="Imagile.Framework.Configuration" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />

@@ -44,6 +44,44 @@ public class AppSettingsValidationTests
         Assert.Null(exception);
     }
 
+    [Fact]
+    public void ValidateRecursively_absent_Gateway_section_is_valid_and_reports_Foundry_unconfigured()
+    {
+        // Local dev has no gateway to manage: the whole section may be missing without failing startup.
+        var appSettings = ValidAppSettings();
+
+        Assert.Null(Record.Exception(appSettings.ValidateRecursively));
+        Assert.False(appSettings.Gateway.IsFoundryConfigured);
+    }
+
+    [Fact]
+    public void ValidateRecursively_Gateway_account_names_without_subscription_or_resource_group_throws()
+    {
+        // A half-set section is a deployment mistake: account names alone can't be resolved to ARM ids.
+        var appSettings = ValidAppSettings();
+        appSettings.Gateway.FoundryAccountNames = ["fgtest-eus2"];
+
+        var exception = Assert.Throws<ConfigurationValidationException>(appSettings.ValidateRecursively);
+
+        Assert.Contains("Gateway.SubscriptionId", exception.Message);
+        Assert.Contains("Gateway.ResourceGroup", exception.Message);
+    }
+
+    [Fact]
+    public void ValidateRecursively_fully_configured_Gateway_section_is_valid_and_reports_Foundry_configured()
+    {
+        var appSettings = ValidAppSettings();
+        appSettings.Gateway = new GatewayOptions
+        {
+            SubscriptionId = "00000000-0000-0000-0000-000000000001",
+            ResourceGroup = "rg-foundrygate-test",
+            FoundryAccountNames = ["fgtest-eus2", "fgtest-swc"],
+        };
+
+        Assert.Null(Record.Exception(appSettings.ValidateRecursively));
+        Assert.True(appSettings.Gateway.IsFoundryConfigured);
+    }
+
     private static AppSettings ValidAppSettings() =>
         new()
         {
