@@ -29,7 +29,9 @@ control plane; APIM is the data plane.
 
 ### llm-token-limit policies via tiered products (#82)
 
-Quota tiers are APIM **products** (Standard / Power / Unlimited). Each product policy:
+Quota tiers are APIM **products** (Standard / Power / Unlimited), one rendered policy
+per tier from `infra/policies/product-policy.xml` via the `quotaTiers` param. Each
+product policy:
 
 ```xml
 <llm-token-limit
@@ -43,20 +45,42 @@ Quota tiers are APIM **products** (Standard / Power / Unlimited). Each product p
     remaining-tokens-header-name="x-fg-remaining-tpm" />
 ```
 
-Quota exhaustion → 403 in real time; TPM burst → 429 + Retry-After. **PoC task**:
-determine whether `token-quota`/`tokens-per-minute` accept policy expressions; if yes,
-per-user arbitrary values come from `cache-lookup-value` and tiers collapse into one
-product. Until then, the five-level quota resolution (#32) resolves to a **tier**, and
-"set user quota" = move subscription between products. Verify Anthropic-path counting
-against Claude's `usage` block (cache tokens divergence) and document.
+Quota exhaustion → 403 in real time; TPM burst → 429 + Retry-After.
+
+**PoC answered (live, 2026-09-01): `token-quota` REJECTS policy expressions** —
+"Expression return type 'System.Int32' is not allowed". Per-user arbitrary quotas in a
+single policy are impossible, so **tiers-as-products is the design**: the five-level
+quota resolution (#32) resolves to a **tier**, and "set user quota" = issue/move the
+developer's APIM subscription against another tier product. Still to verify live:
+Anthropic-path counting against Claude's `usage` block (cache-token divergence).
+
+**Scope split (implemented).** APIM evaluates inbound as global → product → API (an API
+policy's `<base />` expands the product policy), which fixes where each concern must go:
+
+| Scope | Owns | Why |
+|---|---|---|
+| Product (`product-policy.xml`, rendered per tier) | model allowlist (#86 fragment), `tokens-per-minute`, `token-quota` | Entitlement. `token-quota` is a literal, so it must be rendered per tier; and everything that has to run *before* token counting must live in the outer scope. |
+| API (`anthropic-api.xml`, `openai-api.xml`) | credential stripping + MI backend auth, default backend, retry/streaming, token metrics | Mechanism. Identical for every tier, so it renders once per API. |
+
+`llm-token-limit` is declared in **exactly one** scope (the product). Declaring it at
+both scopes would count every request twice; `scripts/validate-policies.ps1` asserts
+this statically.
 
 ### Backend pools + circuit breakers (#83)
 
-One pool per model family. Primary deployment priority 1; secondary (other region /
-DataZone / Anthropic-hosted variant) priority 2. Circuit breaker per backend: trip on
+One pool per model family. The Anthropic pool is generated from `foundryRegions`: the
+**first region is priority 1**, every later region **priority 2** — spillover, not
+round-robin, so normal traffic stays in-region (latency + Claude prompt-cache affinity)
+and the other regions are standing headroom. Circuit breaker per backend: trip on
 429/5xx, `acceptRetryAfter: true`. `retry` in the backend policy section retries onto
 the pool (across backends, same model+version only). While priority-1 breakers are
-tripped, traffic drains to priority 2; 503 only when the whole pool is down.
+tripped, traffic drains to priority 2; 503 only when the whole pool is down. Weight is
+only meaningful *within* a priority group; both are overridable per account.
+
+What multi-region pooling does **not** buy: Claude GlobalStandard quota is pooled
+per-subscription per-model across regions, so a second region multiplies *availability*
+against deployment-level throttling, not the subscription's token budget. Extra
+*subscriptions* are what multiply Claude headroom (see D-009).
 
 ### Metrics + reconciliation (#84)
 
@@ -92,11 +116,51 @@ actually sends (wire-verified 2026-09-01): `x-api-key` for the Anthropic front d
 Rewrite `docs-site/.../getting-started/cli-setup.mdx` (current Claude Code instructions
 are wrong) and spec the `/me` "Configure your CLI" panel to emit these snippets.
 
+## Files
+
+- [x] `infra/main.bicep` — `quotaTiers` + `productModelAliases` params, pool
+      priority/weight derived from the `foundryRegions` index, tier product outputs
+- [x] `infra/modules/ai-gateway.bicep` — tier products + per-tier product policies,
+      priority-grouped pool, policy fragments, per-tier alias named values
+- [x] `infra/policies/product-policy.xml` — per-tier enforcement template (new)
+- [x] `infra/policies/anthropic-api.xml`, `infra/policies/openai-api.xml` — reduced to
+      API mechanics; shared preamble folded into fragments
+- [x] `infra/policies/backend-auth-fragment.xml`,
+      `infra/policies/token-metrics-fragment.xml` — shared fragments (new)
+- [x] `infra/parameters/test.bicepparam` — test-sized tiers
+- [x] `scripts/validate-policies.ps1` — offline policy-XML validation (new)
+
 ## Verification
 
-- [ ] Monthly quota 403 fires at the gateway with no sync lag (both API paths)
-- [ ] TPM cap 429 + Retry-After fires per developer; other developers unaffected
+Static verification (no live APIM exists; run against this branch):
+
+- [x] `az bicep build --file infra/main.bicep` compiles clean (only the expected BCP081
+      warnings for the 2026-07-01 CognitiveServices api-version)
+- [x] `pwsh ./scripts/validate-policies.ps1` — all six policy documents are well-formed
+      XML after the same token substitution Bicep performs, no placeholder survives, no
+      unknown placeholder exists, every `include-fragment` resolves to a fragment file,
+      and `llm-token-limit` is declared in exactly one scope
+- [x] `az deployment sub validate` against `infra/parameters/test.bicepparam`
+      (`createModelDeployments=false`) — Succeeded
+- [x] `az deployment group validate` + `what-if` of `modules/ai-gateway.bicep` — all 30
+      APIM child resources pass ARM preflight; the ARM-rendered product policies, API
+      policies and fragments re-parse as well-formed XML, the pool renders
+      priority 1 / priority 2, and each `fg-model-map-{tier}` named value renders the
+      expected alias JSON
+
+Live verification (all **pending next live deploy**):
+
+- [ ] Monthly quota 403 fires at the gateway with no sync lag (both API paths) —
+      *proved on the pre-tier, API-scope policy (T5); needs re-proof now that
+      `llm-token-limit` moved to product scope*
+- [ ] TPM cap 429 + Retry-After fires per developer; other developers unaffected —
+      *same: proved at API scope (T4), re-prove at product scope*
+- [ ] Each tier product enforces its own literal quota, and moving a subscription
+      between tier products changes the enforced budget
 - [ ] Pool failover: saturate priority-1 deployment, traffic continues via priority-2
+- [ ] `llm-emit-token-metric` accepts the `Product ID` dimension and it appears in
+      customMetrics
 - [ ] KQL rollup matches (±streaming estimate error) the tokens reported by model `usage`
-- [ ] Claude Code and Codex CLI complete real sessions through the gateway
-- [ ] Expression-support PoC documented; tier vs per-user decision recorded here
+- [ ] Claude Code and Codex CLI complete real sessions through the gateway — *Codex done
+      (T11); Claude Code blocked on a working Claude deployment (#88)*
+- [x] Expression-support PoC documented; tier vs per-user decision recorded here

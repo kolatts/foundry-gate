@@ -32,13 +32,36 @@ param foundryRegions array = ['eastus2', 'swedencentral']
 // per-model region subsets, capacity changes — is deliberately the control plane's
 // job (#60/#64): Anthropic deployments are create-once under ARM (see
 // modules/foundry.bicep), so ARM re-runs must not manage them.
+// Every Claude model reachable through the alias map must exist in EVERY pool member —
+// the Anthropic pool fails a request over to another region on a 429, and a region
+// missing the deployment would turn a throttle into a 404. Hence all Claude models are
+// pooled and only OpenAI (single-backend) models are primary-only. Model names/versions
+// verified against `az cognitiveservices model list` (eastus2 + swedencentral,
+// 2026-09-01); capacities sit well inside the subscription's GlobalStandard quota
+// (sonnet-4-5 200, haiku-4-5 80, opus-4-5 40 units).
 @description('Model deployments created in EVERY Foundry account (pooled models). format matches Microsoft.CognitiveServices deployment model.format.')
 param pooledModelDeployments array = [
+  {
+    name: 'claude-sonnet-4-5'
+    format: 'Anthropic'
+    model: 'claude-sonnet-4-5'
+    version: '20250929'
+    sku: 'GlobalStandard'
+    capacity: 10
+  }
   {
     name: 'claude-haiku-4-5'
     format: 'Anthropic'
     model: 'claude-haiku-4-5'
     version: '20251001'
+    sku: 'GlobalStandard'
+    capacity: 5
+  }
+  {
+    name: 'claude-opus-4-5'
+    format: 'Anthropic'
+    model: 'claude-opus-4-5'
+    version: '20251101'
     sku: 'GlobalStandard'
     capacity: 5
   }
@@ -59,11 +82,62 @@ param primaryOnlyModelDeployments array = [
 @description('Required by Azure for Anthropic (Claude) deployments: { industry, organizationName, countryCode }.')
 param anthropicProviderData object
 
-@description('Default per-developer tokens-per-minute cap enforced by APIM llm-token-limit.')
-param defaultDeveloperTpm int = 20000
+// Quota tiers, not per-user quotas: APIM's `token-quota` accepts LITERALS ONLY (policy
+// expressions are rejected — "Expression return type 'System.Int32' is not allowed",
+// validated live 2026-09-01), so a single policy cannot read a per-developer budget.
+// Each tier becomes an APIM product carrying its own rendered llm-token-limit policy,
+// and the control plane sets a developer's quota by issuing their APIM subscription
+// against the matching tier product (#82).
+@description('Quota tiers -> APIM products. Each: { name, displayName, description?, monthlyTokenQuota (0 = no native monthly quota), tpm }.')
+param quotaTiers array = [
+  {
+    name: 'standard'
+    displayName: 'Standard'
+    description: 'Everyday agent usage. 5M tokens/month, 20K tokens/minute.'
+    monthlyTokenQuota: 5000000
+    tpm: 20000
+  }
+  {
+    name: 'power'
+    displayName: 'Power'
+    description: 'Heavy agentic workloads. 20M tokens/month, 40K tokens/minute.'
+    monthlyTokenQuota: 20000000
+    tpm: 40000
+  }
+  {
+    name: 'unlimited'
+    displayName: 'Unlimited'
+    description: 'No gateway-enforced monthly budget; burst smoothing only. Monthly oversight is the control plane\'s job.'
+    monthlyTokenQuota: 0
+    tpm: 100000
+  }
+]
 
-@description('Default per-developer monthly token quota enforced natively by APIM (0 disables the native quota and leaves monthly enforcement to the control plane).')
-param defaultDeveloperMonthlyTokenQuota int = 0
+// The alias map is also the allowlist (#86): aliases are the model names developers put
+// in ANTHROPIC_DEFAULT_*_MODEL / Codex `model`, and anything not listed for their tier
+// gets 403 model_not_permitted. Deployments rotate underneath by editing these values —
+// the gateway module emits them as named values the control plane can PUT without a
+// policy redeploy. `pool` is 'anthropic' (multi-region pool) or 'openai'. Deployment
+// names must match the *_ModelDeployments params above.
+@description('Per-tier model alias maps: { <tier>: { <alias>: { deployment, pool } } }. A tier with no entry permits no models.')
+param productModelAliases object = {
+  standard: {
+    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic' }
+    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic' }
+    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai' }
+  }
+  power: {
+    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic' }
+    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic' }
+    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai' }
+  }
+  unlimited: {
+    sonnet: { deployment: 'claude-sonnet-4-5', pool: 'anthropic' }
+    haiku: { deployment: 'claude-haiku-4-5', pool: 'anthropic' }
+    opus: { deployment: 'claude-opus-4-5', pool: 'anthropic' }
+    gpt: { deployment: 'gpt-4-1-mini', pool: 'openai' }
+  }
+}
 
 @description('Create model deployments (first run). Set false on re-runs — Anthropic deployments are create-once under ARM; see modules/foundry.bicep.')
 param createModelDeployments bool = true
@@ -167,19 +241,25 @@ module gateway 'modules/ai-gateway.bicep' = {
   scope: rg
   params: {
     apimName: apim.outputs.apimName
+    // Pool routing (#83) is derived from the foundryRegions order: the first region is
+    // priority 1 (normal traffic, co-located with APIM), every later region is
+    // priority 2 standing headroom that only takes traffic when priority 1 throttles or
+    // its circuit breaker trips. Weight is only meaningful within a priority group.
     foundryAccounts: [
       for (region, i) in foundryRegions: {
         name: foundry[i].outputs.accountName
         endpoint: foundry[i].outputs.endpoint
+        priority: i == 0 ? 1 : 2
+        weight: 1
       }
     ]
-    defaultDeveloperTpm: defaultDeveloperTpm
-    defaultDeveloperMonthlyTokenQuota: defaultDeveloperMonthlyTokenQuota
+    quotaTiers: quotaTiers
+    productModelAliases: productModelAliases
   }
   dependsOn: [foundryRbac]
 }
 
-// Everything a control plane needs to attach: gateway addresses, the product that
+// Everything a control plane needs to attach: gateway addresses, the tier products that
 // developer subscriptions scope to, the workspace holding billing-grade token logs,
 // and the identities/names for further role assignments.
 output apimGatewayUrl string = apim.outputs.gatewayUrl
@@ -187,7 +267,8 @@ output apimName string = apim.outputs.apimName
 output apimPrincipalId string = apim.outputs.principalId
 output anthropicApiUrl string = gateway.outputs.anthropicApiUrl
 output openaiApiUrl string = gateway.outputs.openaiApiUrl
-output productId string = gateway.outputs.productId
+output productIds array = gateway.outputs.productIds
+output defaultProductId string = gateway.outputs.defaultProductId
 output logAnalyticsWorkspaceId string = monitoring.outputs.workspaceId
 output resourceGroupName string = rg.name
 output foundryAccountNames array = [for (region, i) in foundryRegions: foundry[i].outputs.accountName]

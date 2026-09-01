@@ -1,0 +1,123 @@
+<fragment>
+  <!--
+    FoundryGate model alias + per-product allowlist (#86).
+
+    INCLUDED FROM: the tier PRODUCT policy (infra/policies/product-policy.xml), not the
+    API policies. Two reasons:
+      1. The alias map is a per-product named value (`fg-model-map-{productId}`), and
+         `{{named-value}}` tokens resolve by literal name — a shared fragment cannot
+         compute the name at runtime. The product policy is rendered once per tier by
+         Bicep, so it is the only scope that can hand the map to this fragment (it does
+         so via the `fgModelMap` variable, set immediately before the include).
+      2. APIM scope order is global -> PRODUCT -> API, so including here also satisfies
+         plan 25's requirement that alias resolution run BEFORE `llm-token-limit`: a
+         request for a model the tier does not allow is rejected without consuming any
+         of the developer's monthly token quota.
+
+    CONTRACT with the including policy:
+      in   context.Variables["fgModelMap"]  JSON: alias -> { deployment, backend }
+                                            (alias absent, or entry null / missing
+                                            either field, means BLOCKED)
+      out  request body `model` rewritten to the real deployment name
+      out  backend service set to the alias's pool/backend
+      out  403 model_not_permitted (native error schema) on a blocked alias
+
+    No `model` in the body (e.g. GET /openai/v1/models) is a no-op: the request keeps
+    whatever backend the API policy defaulted to.
+
+    XML NOTE: expressions use &quot; rather than raw double quotes so this file stays
+    well-formed XML and `scripts/validate-policies.ps1` can parse it. APIM tolerates the
+    raw form; strict XML parsers do not.
+  -->
+
+  <!-- 1. The requested model name, or "" when the request carries no JSON `model`. -->
+  <set-variable name="fgAlias" value="@{
+      try {
+          var body = context.Request.Body?.As&lt;JObject&gt;(true);
+          if (body == null) { return string.Empty; }
+          var model = body[&quot;model&quot;];
+          if (model == null) { return string.Empty; }
+          var alias = model.ToString();
+          // Bound the echo length: this value is attacker-controlled and is reflected
+          // back in the 403 body.
+          return alias.Length &gt; 128 ? alias.Substring(0, 128) : alias;
+      } catch (Exception) {
+          return string.Empty;
+      }
+  }" />
+
+  <!-- 2. The map entry for that alias, or "" when the tier does not permit it. -->
+  <set-variable name="fgAliasEntry" value="@{
+      var alias = (string)context.Variables[&quot;fgAlias&quot;];
+      if (string.IsNullOrEmpty(alias)) { return string.Empty; }
+      try {
+          var raw = context.Variables.ContainsKey(&quot;fgModelMap&quot;)
+              ? (string)context.Variables[&quot;fgModelMap&quot;]
+              : string.Empty;
+          if (string.IsNullOrWhiteSpace(raw)) { return string.Empty; }
+          var entry = JObject.Parse(raw)[alias] as JObject;
+          if (entry == null) { return string.Empty; }
+          if (entry[&quot;deployment&quot;] == null || entry[&quot;backend&quot;] == null) { return string.Empty; }
+          return entry.ToString(Newtonsoft.Json.Formatting.None);
+      } catch (Exception) {
+          return string.Empty;
+      }
+  }" />
+
+  <choose>
+    <!-- 3a. Model requested but not permitted for this product -> 403, fail loud. -->
+    <when condition="@(!string.IsNullOrEmpty((string)context.Variables[&quot;fgAlias&quot;]) &amp;&amp; string.IsNullOrEmpty((string)context.Variables[&quot;fgAliasEntry&quot;]))">
+      <return-response>
+        <set-status code="403" reason="Forbidden" />
+        <set-header name="Content-Type" exists-action="override">
+          <value>application/json</value>
+        </set-header>
+        <set-header name="x-fg-error" exists-action="override">
+          <value>model_not_permitted</value>
+        </set-header>
+        <!-- The error body must match the schema the caller's SDK parses: Anthropic
+             Messages errors on the Anthropic front door, OpenAI errors everywhere else.
+             ONE fragment with a branch rather than two near-identical fragments: only
+             the ~6 lines below differ, and duplicating the parse/lookup/rewrite logic
+             is exactly the drift this work was asked to remove. The API id compared
+             against is substituted in by Bicep, so the branch never depends on a
+             hand-copied magic string. JObject is used instead of string concatenation
+             so the (attacker-controlled) alias is JSON-escaped. -->
+        <set-body>@{
+            var alias = (string)context.Variables[&quot;fgAlias&quot;];
+            var message = &quot;Model '&quot; + alias + &quot;' is not available on your FoundryGate plan.&quot;;
+            if (context.Api.Id == &quot;__ANTHROPIC_API_ID__&quot;) {
+                return new JObject(
+                    new JProperty(&quot;type&quot;, &quot;error&quot;),
+                    new JProperty(&quot;error&quot;, new JObject(
+                        new JProperty(&quot;type&quot;, &quot;permission_error&quot;),
+                        new JProperty(&quot;code&quot;, &quot;model_not_permitted&quot;),
+                        new JProperty(&quot;message&quot;, message)))
+                ).ToString(Newtonsoft.Json.Formatting.None);
+            }
+            return new JObject(
+                new JProperty(&quot;error&quot;, new JObject(
+                    new JProperty(&quot;code&quot;, &quot;model_not_permitted&quot;),
+                    new JProperty(&quot;type&quot;, &quot;invalid_request_error&quot;),
+                    new JProperty(&quot;param&quot;, &quot;model&quot;),
+                    new JProperty(&quot;message&quot;, message)))
+            ).ToString(Newtonsoft.Json.Formatting.None);
+        }</set-body>
+      </return-response>
+    </when>
+
+    <!-- 3b. Permitted -> rewrite the alias to the real deployment and pick its pool.
+         The rewrite happens before `llm-token-limit`, which (with
+         estimate-prompt-tokens="false") reads token counts off the model response, so
+         the rewritten body is what gets counted and billed. -->
+    <when condition="@(!string.IsNullOrEmpty((string)context.Variables[&quot;fgAliasEntry&quot;]))">
+      <set-body>@{
+          var entry = JObject.Parse((string)context.Variables[&quot;fgAliasEntry&quot;]);
+          var body = context.Request.Body.As&lt;JObject&gt;(true);
+          body[&quot;model&quot;] = (string)entry[&quot;deployment&quot;];
+          return body.ToString(Newtonsoft.Json.Formatting.None);
+      }</set-body>
+      <set-backend-service backend-id="@((string)JObject.Parse((string)context.Variables[&quot;fgAliasEntry&quot;])[&quot;backend&quot;])" />
+    </when>
+  </choose>
+</fragment>

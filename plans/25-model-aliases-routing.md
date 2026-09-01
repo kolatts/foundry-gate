@@ -48,20 +48,41 @@ What FoundryGate adopts instead:
 
 ### Alias map + allowlist policy fragment
 
-One APIM policy fragment, included in both front doors' inbound section *before*
-`llm-token-limit`:
+One APIM policy fragment (`fg-model-alias`), running *before* `llm-token-limit`:
 
-- Parse `model` from the request body.
+- Parse `model` from the request body (no `model` — e.g. `GET /openai/v1/models` — is a
+  no-op).
 - Look up the alias in a per-product named value (`fg-model-map-{productId}`, JSON:
-  alias → `{ deployment, pool }`; `null` = blocked).
+  alias → `{ deployment, backend }`; absent or `null` = blocked).
 - Miss/blocked → `return-response` 403 with a `model_not_permitted` error body in the
   API's native error schema.
 - Hit → `set-body` with the real deployment name, `set-backend-service` to the mapped
-  pool.
+  pool/backend.
 
-Bicep: alias maps as a parameter on `infra/modules/ai-gateway.bicep`, emitted as one
-named value per product + one `policyFragments` resource. The control-plane app edits
-named values (Management API) when admins retarget an alias — no policy redeploy.
+**Where the fragment is included — product scope, not API scope.** `{{named-value}}`
+tokens resolve by literal name, so a shared fragment cannot compute
+`fg-model-map-{productId}` at runtime; only the per-tier product policy (rendered once
+per tier by Bicep) can hand the map in, which it does via a `fgModelMap` variable set
+immediately before the include. This also satisfies the ordering requirement for free:
+APIM evaluates global → product → API, so the allowlist runs ahead of `llm-token-limit`
+(itself product-scope, #82) and a blocked model costs the developer no quota.
+
+**One fragment with a schema branch, not two fragments.** Only the ~6 lines that build
+the 403 body differ between the two front doors (Anthropic `permission_error` envelope
+vs OpenAI `error` object); the parse/lookup/rewrite/route logic is identical. The
+fragment branches on `context.Api.Id`, and Bicep substitutes the real Anthropic API name
+into the comparison so the branch never depends on a hand-copied magic string. Two
+fragments would have reintroduced exactly the duplication this work removed.
+
+The API policies keep a `set-backend-service` *before* their `<base />`, so the pool
+(Anthropic) / OpenAI backend remains the default route and the fragment overrides it
+per-model — a request the map never touches still routes sensibly.
+
+Bicep: alias maps as a parameter on `infra/main.bicep` (`productModelAliases`, threaded
+to `infra/modules/ai-gateway.bicep`), emitted as one named value per product + one
+`policyFragments` resource. The control-plane app edits named values (Management API)
+when admins retarget an alias — no policy redeploy. A tier with no map entry permits no
+models: the allowlist fails loud, by design.
 
 ### Optional content safety (separate toggle, default off)
 
@@ -81,17 +102,43 @@ Streaming caveat documented: response-side enforcement silently stops the stream
 
 ## Files expected to be created or modified
 
-- `infra/modules/ai-gateway.bicep` — named values, policy fragment, product policy wiring
-- `infra/policies/model-alias-fragment.xml` — the fragment
-- `infra/policies/anthropic-api.xml`, `infra/policies/openai-api.xml` — include fragment
-- `docs-site/src/content/docs/getting-started/cli-setup.mdx` — document alias names as
-  the values for `ANTHROPIC_DEFAULT_*_MODEL` / Codex `model`
-- Control plane (later, with #82): admin endpoint to edit alias maps via Management API
+- [x] `infra/modules/ai-gateway.bicep` — per-tier named values, the `fg-model-alias`
+      policy fragment, product policy wiring
+- [x] `infra/policies/model-alias-fragment.xml` — the fragment
+- [x] `infra/main.bicep` — `productModelAliases` param; Claude models moved into the
+      pooled deployment set so every alias exists in every pool member
+- [x] `infra/policies/product-policy.xml` — includes the fragment ahead of
+      `llm-token-limit` (API policies keep only the default `set-backend-service`)
+- [x] `infra/policies/anthropic-api.xml`, `infra/policies/openai-api.xml` — static
+      `set-backend-service` demoted to a pre-`<base />` default so the alias map wins
+- [ ] `docs-site/src/content/docs/getting-started/cli-setup.mdx` — document alias names
+      as the values for `ANTHROPIC_DEFAULT_*_MODEL` / Codex `model`. **Deliberately not
+      done yet**: CLAUDE.md requires cli-setup to contain only empirically verified
+      configuration, and aliases have not been exercised against a live gateway.
+- [ ] Control plane (later, with #82): admin endpoint to edit alias maps via Management
+      API
 
 ## Verification
 
+Static verification (no live APIM exists; run against this branch):
+
+- [x] `pwsh ./scripts/validate-policies.ps1` — the fragment is well-formed XML after
+      Bicep's token substitution, and the `include-fragment` in the product policy
+      resolves to it
+- [x] `az deployment group what-if` on `modules/ai-gateway.bicep` — each
+      `fg-model-map-{tier}` named value renders the expected alias JSON with the logical
+      pool resolved to a real backend id (`unlimited` alone carries `opus`), and the
+      ARM-rendered fragment re-parses as well-formed XML
+- [x] `az deployment sub validate` / `group validate` — the `policyFragments` and
+      `namedValues` resources pass ARM preflight
+
+Live verification (all **pending next live deploy**):
+
 - [ ] `sonnet` alias resolves and completes through the Anthropic front door
-- [ ] Alias absent from product map → 403 `model_not_permitted` (native error schema)
+- [ ] Alias absent from product map → 403 `model_not_permitted` (native error schema on
+      each front door)
+- [ ] Named-value JSON survives `{{...}}` substitution into the `set-variable` attribute
+      (embedded quotes) — the one mechanism here with no offline proof
 - [ ] Retargeting an alias via named-value update takes effect without policy redeploy
 - [ ] `llm-token-limit` still counts tokens correctly after `set-body` rewrite
 - [ ] Pool selection follows the alias map (verified via `ApiManagementGatewayLogs`)
