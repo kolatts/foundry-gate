@@ -1,0 +1,7 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\FoundryGate.Domain\FoundryGate.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

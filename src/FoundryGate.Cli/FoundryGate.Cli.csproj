@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.CommandLine" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FoundryGate.Data\FoundryGate.Data.csproj" />
+    <ProjectReference Include="..\FoundryGate.Domain\FoundryGate.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

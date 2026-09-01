@@ -1,0 +1,37 @@
+<Project>
+  <PropertyGroup>
+    <!-- Version properties injected by CI/CD -->
+    <Version Condition="'$(Version)' == ''">0.0.1-local</Version>
+
+    <!-- AssemblyVersion must be numeric (e.g., 1.2.3) -->
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">0.0.1</AssemblyVersion>
+
+    <!-- FileVersion must be numeric (e.g., 1.2.3) -->
+    <FileVersion Condition="'$(FileVersion)' == ''">0.0.1</FileVersion>
+
+    <!-- InformationalVersion can include pre-release labels -->
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
+
+    <!-- NuGet package version -->
+    <PackageVersion Condition="'$(PackageVersion)' == ''">$(Version)</PackageVersion>
+  </PropertyGroup>
+
+  <!-- Shared C# project contract. Scoped to .csproj so it never touches FoundryGate.Database.sqlproj
+       (Microsoft.Build.Sql SDK doesn't understand TargetFramework/Nullable/etc). -->
+  <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Run IDE#### code-style analyzers at build time, not just in the editor -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- IDE0005 (remove unnecessary usings) only runs at build time when this is set
+         (https://github.com/dotnet/roslyn/issues/41640). We don't want repo-wide XML-doc
+         obligations, just the analyzer, so CS1591 (missing XML comment) is opted back out. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Transitive NuGet vulnerability advisories are warnings, not build breaks; a new CVE
+         in a dependency shouldn't turn CI red until it's triaged. -->
+    <WarningsNotAsErrors>NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+  </PropertyGroup>
+</Project>

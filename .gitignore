@@ -41,6 +41,9 @@ docs-site/src/assets/fonts/
 # ─── Azure Functions local ───────────────────────────────────
 local.settings.json
 
+# ─── Local docker volumes ─────────────────────────────────────
+.azurite/
+
 # ─── Docker ──────────────────────────────────────────────────
 .dockerignore
 
