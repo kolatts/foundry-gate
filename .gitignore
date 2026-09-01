@@ -29,6 +29,12 @@ appsettings.Secrets.json
 *.pfx
 *.p12
 
+# FoundryGate.Api's appsettings.Development.json is deliberately checked in: it only points at
+# the docker-compose local SQL instance (same plaintext dev-only password already committed in
+# docker-compose.yml), never a real secret. CONVENTIONS.md/plans/02-data-layer.md require this
+# default to exist in source so `AddFoundryGateData` has a connection string out of the box.
+!src/FoundryGate.Api/appsettings.Development.json
+
 # ─── Docs site ───────────────────────────────────────────────
 docs-site/node_modules/
 docs-site/dist/
