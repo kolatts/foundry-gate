@@ -1,0 +1,54 @@
+<policies>
+  <!--
+    Tier product policy (#82). Bicep renders this template ONCE PER TIER
+    (modules/ai-gateway.bicep, `quotaTiers` param) because `token-quota` accepts
+    LITERALS ONLY — policy expressions are rejected outright ("Expression return type
+    'System.Int32' is not allowed", validated live 2026-09-01). A per-user quota in a
+    single policy is therefore impossible; the tier IS the quota, and "change a
+    developer's quota" means moving their APIM subscription to another tier product.
+
+    THE PRODUCT / API SPLIT
+      product scope (this file) = ENTITLEMENT — what the subscription may use
+                                  (model allowlist) and how much (TPM + monthly quota).
+      API scope (anthropic-api.xml / openai-api.xml) = MECHANISM — credential
+                                  stripping, managed-identity backend auth, default
+                                  backend, retry/streaming behaviour, metrics.
+
+    ORDERING. APIM evaluates inbound as global -> product -> API (an API policy's
+    <base /> expands to the product policy). Everything that must run before
+    `llm-token-limit` therefore belongs here, above it — and nothing else in the system
+    may declare `llm-token-limit`, or the request would be counted twice. The API
+    policies deliberately do not.
+  -->
+  <inbound>
+    <base />
+    <!-- The tier's alias map. `{{fg-model-map-<tier>}}` is a named value the control
+         plane can rewrite through the APIM Management API, so retargeting an alias or
+         granting a tier a new model needs no policy redeploy. -->
+    <set-variable name="fgModelMap" value="{{__MODEL_MAP_NAMED_VALUE__}}" />
+    <include-fragment fragment-id="fg-model-alias" />
+    <!-- Real-time per-developer enforcement, keyed on the APIM subscription so tenants
+         of the same tier never share a counter. Runs after the allowlist: a request for
+         a model this tier cannot use is already gone and burns none of the quota.
+         The quota placeholder on the last attribute line is replaced by Bicep with the
+         token-quota attributes when the tier sets monthlyTokenQuota > 0, and with
+         nothing when it is 0 (unlimited tier: TPM smoothing only, monthly budget left
+         to the control plane). -->
+    <llm-token-limit counter-key="@(context.Subscription.Id)"
+                     tokens-per-minute="__TIER_TPM__"
+                     estimate-prompt-tokens="false"
+                     remaining-tokens-header-name="x-fg-remaining-tpm"
+                     tokens-consumed-header-name="x-fg-tokens-consumed"
+                     retry-after-header-name="Retry-After"
+                     __QUOTA_ATTRS__ />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
