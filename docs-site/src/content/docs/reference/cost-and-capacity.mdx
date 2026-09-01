@@ -1,0 +1,118 @@
+---
+title: Cost & Capacity Planning
+description: What FoundryGate's machinery costs to run, what the models cost per developer, and how many concurrent engineers one deployment supports.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+All prices are **East US 2 retail pay-as-you-go, verified 2026-09-01** against the
+[Azure Retail Prices API](https://prices.azure.com/api/retail/prices) unless flagged.
+EA/CSP agreements differ. Capacity figures derive from live gateway validation
+(2026-09-01) plus Microsoft's published rate limits.
+
+## The machinery — fixed monthly cost
+
+The gateway + control plane costs roughly the same whether it serves 5 developers or
+150 — model consumption is the variable cost, machinery is the fixed one.
+
+### Budget configuration (~$190–215/month)
+
+| Component | SKU | Monthly |
+|---|---|---|
+| API Management | Basic v2, 1 unit ($0.21/hr, 10M calls incl.) | $153.30 |
+| Azure SQL | GP serverless, auto-pause (control plane is light) | ~$11–22 |
+| Container Apps (API) | 1 × 0.25 vCPU / 0.5 GiB, mostly idle | ~$4–14 |
+| Functions | Flex Consumption (timers — under free grant) | $0 |
+| Static Web Apps | Free tier | $0 |
+| Log Analytics | token logs, no message bodies (~0.3 GB @ $2.76/GB) | ~$1 |
+| App Insights | 10% sampling | ~$1–5 |
+| Storage + Key Vault + ACR Basic | | ~$6 |
+| **Total** | | **≈ $190–215** |
+
+### Production configuration (~$450 with Basic v2 · ~$1,000 with Standard v2)
+
+| Component | SKU | Monthly |
+|---|---|---|
+| API Management | Standard v2 ($0.96/hr, 50M calls incl.) — or keep Basic v2 | $700.80 / $153.30 |
+| Azure SQL | GP serverless always-on at the 0.683-vCore floor ($0.52/vCore-hr) | ~$260 |
+| Container Apps | 1–3 replicas | ~$15–30 |
+| Static Web Apps | Standard (SLA) | $9 |
+| Log Analytics + App Insights | ~1M gateway requests/mo | ~$15–30 |
+| Functions + Storage + Key Vault + ACR | | ~$7 |
+| **Total** | | **≈ $450 (Basic v2) · ≈ $1,020 (Standard v2)** |
+
+<Aside type="tip">
+At 50 developers, the machinery costs **$4–20 per developer per month** — a rounding
+error next to model consumption. Basic v2 carries every gateway feature FoundryGate
+uses (token policies, pools, circuit breakers); Standard v2 buys headroom, not features.
+</Aside>
+
+## Model prices (per 1M tokens)
+
+| Model | Input | Cached read | Output |
+|---|---|---|---|
+| claude-haiku-4-5 | $1.00 † | $0.10 † | $5.00 † |
+| claude-sonnet-4-6 | $3.00 † | $0.30 † | $15.00 † |
+| claude-opus (4.5/4.8) | $5.00 | $0.50 | $25.00 |
+| gpt-4.1-mini | $0.40 | $0.10 | $1.60 |
+| gpt-5-codex | $1.25 | $0.125 | $10.00 |
+
+† Claude models bill through a Marketplace meter and are absent from the retail
+Pricing API; haiku/sonnet rows are corroborated from secondary sources, opus and
+cache rates from Microsoft Q&A. Data Zone deployments are 1.1×. Cache **writes** are
+1.25× input (5-min TTL) or 2× (1-hour).
+
+**Per active developer, per month (modeled)**: a heavy agentic-coding user
+(~30M uncached input + ~300M cache reads + ~15M output on sonnet-class) lands around
+**$300–400/month**; moderate use **$100–150**; a haiku-heavy mix well under $100.
+Published industry averages for Claude Code (~$6/dev/day, ~$12 p90) agree. Because
+Claude bills as one aggregate Marketplace meter, **per-developer attribution comes
+from FoundryGate's gateway telemetry × this rate card** — Azure Cost Management
+cannot split it for you.
+
+## How many concurrent engineers?
+
+<Aside type="caution">
+**Output tokens per minute (OTPM) is the binding constraint for agentic coding on
+Claude** — not RPM and not input TPM. Cache reads are free against input limits
+(and coding agents are extremely cache-heavy), but every generated token counts
+against a small OTPM pool.
+</Aside>
+
+Rate limits are **pooled per Azure subscription per model** (across regions —
+verified live: capacity units allocate per region, but the effective limit pool is
+subscription-wide).
+
+| Limit pool | PAYG | Enterprise / MCA-E |
+|---|---|---|
+| sonnet-4-5 / 4-6 / haiku-4-5 | 80 RPM / 80K ITPM / 16K OTPM | 4,000 / 4M / 800K |
+| opus-class / sonnet-5 | 40 RPM / 40K ITPM / 8K OTPM | 2,000 / 2M / 400K |
+
+An **active** developer (agent actually generating) consumes roughly 4–6 requests
+and 2K–6K output tokens per minute. Dividing the pools:
+
+| Scenario | Concurrently active devs | Total org size (15–30% active) |
+|---|---|---|
+| PAYG, sonnet lane | **3–8** (OTPM-bound) | ~10–50 |
+| PAYG, opus lane | 1–4 | ~5–25 |
+| Enterprise, sonnet lane | **130–400** | ~450–2,500 |
+| Enterprise, opus lane | 65–200 | ~200–1,300 |
+| GPT lane (gpt-4.1 T1 → T6) | ~40 → ~1,800 (total-TPM-bound, auto-tiers) | grows with use |
+
+The haiku lane is a **separate pool** — Claude Code routes subagent/background
+traffic there by default, so it doesn't eat the sonnet budget.
+
+### The four capacity levers, in order of effect
+
+1. **More Azure subscriptions** — each adds a full Claude allotment (quota pools
+   per subscription). Deploy one FoundryGate stack per subscription; the tagging
+   scheme (`workload`/`environment`/`fg-role`) keeps cost and inventory queries
+   uniform across them.
+2. **Enterprise/MCA-E agreement** — 25–50× the PAYG pools in one step.
+3. **Gateway `max_tokens` caps** — OTPM is the binder, so capping response length
+   at the gateway raises the concurrent-developer ceiling roughly linearly.
+4. **Model mix** — pushing summarization/routine traffic to haiku (or gpt-4.1-mini
+   at $0.40/$1.60) both cuts cost and frees the premium lanes.
+
+The machinery never binds: one APIM v2 unit handles orders of magnitude more
+requests than the model quotas admit, and the control plane's SQL load is trivial.
