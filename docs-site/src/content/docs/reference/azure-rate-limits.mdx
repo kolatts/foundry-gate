@@ -1,0 +1,167 @@
+---
+title: Azure AI Foundry Rate Limits
+description: Microsoft Foundry's deployment- and subscription-level rate limits, what they mean for concurrent developers, and how FoundryGate's gateway layer mitigates them.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note">
+**Updated September 2026.** Microsoft has rebranded Azure AI Foundry to **Microsoft
+Foundry**; Claude models went **GA (~July 2026)** with broader subscription
+eligibility and a cache-aware rate limit model. This page supersedes earlier versions
+that described Claude as EA/MCA-E-only with zero pay-as-you-go quota. With the
+[gateway-centric architecture](/foundry-gate/architecture/feasibility/), FoundryGate
+now actively mitigates these limits rather than passing 429s through — but the
+platform ceilings below still determine total scale.
+</Aside>
+
+## The two-layer picture
+
+- **FoundryGate quotas** govern *who* gets access and *how much* they consume per month
+  — enforced in real time at the APIM gateway (`llm-token-limit`).
+- **Foundry rate limits** govern *how fast* the platform processes requests right now,
+  shared across callers. This page is about the second layer.
+
+The gateway smooths and reroutes around transient limit hits (per-developer TPM caps,
+backend pools, circuit breakers honoring `Retry-After`), but it cannot manufacture
+capacity beyond what the limits below allow.
+
+---
+
+## Claude models on Microsoft Foundry
+
+### Eligibility
+
+Claude requires a **paid Azure subscription with an active pay-as-you-go billing
+method** in an Anthropic-supported billing country. Not supported: CSP subscriptions,
+free trial / student / startup-credit subscriptions, credit-only sponsored
+subscriptions, and EA accounts in South Korea. This is a real broadening from the
+earlier EA/MCA-E-only rule — but check your billing method before planning a rollout.
+The deploying principal also needs Azure Marketplace permissions
+(`Microsoft.SaaS/register/action` and related) for the automated offer attestation.
+
+### How Claude limits are measured (cache-aware)
+
+Claude limits are expressed as three numbers per model, pooled **per subscription per
+model** (shared across all Global Standard deployments of that model in every region):
+
+- **RPM** — requests per minute
+- **ITPM** — *uncached* input tokens per minute (**cache reads are free** against ITPM)
+- **OTPM** — output tokens per minute
+
+<Aside type="tip">
+The cache-aware accounting matters enormously for Claude Code, which caches system
+prompts and conversation prefixes aggressively. Effective input capacity is far higher
+than raw ITPM suggests — often the binding constraint becomes **OTPM or RPM**, not
+input tokens.
+</Aside>
+
+### Default limits (September 2026)
+
+| Model | PAYG (RPM / ITPM / OTPM) | Enterprise & MCA-E (RPM / ITPM / OTPM) |
+|---|---|---|
+| claude-opus-5, claude-opus-4-x | 40 / 40K / 8K | 2,000 / 2M / 400K |
+| claude-sonnet-5 | 40 / 40K / 8K | 2,000 / 2M / 400K |
+| claude-sonnet-4-6, claude-sonnet-4-5 | 80 / 80K / 16K | 4,000 / 4M / 800K |
+| claude-haiku-4-5 | 80 / 80K / 16K | 4,000 / 4M / 800K |
+
+Free-trial subscriptions get zeros. Quota increases go through the
+[Azure OpenAI/Foundry quota request form](https://aka.ms/oai/stuquotarequest) — Claude
+is the only partner model family eligible for increases, they are form-based (not
+programmatic), and priority goes to subscriptions actively consuming existing quota.
+
+### Deployment types, hosting, and regions
+
+- **Deployment types**: Global Standard and Data Zone Standard (US only). **No PTU /
+  provisioned option exists for Claude** — and therefore no spillover and no priority
+  processing (both are Azure OpenAI-only features).
+- **Hosting variants** are encoded in the model *version*: version `1` = hosted on
+  Anthropic infrastructure (eastus2, swedencentral), version `2` = hosted on Azure
+  (GA; available across roughly nine US/EU regions, plus Data Zone Standard US).
+- A possible **300-concurrent-request cap**: the generic Foundry Models limits table
+  still lists 300 concurrent requests for partner models, but Claude's own
+  documentation now expresses limits only as RPM/ITPM/OTPM. Treat the cap as
+  **unverified** and test at scale before assuming either way.
+- Claude on Foundry does **not** return `anthropic-ratelimit-*` response headers.
+  FoundryGate surfaces the gateway's own `remaining-quota` headers instead.
+
+### What Enterprise defaults support in practice
+
+A worked example for **claude-sonnet-5 at Enterprise defaults** (2,000 RPM / 2M ITPM /
+400K OTPM), assuming heavy agentic coding (6 requests/min per active developer, ~800
+output tokens/request, well-cached prompts averaging ~1.5K uncached input
+tokens/request):
+
+| Constraint | Capacity | Requests/min it allows |
+|---|---|---|
+| RPM | 2,000 | 2,000 |
+| ITPM (uncached) | 2,000,000 | ~1,330 |
+| OTPM | 400,000 | **~500** |
+
+OTPM binds first: **~500 requests/min ≈ 80–85 simultaneously heavy developers**, or a
+total org of several hundred developers at typical concurrency ratios (15–30% active).
+Poorly cached workloads shift the binding constraint to ITPM and cut this roughly in
+half. If the 300-concurrent cap applies, long-running streamed requests can bind before
+OTPM does.
+
+---
+
+## Azure OpenAI models (GPT / Codex families)
+
+GPT-family models use the tiered quota system (automatic tier progression by
+subscription type and usage) and support the full traffic-management toolbox that
+Claude lacks: **PTU (provisioned throughput), spillover from provisioned to standard
+(GA), priority processing, dynamic quota (preview), and Global Batch**.
+
+For the Codex CLI models specifically (deployable from the Foundry catalog:
+gpt-5-codex, gpt-5.1-codex, gpt-5.1-codex-mini, gpt-5.1-codex-max, gpt-5.2-codex,
+gpt-5.3-codex):
+
+- Reported Global Standard defaults range from ~15K TPM (gpt-5.1-codex) to ~150K TPM
+  (gpt-5.3-codex, gpt-5.1-codex-max); gpt-5.1 chat models default around 300K TPM
+  (1M enterprise).
+- **These defaults are volatile** — Microsoft has cut them without notice (community
+  reports of 300K→50K on gpt-5.1). Check `az cognitiveservices usage list -l <region>`
+  against your subscription rather than trusting any published table, including this
+  one.
+
+<Aside type="note">
+Older GPT-4.1/GPT-4o tier tables that previously appeared on this page predate the
+gpt-5 lineup and have been removed; the tier mechanics are unchanged, the specific
+numbers were stale.
+</Aside>
+
+---
+
+## How FoundryGate mitigates transient limits
+
+The [gateway architecture](/foundry-gate/architecture/feasibility/) addresses the
+symptoms in order:
+
+1. **Per-developer TPM caps** (`llm-token-limit`, per subscription key) — one
+   developer's runaway agentic loop gets a targeted `429 + Retry-After` (both Claude
+   Code and Codex CLI back off automatically) instead of exhausting the shared pool.
+2. **Backend pools + circuit breakers** — when a deployment itself 429s, its breaker
+   trips (honoring `Retry-After`) and requests retry against the next deployment in
+   the pool (other region, Data Zone, or hosting variant). Clients see latency, not
+   errors.
+3. **Deployment resizing** — deployment `sku.capacity` (thousands of TPM) is
+   PATCH-able at runtime; admins rebalance capacity between deployments from
+   FoundryGate without redeploying.
+4. **Right-sizing from data** — the `ApiManagementGatewayLlmLog` reconciliation feed
+   shows whether you are RPM-, ITPM-, OTPM-, or concurrency-bound; each has a
+   different fix (quota increase, caching discipline, output caps, more pool members).
+
+What no gateway can do: exceed subscription-level pools, or buy dedicated Claude
+throughput (PTU does not exist for Claude). Claude-heavy organizations beyond a few
+hundred active developers should plan on quota-increase requests early — or a direct
+Anthropic API agreement for the heaviest cohort.
+
+## Planning guide
+
+| Team size | Approach |
+|---|---|
+| < 50 developers | PAYG limits are workable for pilots on sonnet-4-6/haiku (80 RPM); Enterprise defaults comfortable. Single deployment per model, gateway TPM caps on. |
+| 50–200 | Enterprise/MCA-E defaults + multi-deployment pools (Global Standard + Data Zone). File a Claude quota increase before you need it. GPT/Codex: watch volatile defaults, consider PTU for the busiest model. |
+| 200–500 | Claude: quota increases mandatory; OTPM is your likely binding constraint — enforce output caps at the gateway. GPT: PTU + spillover. |
+| 500+ | Claude via Foundry becomes a structural constraint; split the heaviest users to a direct Anthropic agreement, keep the long tail on Foundry. GPT: PTU per region behind pools. |

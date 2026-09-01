@@ -43,14 +43,15 @@ That works fine when you have three engineers sharing a dev environment. It brea
 |---|---|---|
 | Per-developer token budget | ❌ Deployment-level only | ✅ Per user, per month |
 | Individual API keys | ❌ Shared key or RBAC | ✅ One APIM subscription per developer |
-| Hard quota enforcement | ❌ No blocking mechanism | ✅ APIM subscription suspended at limit |
+| Hard quota enforcement | ❌ No blocking mechanism | ✅ Real-time `403` at the gateway when the monthly budget is spent |
+| Per-developer burst control | ❌ One developer can saturate the deployment | ✅ Per-developer TPM cap → targeted `429 + Retry-After` |
 | Entra-based auto-provisioning | ❌ Manual RBAC assignment | ✅ Group sync → key + quota |
 | Automatic deprovisioning | ❌ Manual RBAC removal | ✅ Departure detected → key deleted |
 | Monthly reset | ❌ Manual | ✅ Azure Function fires at 00:01 UTC on the 1st |
 | Quota increase workflow | ❌ None | ✅ Submit → admin approves → quota applied |
 | Per-developer usage visibility | ❌ Aggregate only | ✅ Dashboard + audit log per user |
 | Model deployment management | ❌ Portal only | ✅ Admin UI in FoundryGate |
-| Deployment-level rate limits (TPM/RPM) | ⚠️ Shared ceiling across all callers | ⚠️ Unchanged — per-developer budgets don't lift Foundry's deployment ceiling |
+| Deployment-level rate limits (TPM/RPM) | ⚠️ Shared ceiling, 429s passed to callers | ⚠️ Mitigated — backend pools + circuit breakers reroute around saturated deployments; the platform ceiling itself remains |
 
 ## How it works
 
@@ -171,10 +172,10 @@ FoundryGate sits in front of your existing Azure AI Foundry deployment. It does 
 
 **Key provisioning**: When a developer first signs in, FoundryGate calls the APIM Management API to create an APIM subscription scoped to the FoundryGate product. The key is issued to the developer. Foundry never knows about individual developers — APIM does.
 
-**Quota enforcement**: An Azure Function reads token consumption from Application Insights every 15 minutes. When a developer's `TokensUsed` reaches their `AllocatedTokens`, FoundryGate suspends their APIM subscription. APIM immediately starts returning 401. No traffic passes. At month-end, the Function resets all allocations and re-enables suspended subscriptions.
+**Quota enforcement**: The gateway itself enforces each developer's budget in real time. APIM's `llm-token-limit` policy, keyed on the developer's subscription, carries their monthly token quota (requests return `403` the moment it's spent — no polling lag) and a per-minute token cap (bursts get `429 + Retry-After`, which coding CLIs back off on automatically). Budgets reset with the UTC calendar month on their own. A reconciliation Function keeps the dashboard's usage and cost figures authoritative from the gateway's request logs.
 
 <Aside type="caution">
-**Two separate layers.** FoundryGate's monthly budgets control *how much* each developer may consume over time. They don't affect *how fast* Foundry can process requests right now. Azure AI Foundry enforces its own deployment-level limits — tokens per minute (TPM), requests per minute (RPM), and a hard cap of **300 concurrent requests** for Foundry models including Claude — shared across every caller simultaneously. A developer well within their monthly budget will still receive a `429 Too Many Requests` if the deployment is saturated. At heavy AI-assisted coding usage patterns, a single Claude deployment supports roughly **50 simultaneously active developers** before hitting this ceiling. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/) for model-by-model figures and scale planning guidance.
+**Two separate layers.** FoundryGate's per-developer budgets and caps ride on top of Microsoft Foundry's own deployment-level rate pools (requests per minute, uncached-input tokens per minute, output tokens per minute for Claude), which are shared across all callers. FoundryGate *mitigates* saturation — per-developer caps keep any one person from exhausting the pool, and multi-deployment backend pools reroute around 429s — but it cannot manufacture capacity beyond the platform's ceilings. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/) for the current numbers and [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) for how the mitigation works.
 </Aside>
 
 **Entra sync**: FoundryGate uses the Microsoft Graph API (app-only credentials) to read your Entra directory. Developers in a linked Entra group are auto-provisioned. Developers who leave the group are auto-deprovisioned. The sync runs on demand or can be triggered automatically.

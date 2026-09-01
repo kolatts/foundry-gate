@@ -1,19 +1,24 @@
 ---
 title: CLI Setup for Developers
-description: Point Claude Code, Codex, or any OpenAI-compatible tool at your FoundryGate gateway.
+description: Point Claude Code and Codex CLI at your FoundryGate gateway with their official Azure/Foundry support.
 sidebar:
   order: 2
 ---
 
 import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-You've been granted access by your FoundryGate admin. This guide shows you how to connect Claude Code, Codex CLI, or any OpenAI-compatible client to the gateway in under five minutes.
+You've been granted access by your FoundryGate admin. This guide connects Claude Code
+or Codex CLI to the gateway using each tool's **official** Azure/Foundry support — no
+wrappers, no proxies on your machine.
 
 ## What you need
 
-- Your **APIM subscription key** — visible on the FoundryGate `/me` page
-- Your **APIM gateway URL** — shown in the "Configure your AI CLI" panel on `/me`
-- The **model deployment name** you want to use — listed in the same panel
+From the "Configure your AI CLI" panel on your FoundryGate `/me` page:
+
+- Your **APIM subscription key**
+- Your **gateway URL** (e.g. `https://ai.yourcompany.com`)
+- The **deployment names** for the models you'll use (e.g. `claude-sonnet-5`,
+  `gpt-5-codex`)
 
 <Aside>
 If you don't see a key on `/me`, ask your admin to provision one for your account.
@@ -23,16 +28,28 @@ If you don't see a key on `/me`, ask your admin to provision one for your accoun
 
 ## Verify your key
 
-Before configuring any tool, confirm the key works:
+The gateway exposes two API paths — Anthropic-format for Claude models, OpenAI-format
+for GPT/Codex models. Smoke-test whichever you'll use:
 
 ```sh
-curl https://<your-gateway-url>/openai/deployments/<model-name>/chat/completions?api-version=2024-02-01 \
+# Claude path (Anthropic Messages API)
+curl https://<gateway-url>/anthropic/v1/messages \
   -H "api-key: <your-key>" \
-  -H "Content-Type: application/json" \
-  -d '{"messages":[{"role":"user","content":"ping"}],"max_tokens":5}'
+  -H "anthropic-version: 2023-06-01" \
+  -H "content-type: application/json" \
+  -d '{"model":"<claude-deployment-name>","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
+
+# OpenAI path (Responses API)
+curl https://<gateway-url>/openai/v1/responses \
+  -H "api-key: <your-key>" \
+  -H "content-type: application/json" \
+  -d '{"model":"<codex-deployment-name>","input":"ping"}'
 ```
 
-Expected: a JSON response with a `choices` array. A `401` means the key is wrong or the subscription is suspended (quota exhausted — contact your admin).
+Expected: a JSON response containing generated content. A `401` means the key is wrong
+or your account is deactivated; a `403` means your monthly token budget is spent (see
+[Manage your quota](#manage-your-quota)); a `429` means you're over your per-minute
+rate — wait and retry.
 
 ---
 
@@ -41,94 +58,97 @@ Expected: a JSON response with a `choices` array. A `401` means the key is wrong
 <Tabs>
   <TabItem label="Claude Code">
 
-  Claude Code supports any OpenAI-compatible endpoint via the `apiBaseUrl` config key:
+  Claude Code has first-class Microsoft Foundry support. Set these environment
+  variables (shell profile, or `.claude/settings.json` `env` block):
 
   ```sh
-  claude config set apiBaseUrl https://<your-gateway-url>/openai
-  claude config set apiKey <your-key>
+  export CLAUDE_CODE_USE_FOUNDRY=1
+  export ANTHROPIC_FOUNDRY_BASE_URL=https://<gateway-url>/anthropic
+  export ANTHROPIC_FOUNDRY_API_KEY=<your-key>
+
+  # Pin models to your gateway's deployment names (shown on /me).
+  # Pinning matters: unpinned aliases resolve to defaults that may not
+  # exist as deployments on your gateway.
+  export ANTHROPIC_DEFAULT_SONNET_MODEL=<sonnet-deployment-name>
+  export ANTHROPIC_DEFAULT_OPUS_MODEL=<opus-deployment-name>
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL=<haiku-deployment-name>
   ```
 
-  Then set your model:
-
-  ```sh
-  # Use the deployment name shown on your /me page
-  claude config set model <deployment-name>
-  ```
-
-  Test it:
-  ```sh
-  claude "Say hello from FoundryGate"
-  ```
+  Then run `claude` as normal. Prompt caching is enabled automatically — and cache
+  reads don't count against the platform's input-token rate limits, so long sessions
+  are cheaper than they look.
 
   </TabItem>
   <TabItem label="Codex CLI">
 
-  Codex CLI uses `OPENAI_BASE_URL` and `OPENAI_API_KEY`:
+  Codex CLI supports Azure endpoints via `~/.codex/config.toml`:
+
+  ```toml
+  model = "<codex-deployment-name>"     # e.g. gpt-5-codex — the DEPLOYMENT name
+  model_provider = "azure"
+
+  [model_providers.azure]
+  name = "Azure via FoundryGate"
+  base_url = "https://<gateway-url>/openai/v1"
+  env_key = "FOUNDRYGATE_API_KEY"
+  wire_api = "responses"
+  ```
+
+  Then export the key the config references:
 
   ```sh
-  export OPENAI_BASE_URL=https://<your-gateway-url>/openai
-  export OPENAI_API_KEY=<your-key>
-  export OPENAI_MODEL=<deployment-name>
+  export FOUNDRYGATE_API_KEY=<your-key>
   ```
 
-  Add these to your shell profile (`~/.zshrc`, `~/.bashrc`) to persist across sessions.
-
-  Test it:
-  ```sh
-  codex "Say hello from FoundryGate"
-  ```
+  Codex authenticates with the API key only (it has no Entra ID support), so keep the
+  key in your shell profile or a secret manager — never in the config file itself.
 
   </TabItem>
-  <TabItem label="Python / OpenAI SDK">
+  <TabItem label="curl / SDKs">
 
-  ```python
-  from openai import AzureOpenAI
+  Any client that speaks the Anthropic Messages API or the OpenAI Responses/Chat
+  Completions API works. The key facts:
 
-  client = AzureOpenAI(
-      azure_endpoint="https://<your-gateway-url>",
-      api_key="<your-key>",
-      api_version="2024-02-01",
-  )
+  | | Claude models | GPT / Codex models |
+  |---|---|---|
+  | Base path | `https://<gateway-url>/anthropic` | `https://<gateway-url>/openai/v1` |
+  | API shape | Anthropic Messages (`/v1/messages`) | OpenAI Responses / Chat Completions |
+  | Auth header | `api-key: <your-key>` | `api-key: <your-key>` |
+  | Extra header | `anthropic-version: 2023-06-01` | — |
+  | `model` field | Claude deployment name | GPT deployment name |
 
-  response = client.chat.completions.create(
-      model="<deployment-name>",
-      messages=[{"role": "user", "content": "Hello from FoundryGate"}],
-  )
-  print(response.choices[0].message.content)
-  ```
-
-  </TabItem>
-  <TabItem label="curl / generic">
-
-  Any OpenAI-compatible client works. The key headers are:
-
-  | Header | Value |
-  |---|---|
-  | `api-key` | Your APIM subscription key |
-  | `Content-Type` | `application/json` |
-
-  Base URL pattern:
-  ```
-  https://<gateway-url>/openai/deployments/<deployment-name>/chat/completions?api-version=2024-02-01
-  ```
+  Anthropic's Foundry SDKs (`anthropic` Python with `AnthropicFoundry`,
+  `@anthropic-ai/foundry-sdk`, `Anthropic.Foundry` for .NET) accept a base URL and
+  API key and work unchanged against the gateway.
 
   </TabItem>
 </Tabs>
 
 ---
 
+## Understand your limits
+
+Every response from the gateway carries live budget headers:
+
+| Header | Meaning |
+|---|---|
+| `x-fg-remaining-quota` | Tokens left in your monthly budget (estimate; tightens as you approach the limit) |
+| `x-fg-remaining-tpm` | Tokens left in your current per-minute window |
+| `retry-after` | Present on `429` — seconds to wait before retrying |
+
+Three distinct "slow down" signals, three different meanings:
+
+- **`429` from the gateway** — *your* per-minute cap. Your CLI backs off automatically;
+  no action needed.
+- **`403` from the gateway** — your monthly budget is exhausted. Request an increase
+  (below); no amount of retrying helps until the month resets.
+- **Elevated latency without errors** — the shared deployment may be saturated and the
+  gateway is rerouting your traffic to a backup deployment. Normal during peak hours.
+
 ## Manage your quota
 
-Your token budget resets on the 1st of each month. You can:
+Your token budget resets at the start of each calendar month (UTC), automatically. You can:
 
 - **Check current usage** on the `/me` page (quota gauge shows tokens used / allocated).
 - **Request a quota increase** via the "Request Quota Increase" button on `/me`.
 - **Rotate your key** from `/me` if you suspect it's been compromised.
-
-<Aside type="tip">
-Token counts reset at 00:01 UTC. If you're near your limit at month end, a small delay may restore access automatically.
-</Aside>
-
-## Quota exhausted?
-
-If your key returns `401` mid-month, your allocation is exhausted and your APIM subscription has been suspended. Submit a quota increase request on `/me` — your admin will receive a notification.

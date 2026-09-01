@@ -1,6 +1,8 @@
 ---
 title: System Overview
 description: How FoundryGate's components fit together — quota resolution, APIM enforcement, Entra sync, and usage tracking.
+sidebar:
+  order: 0
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -104,31 +106,52 @@ The resolved value is written to `QuotaAllocation` for the current period. Admin
 
 ## APIM enforcement — how limits actually block traffic
 
-FoundryGate doesn't rely on a database flag being checked on every request. The enforcement is APIM-native:
+FoundryGate doesn't rely on a database flag being checked on every request — and it no
+longer relies on a polling loop either. Enforcement lives in the gateway's
+`llm-token-limit` policy, keyed on each developer's APIM subscription:
+
+- **Monthly budget**: `token-quota` + `token-quota-period="Monthly"` — the developer's
+  requests get `403` the moment the budget is exhausted, in real time, on the request
+  path. Quota windows are UTC calendar months, so they reset themselves at month start.
+- **Burst control**: `tokens-per-minute` — a per-developer TPM cap returns
+  `429 + Retry-After` for one developer's runaway agentic loop without touching anyone
+  else's traffic. Claude Code and Codex CLI both back off on this automatically.
+- Both work on the **Anthropic Messages** path (Claude Code) and the **OpenAI** path
+  (Codex CLI) — the LLM policies understand both payload schemas on APIM v2 tiers.
+
+Quota tiers are modeled as APIM **products** (Standard / Power / Unlimited): each
+product's policy carries that tier's budget and TPM cap, and changing a developer's
+quota means moving their subscription between products. Subscription *suspension* is
+reserved for deactivation and offboarding — not quota exhaustion.
+
+The usage-sync Function still runs, but as **reconciliation**, not enforcement:
 
 <Pipeline
-  label="UsageSyncFunction — runs every 15 minutes"
+  label="UsageSyncFunction — reconciliation, every 15 minutes"
   steps={[
     {
-      title: "Query Log Analytics for token totals per APIM subscription",
-      detail: "Aggregates token consumption for the current billing period across all APIM subscription IDs.",
+      title: "Query ApiManagementGatewayLlmLog for per-request token counts",
+      detail: "The gateway's LLM log table records prompt/completion/total tokens per request. Joined to ApiManagementGatewayLogs on CorrelationId to attribute each request to an APIM subscription.",
     },
     {
       title: "Update QuotaAllocation.TokensUsed in SQL",
-      detail: "Writes the latest consumption figures back to the database for UI display and audit.",
+      detail: "Authoritative consumption figures for the UI, dashboards, and audit — and drift detection against what the gateway policies enforced.",
     },
     {
-      title: "Suspend over-quota developers",
-      detail: "For each developer where TokensUsed ≥ AllocatedTokens: call APIM Management PATCH to set subscription state to suspended, and set QuotaAllocation.IsHardStopped = true.",
-      code: "APIM Management: PATCH /subscriptions/{sid}?state=suspended\nQuotaAllocation.IsHardStopped = true\n\nResult: APIM returns 401 immediately. No Foundry traffic passes.",
+      title: "Compute per-developer cost",
+      detail: "Tokens × rate card (SystemConfiguration). Necessary because Claude bills as a single aggregate Marketplace CCU meter that Azure Cost Management cannot break down per user or deployment.",
     },
   ]}
 />
 
-There is up to a 15-minute window between hitting the limit and enforcement. This is intentional — querying Log Analytics on every request would add latency to every AI call.
-
-<Aside type="caution">
-**FoundryGate quota enforcement and Azure Foundry rate limits are independent.** FoundryGate controls monthly token budgets per developer; it has no effect on Azure AI Foundry's deployment-level rate limits. Azure enforces its own hard ceilings on every deployment — tokens per minute (TPM), requests per minute (RPM), and a 300 concurrent request cap for Foundry models (including Claude). These limits are shared across all callers simultaneously. A developer within their FoundryGate budget still receives `429 Too Many Requests` from Foundry when the deployment is saturated. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/) for how these limits constrain the total number of concurrently active developers per deployment.
+<Aside type="note">
+**Deployment-level limits are mitigated, not repealed.** Foundry still enforces shared
+per-model rate pools (RPM / uncached-input TPM / output TPM for Claude). FoundryGate's
+gateway smooths and reroutes around them — per-developer TPM caps for fairness, backend
+pools with circuit breakers for failover — but total capacity is still bounded by the
+platform. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/)
+for the ceilings and [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/)
+for the mitigation architecture.
 </Aside>
 
 <Pipeline
@@ -139,9 +162,8 @@ There is up to a 15-minute window between hitting the limit and enforcement. Thi
       detail: "For each active developer, run the five-level quota resolution for the new month and INSERT a fresh QuotaAllocation row.",
     },
     {
-      title: "Re-enable suspended subscriptions",
-      detail: "For each developer whose subscription was suspended: call APIM Management PATCH → state: active. Set IsHardStopped = false.",
-      code: "APIM Management: PATCH /subscriptions/{sid}\n  state: active\nQuotaAllocation.IsHardStopped = false",
+      title: "Clear hard-stop flags",
+      detail: "Gateway token-quota counters reset themselves at the UTC month boundary — no APIM counter manipulation needed. The Function clears IsHardStopped mirrors and re-activates any subscriptions whose deactivation window ended.",
     },
     {
       title: "Write audit log entry",
@@ -156,9 +178,15 @@ There is up to a 15-minute window between hitting the limit and enforcement. Thi
 
 <KeyLifecycle />
 
-**Suspend** — quota exhaustion: APIM subscription state → `suspended`. Key exists. Automatically re-enabled at monthly reset.
+**Quota exhausted** — the gateway's `token-quota` returns `403` for the rest of the
+calendar month. The subscription stays `active`; the key keeps working the moment the
+window resets. No state change to undo.
 
-**Delete** — admin deactivation or Entra departure: APIM subscription deleted entirely. Key stops working immediately and cannot be restored without a full re-provision.
+**Suspend** — admin deactivation (reversible): APIM subscription state → `suspended`.
+Key exists but APIM rejects it. Re-enabled by an admin action, not by the monthly reset.
+
+**Delete** — offboarding or Entra departure: APIM subscription deleted entirely. Key
+stops working immediately and cannot be restored without a full re-provision.
 
 ---
 

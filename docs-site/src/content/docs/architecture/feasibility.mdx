@@ -1,0 +1,181 @@
+---
+title: Feasibility & Strategic Direction
+description: Whether FoundryGate's one-stop-shop premise holds against current Azure capabilities — and the gateway-centric architecture that follows from it.
+sidebar:
+  order: 1
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+FoundryGate's premise: a **drop-in Azure solution** that provisions Microsoft Foundry
+models for agentic coding harnesses (Claude Code, Codex CLI) and gives platform teams
+cost management, per-developer quotas, rate limiting, and metrics in one deployment.
+This page assesses that premise against the Azure platform as of **September 2026** and
+states the architecture decisions that follow. All claims trace to Microsoft Learn or
+Anthropic documentation current at that date.
+
+## Verdict
+
+**Feasible — and better-timed than when the project was specced.** Every pillar now has
+a first-party Azure mechanism:
+
+| Requirement | Mechanism | Assessment |
+|---|---|---|
+| Drop-in provisioning (Bicep) | `AIServices` account + Anthropic/OpenAI deployments + APIM v2, Marketplace attestation inline | ✅ Fully supported |
+| Monthly token quota per developer | APIM `llm-token-limit` with `token-quota-period="Monthly"` per subscription key | ✅ Native, GA, real-time |
+| Transient TPM/RPM smoothing | Per-developer TPM policy caps + backend pools + circuit breakers honoring `Retry-After` | ✅ Gateway-native |
+| Per-developer metrics | `llm-emit-token-metric` (dashboards) + `ApiManagementGatewayLlmLog` (billing-grade) | ✅ Native |
+| Per-developer cost | Token telemetry × rate card | ⚠️ Buildable — not available from Azure Cost Management for Claude |
+| Claude at large scale | Multi-region pools; no PTU exists for Claude | ⚠️ Structural ceiling remains |
+| "One click" drop-in | One Bicep deploy + ~30-minute tenant prep checklist | ⚠️ Near, not absolute |
+
+## What changed on the platform
+
+Three developments since the original spec reshape the architecture:
+
+### 1. APIM enforces monthly token budgets natively — in real time
+
+The `llm-token-limit` policy (GA, all tiers except Consumption) supports, in one policy:
+
+- **`tokens-per-minute`** — rolling TPM cap per `counter-key`, returning `429` with
+  `Retry-After` when exceeded.
+- **`token-quota` + `token-quota-period="Hourly|Daily|Weekly|Monthly|Yearly"`** — a
+  fixed calendar-window token budget per `counter-key`, returning `403` when exhausted.
+
+With `counter-key="@(context.Subscription.Id)"`, each developer's APIM subscription
+carries its own TPM cap *and* monthly budget, enforced on the request path with no
+sync lag. The original design — a Function polling Log Analytics every 15 minutes and
+suspending subscriptions — is no longer the enforcement mechanism. It survives as
+**reconciliation**: authoritative usage numbers for dashboards, drift detection, and
+audit.
+
+<Aside type="note">
+Quota windows are UTC-truncated calendar windows — a `Monthly` quota resets at
+month-start UTC, exactly matching FoundryGate's reset semantics. The reset Function no
+longer touches APIM counters at all.
+</Aside>
+
+### 2. APIM understands the Anthropic Messages API
+
+On **APIM v2 tiers** (Basic v2 / Standard v2 / Premium v2), the LLM policies
+(`llm-token-limit`, `llm-emit-token-metric`) support the **Anthropic Messages API
+schema** alongside OpenAI Chat Completions/Responses — token metering works on Claude
+Code's native `/v1/messages` traffic without format translation. This is the single
+most consequential fact for FoundryGate: it makes one gateway with two front doors
+(Anthropic-format for Claude Code, OpenAI-format for Codex CLI) fully meterable.
+
+<Aside type="caution">
+This is why FoundryGate **requires an APIM v2 tier** (Basic v2 minimum). Classic tiers
+lack the Anthropic schema; the Consumption tier lacks the token policies and circuit
+breakers entirely.
+</Aside>
+
+### 3. Claude on Foundry went GA with broader eligibility
+
+- Claude models are **GA** (claude-opus-5, claude-opus-4-8, claude-sonnet-5,
+  claude-haiku-4-5 hosted on Azure; Anthropic-hosted variants for others).
+- Eligibility is no longer EA/MCA-E-only: any **paid subscription with an active
+  pay-as-you-go billing method** qualifies (CSP, free-trial, student, and credit-only
+  subscriptions remain excluded).
+- Rate limits are now **cache-aware**: RPM + *uncached input* TPM + output TPM.
+  Cache reads don't count against input TPM — a major effective-capacity win for
+  Claude Code, which caches prompts aggressively.
+- Claude Code and Codex CLI both **officially support Azure endpoints**, and both
+  accept an arbitrary base URL — pointing them at an APIM gateway is Microsoft's
+  documented pattern.
+
+## The architecture that follows
+
+FoundryGate splits cleanly into a control plane and a data plane:
+
+**Control plane (FoundryGate app)** — identity and lifecycle: Entra sync, APIM
+subscription key issuance/rotation/revocation, quota tier assignment, increase
+approvals, deployment provisioning/resizing, dashboards, audit.
+
+**Data plane (APIM v2 gateway)** — everything on the request path: subscription-key
+auth, per-developer TPM caps and monthly budgets, token metric emission, backend
+pool routing with circuit breakers, retry-across-deployments on 429.
+
+<CardGrid>
+  <Card title="Quota tiers as products" icon="bars">
+    Products (Standard / Power / Unlimited) carry the token-limit policies. Changing a
+    developer's budget = moving their subscription between products. Per-user arbitrary
+    values are a PoC question (policy-expression support); tiers are the safe default.
+  </Card>
+  <Card title="Two front doors, one gateway" icon="random">
+    <code>/anthropic/*</code> passes Anthropic Messages traffic to Foundry for Claude
+    Code; <code>/openai/v1</code> serves Codex CLI's Responses API. The subscription key
+    header is <code>api-key</code>, so both CLIs work with native env vars.
+  </Card>
+  <Card title="Pools instead of PTU" icon="setting">
+    Claude has no provisioned throughput and no spillover. Backend pools with priority
+    groups and circuit breakers that honor <code>Retry-After</code> are the equivalent:
+    priority-1 deployment saturates → traffic drains to priority-2 (other region,
+    DataZone, or hosting variant) automatically.
+  </Card>
+  <Card title="Cost from telemetry" icon="document">
+    Claude bills as one aggregate Marketplace CCU meter — Cost Management can't split it
+    by user or deployment. FoundryGate computes per-developer cost as tokens × rate
+    card, reconciled from gateway logs.
+  </Card>
+</CardGrid>
+
+## How this solves the transient-limit problem
+
+The [rate limits reference](/foundry-gate/reference/azure-rate-limits/) documents the
+deployment-level ceilings. The gateway addresses the *transient* symptoms in three
+layers:
+
+1. **Fairness before saturation** — per-developer `tokens-per-minute` caps mean one
+   developer's agentic burst gets a targeted `429 + Retry-After` (which Claude Code and
+   Codex both back off on) instead of saturating the shared deployment for everyone.
+2. **Absorption at saturation** — when a deployment itself returns 429, the circuit
+   breaker trips for that backend (honoring its `Retry-After`, which for AI backends
+   can be long) and the pool retries the request against the next deployment. The
+   client sees a slower response, not an error.
+3. **Headroom by construction** — pools multiply capacity across regions and
+   deployment types. Claude quota pools are subscription-scoped and shared across
+   regions for Global Standard, so pooling buys availability and burst diversity
+   rather than raw multiplied TPM — pairing Global Standard with DataZone Standard
+   or Anthropic-hosted variants diversifies actual capacity.
+
+What APIM does **not** provide is queueing — there is no request-queue primitive. For
+interactive CLI workloads this is acceptable: the CLIs' own backoff is the queue.
+
+## Honest caveats
+
+<Aside type="caution">
+These are the four things most likely to bite, stated plainly:
+
+1. **Token-count divergence for Claude.** The gateway counts prompt + completion
+   tokens; Foundry's rate accounting is cache-aware and Claude billing runs through
+   CCU conversion. Gateway numbers are the *enforcement* truth; Log Analytics
+   reconciliation is the *reporting* truth; billing-exact figures require the rate
+   card. A PoC must characterize how cache-read/creation tokens are counted (#82).
+2. **Counters are per gateway instance.** Fine on a single Basic v2 unit; scaling
+   units or regions breaks counter aggregation.
+3. **Claude scale ceiling.** No PTU, possible 300-concurrent-request cap (its current
+   applicability to Claude is unverified), Enterprise defaults of 2,000 RPM / 2M
+   uncached-input TPM. Claude-heavy orgs beyond a few hundred heavy users still need
+   quota increases (form-based, not programmatic) or a direct Anthropic agreement.
+4. **Metric dimension caps.** App Insights custom metrics silently discard beyond 100
+   unique subscription IDs per dimension — dashboards for small orgs, Log Analytics
+   for everything authoritative.
+</Aside>
+
+## What "drop-in" honestly means
+
+One Bicep deployment provisions: the Foundry account, Claude + GPT deployments
+(with Marketplace attestation handled inline — no portal click-through), the APIM v2
+gateway with products/policies/pools, SQL, the API container app, the static web app,
+Key Vault, and monitoring. Tenant prep that cannot be Bicep'd — roughly 30 minutes:
+
+1. An Entra **app registration** (redirect URI, `FoundryGate.Admin` app role, Graph
+   permissions + admin consent).
+2. **Billing eligibility** for Claude: paid subscription with active pay-as-you-go
+   billing method; deploying principal needs Marketplace/SaaS permissions
+   (`Microsoft.SaaS/register/action` et al.).
+3. **GitHub OIDC secrets** for the Actions pipelines.
+
+That checklist is the honest gap between "drop-in" and "one click" — documented in the
+fork guide rather than papered over.

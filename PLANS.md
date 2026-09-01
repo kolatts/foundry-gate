@@ -45,8 +45,9 @@ Files expected to be created or modified:
 |---|---|
 | **v0.1 — Foundation** | Solution scaffold, data layer, shared DTOs, API project + Entra auth |
 | **v0.2 — Core API** | All backend endpoints: users, groups, quota, requests, APIM keys, background services |
-| **v0.3 — Infrastructure** | Bicep modules, GitHub Actions CI/CD |
+| **v0.3 — Infrastructure** | Bicep modules (incl. APIM v2 gateway + Foundry deployments), GitHub Actions CI/CD |
 | **v0.4 — Frontend** | Blazor WASM — developer and admin pages |
+| **v0.5 — GenAI gateway** | Epic #81 / `plans/24-apim-genai-gateway.md`: real-time token quotas (`llm-token-limit`), backend pools + circuit breakers, metrics/reconciliation, CLI onboarding |
 
 ## Working on an issue
 
@@ -67,6 +68,8 @@ Files expected to be created or modified:
 - **Microsoft Entra ID** via `Microsoft.Identity.Web`
 - **Azure SDK** for APIM management (`Azure.ResourceManager.ApiManagement`)
 - **Azure SDK** for AI Foundry model deployment (`Azure.ResourceManager.CognitiveServices`)
+- **APIM v2 tier (Basic v2 minimum)** — required for Anthropic Messages schema support in
+  `llm-token-limit` / `llm-emit-token-metric`; enforcement is gateway-side per epic #81
 - **Microsoft Graph SDK** for Entra sync
 - **Azure Functions** (.NET 10 isolated worker) for scheduled background jobs
 - **Bicep** for all IaC

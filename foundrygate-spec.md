@@ -5,6 +5,15 @@
 > user sync, quota increase approvals, APIM subscription key lifecycle management, and a
 > monthly hard reset. Designed to be forked and configured against any Azure tenant.
 
+> **⚠️ September 2026 amendment (see `fable-refactor.md` and `plans/24-apim-genai-gateway.md`, epic #81):**
+> quota enforcement moves from the usage-sync/suspension loop described below into APIM's
+> `llm-token-limit` policy (real-time monthly `token-quota` + per-developer TPM caps, keyed on
+> subscription ID — Anthropic Messages schema supported on APIM v2 tiers). Transient 429
+> smoothing is handled by APIM backend pools + circuit breakers across Foundry deployments.
+> APIM (v2 tier) and the Foundry account + model deployments are provisioned by this repo's
+> Bicep, no longer assumed to pre-exist. Sections below marked "(amended)" are superseded in
+> part; the referenced plan file is authoritative where they conflict.
+
 ---
 
 ## 1. Repository Structure
@@ -273,17 +282,19 @@ Managed Identity credential (Container App system-assigned identity).
 5. QuotaAllocation.IsHardStopped set to true for current period
 ```
 
-### 5.4 Monthly token usage sync
+### 5.4 Monthly token usage sync (amended: reconciliation, not enforcement)
 
-The APIM `llm-emit-token-metric` policy emits token counts to Application Insights.
-The API exposes a scheduled endpoint (triggered by a Container App cron job or Timer):
+Enforcement is real-time in the gateway (`llm-token-limit`, see amendment note and
+`plans/24-apim-genai-gateway.md`). The sync job reconciles reporting data:
 
-```
-POST /internal/sync-usage           Internal only (header key auth, not Entra)
-```
-
-This reads from the Application Insights REST API (or Azure Monitor Logs / Log Analytics)
-and updates `QuotaAllocation.TokensUsed` for each user by matching the APIM subscription ID.
+- Source of truth: the `ApiManagementGatewayLlmLog` Log Analytics table (per-request
+  prompt/completion/total tokens), joined to `ApiManagementGatewayLogs` on
+  `CorrelationId` for the APIM subscription ID.
+- Updates `QuotaAllocation.TokensUsed` for dashboards/audit and computes per-developer
+  cost (tokens × rate card in `SystemConfiguration`) — required for Claude, whose
+  Marketplace CCU meter cannot be broken down per user in Azure Cost Management.
+- `llm-emit-token-metric` (Subscription ID dimension) feeds near-real-time dashboards,
+  subject to App Insights dimension cardinality caps (~100 unique values).
 
 ---
 
@@ -418,8 +429,12 @@ Microsoft.App/containerApps                     foundrygate-api
   - ingress: external, port 8080
   - env vars: SQL connection string (Key Vault ref), APIM resource ID, etc.
 Microsoft.Web/staticSites                       foundrygate-ui (Static Web Apps, Free tier)
-Microsoft.ApiManagement/service                 (existing — param input, not created here)
-Microsoft.CognitiveServices/accounts            (existing — param input, not created here)
+Microsoft.ApiManagement/service                 (amended: created here — v2 tier, Basic v2 minimum;
+                                                 products/policies/backends/pools as IaC)
+Microsoft.CognitiveServices/accounts            (amended: created here — kind AIServices;
+                                                 child deployments with model.format Anthropic
+                                                 [incl. modelProviderData Marketplace attestation]
+                                                 and OpenAI; sku.capacity = thousands of TPM)
 Microsoft.KeyVault/vaults                       foundrygate-kv
   - secrets: SqlConnectionString, GraphClientSecret, ApimMgmtKey
 Microsoft.Insights/components                   Application Insights (shared with APIM)
