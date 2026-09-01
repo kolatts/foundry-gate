@@ -24,6 +24,12 @@ Table file names below also use each table's actual (plural) name —
 `AppDbContext`'s `DbSet` names and the file-name-equals-table-name convention the parity test
 depends on.
 
+The parity test's documented gaps (no data type/length/precision checking, no composite-FK
+support, no index-composition validation beyond the `UNIQUE` flag) and the `db compare` deferral
+above are tracked as follow-up work in
+[#100](https://github.com/kolatts/foundry-gate/issues/100) rather than left as inline TODOs, per
+CLAUDE.md's "everything is a GitHub issue" rule.
+
 ## Overview
 Foundry Gate uses a hybrid schema management approach borrowed from imagile-app: EF Core migrations are the developer-facing workflow (fast iteration, `dotnet ef migrations add`), but the canonical schema artifact is a `.sqlproj` file that DacFx can build into a dacpac. A `FoundryGate.Cli` dotnet tool ties it together — `Foundry Gate db compare` runs a DacFx schema comparison between the local database (kept current by EF migrations) and the `.sqlproj` files, then publishes any delta back into the project's SQL files. CI builds the dacpac and the CLI deploys it. This gives the precision of dacpac-based deployments without abandoning EF's migration ergonomics.
 

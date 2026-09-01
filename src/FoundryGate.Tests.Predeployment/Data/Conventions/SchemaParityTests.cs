@@ -19,6 +19,11 @@ namespace FoundryGate.Tests.Predeployment.Data.Conventions;
 /// that model is provider-agnostic; only physical SQL Server types like
 /// <c>nvarchar</c>/<c>uniqueidentifier</c> are SQLite-incompatible and therefore out of scope here).
 /// </para>
+/// <para>
+/// Documented gaps below are tracked in
+/// <see href="https://github.com/kolatts/foundry-gate/issues/100">#100</see>, not left as inline
+/// TODOs.
+/// </para>
 /// <para><b>Deliberate limits (documented, not accidental gaps):</b></para>
 /// <list type="bullet">
 /// <item>Checks table existence, the column name set, and column nullability only — NOT SQL data

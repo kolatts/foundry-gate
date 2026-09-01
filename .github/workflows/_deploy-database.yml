@@ -14,6 +14,23 @@ name: Deploy Database (Reusable)
 #
 # Standalone-valid today: this file's shape (inputs, jobs, steps) does not depend on anything else
 # in #67 to be syntactically/semantically complete, only to actually run successfully end-to-end.
+#
+# OIDC permissions: a reusable workflow cannot grant itself `id-token: write` — GitHub only issues
+# the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN that azure/login@v2 needs when the CALLING workflow (or
+# job) declares `permissions: id-token: write, contents: read`. The `permissions:` block below is a
+# same-or-narrower request within whatever the caller already granted, not a grant on its own — every
+# caller of this workflow MUST include that permissions block, e.g.:
+#
+#   jobs:
+#     deploy-database:
+#       uses: ./.github/workflows/_deploy-database.yml
+#       permissions:
+#         id-token: write
+#         contents: read
+#       with: { ... }
+#
+# The "Verify OIDC permissions" step below fails fast with that exact guidance instead of letting
+# azure/login@v2 fail later with a cryptic AADSTS error.
 
 on:
   workflow_call:
@@ -35,7 +52,12 @@ on:
         required: true
         type: string
       run-seed-test:
-        description: "Whether to also seed Bogus demo data after reference data. Never set true for a production environment."
+        description: "Whether to also seed Bogus demo data after reference data. Ignored (forced false) for a production environment regardless of what the caller passes."
+        required: false
+        type: boolean
+        default: false
+      allow-data-loss:
+        description: "Passes --allow-data-loss to `db deploy`, permitting a deployment that could drop/truncate data. Default false (DacFx blocks on possible data loss). Production callers must NEVER set this true without a reviewed migration plan for the affected column(s) — it exists for intentional, one-off schema changes, not routine deploys."
         required: false
         type: boolean
         default: false
@@ -47,13 +69,33 @@ on:
       AZURE_SUBSCRIPTION_ID:
         required: true
 
+# One deploy at a time per target environment — a second run queued mid-deploy would race the
+# first over the same database.
+concurrency:
+  group: deploy-database-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Database - Deploy to ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Verify OIDC permissions are granted
+        run: |
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::ACTIONS_ID_TOKEN_REQUEST_URL is not set. The workflow (or job) that calls" \
+              "_deploy-database.yml must declare 'permissions: id-token: write' and 'contents: read'" \
+              "— this reusable workflow's own 'permissions:' block can only narrow what the caller" \
+              "grants, it cannot add id-token access on its own. See this file's header comment for" \
+              "the exact snippet to add to the caller."
+            exit 1
+          fi
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -79,6 +121,22 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Resolve SQL Server connection details
+        run: |
+          SERVER_FQDN=$(az sql server show \
+            --name ${{ inputs.sql-server-name }} \
+            --resource-group ${{ inputs.sql-resource-group }} \
+            --query fullyQualifiedDomainName -o tsv)
+
+          echo "Server: $SERVER_FQDN"
+          echo "SERVER_FQDN=${SERVER_FQDN}" >> "$GITHUB_ENV"
+
+          # Authentication=Active Directory Default lets DacServices/SqlClient pick up the OIDC
+          # token azure/login@v2 already established for this runner (CONVENTIONS.md: no SQL
+          # passwords in the cloud). Computed once here so every later step uses the identical
+          # string instead of re-deriving (and risking drift between) their own copies.
+          echo "CONNECTION_STRING=Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True" >> "$GITHUB_ENV"
+
       # STUB: `foundrygate ip setup` doesn't whitelist anything real yet — it needs an Azure SQL
       # Server resource that doesn't exist until the Bicep infra modules (#43/#44) deploy. This
       # step is kept continue-on-error so the rest of the deploy pipeline shape is exercised today
@@ -99,13 +157,6 @@ jobs:
 
       - name: Verify network connectivity to SQL Server
         run: |
-          SERVER_FQDN=$(az sql server show \
-            --name ${{ inputs.sql-server-name }} \
-            --resource-group ${{ inputs.sql-resource-group }} \
-            --query fullyQualifiedDomainName -o tsv)
-
-          echo "Server: $SERVER_FQDN"
-
           if timeout 10 bash -c "cat < /dev/null > /dev/tcp/${SERVER_FQDN}/1433" 2>/dev/null; then
             echo "Network connectivity OK - port 1433 is reachable"
           else
@@ -116,48 +167,31 @@ jobs:
 
       - name: Deploy dacpac
         run: |
-          SERVER_FQDN=$(az sql server show \
-            --name ${{ inputs.sql-server-name }} \
-            --resource-group ${{ inputs.sql-resource-group }} \
-            --query fullyQualifiedDomainName -o tsv)
-
-          # Authentication=Active Directory Default lets DacServices/SqlClient pick up the OIDC
-          # token azure/login@v2 already established for this runner (CONVENTIONS.md: no SQL
-          # passwords in the cloud).
-          CONNECTION_STRING="Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True"
+          DATA_LOSS_FLAG=""
+          if [ "${{ inputs.allow-data-loss }}" = "true" ]; then
+            echo "::warning::--allow-data-loss is set — this deploy can drop/truncate data. Only use this for an intentional, reviewed migration, never a routine deploy."
+            DATA_LOSS_FLAG="--allow-data-loss"
+          fi
 
           dotnet ./cli/FoundryGate.Cli.dll \
             db deploy \
             ./artifacts/FoundryGate.Database.dacpac \
             "${CONNECTION_STRING}" \
-            --drop-objects
+            --drop-objects \
+            ${DATA_LOSS_FLAG}
 
       - name: Seed reference data
         run: |
-          SERVER_FQDN=$(az sql server show \
-            --name ${{ inputs.sql-server-name }} \
-            --resource-group ${{ inputs.sql-resource-group }} \
-            --query fullyQualifiedDomainName -o tsv)
-
-          CONNECTION_STRING="Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True"
-
           dotnet ./cli/FoundryGate.Cli.dll \
             db seed-reference \
             "${CONNECTION_STRING}"
 
-      # Never runs for production: run-seed-test must be explicitly opted into by the caller
-      # (e.g. deploy-all.yml passing true only for the dev environment), and this repo's callers
-      # must never pass true for a production environment input.
+      # Machine-enforced, not just documented: forces false for production regardless of what the
+      # caller passes, so a copy-pasted `run-seed-test: true` in a production caller can't seed
+      # Bogus demo data into a real environment.
       - name: Seed test data
-        if: inputs.run-seed-test
+        if: inputs.run-seed-test && inputs.environment != 'production'
         run: |
-          SERVER_FQDN=$(az sql server show \
-            --name ${{ inputs.sql-server-name }} \
-            --resource-group ${{ inputs.sql-resource-group }} \
-            --query fullyQualifiedDomainName -o tsv)
-
-          CONNECTION_STRING="Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True"
-
           dotnet ./cli/FoundryGate.Cli.dll \
             db seed-test \
             "${CONNECTION_STRING}"

@@ -31,27 +31,27 @@ internal sealed class SetupCommand : Command
 
         Add(testDataOption);
 
-        SetAction(async context =>
+        SetAction(async (context, cancellationToken) =>
         {
             var seedTestData = context.GetValue(testDataOption);
-            await ExecuteAsync(seedTestData);
+            await ExecuteAsync(seedTestData, cancellationToken);
         });
     }
 
-    private static async Task ExecuteAsync(bool seedTestData)
+    private static async Task ExecuteAsync(bool seedTestData, CancellationToken cancellationToken)
     {
-        Console.WriteLine("Connecting to local SQL Server (localhost,3433)...");
+        Console.WriteLine($"Connecting to local SQL Server ({LocalConnectionString})...");
 
         await using var context = CliDbContextFactory.Create(LocalConnectionString);
 
         Console.WriteLine("Dropping any existing FoundryGate database...");
-        await context.Database.EnsureDeletedAsync();
+        await context.Database.EnsureDeletedAsync(cancellationToken);
 
         Console.WriteLine("Creating FoundryGate database from the current EF model...");
-        await context.Database.EnsureCreatedAsync();
+        await context.Database.EnsureCreatedAsync(cancellationToken);
 
         Console.WriteLine("Seeding reference data...");
-        var referenceResults = await ReferenceDataSeeder.SeedAsync(context);
+        var referenceResults = await ReferenceDataSeeder.SeedAsync(context, cancellationToken);
         foreach (var (entityName, result) in referenceResults)
         {
             Console.WriteLine($"  {entityName}: +{result.Added} ~{result.Updated} -{result.Deleted}");
@@ -60,7 +60,7 @@ internal sealed class SetupCommand : Command
         if (seedTestData)
         {
             Console.WriteLine("Seeding demo test data...");
-            await TestDataSeeder.SeedAsync(context, TimeProvider.System);
+            await TestDataSeeder.SeedAsync(context, TimeProvider.System, cancellationToken: cancellationToken);
         }
 
         Console.WriteLine("Local setup complete.");

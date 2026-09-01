@@ -15,6 +15,8 @@ namespace FoundryGate.Cli.Commands.Db.Deploy;
 /// </summary>
 internal sealed class DeployCommand : Command
 {
+    private static readonly TimeSpan DeployTimeout = TimeSpan.FromMinutes(10);
+
     public DeployCommand() : base("deploy", "Deploys a dacpac to a target SQL Server database")
     {
         var dacpacArg = new Argument<string>("dacpac")
@@ -32,28 +34,37 @@ internal sealed class DeployCommand : Command
             Description = "Drop objects in the target database that are not present in the dacpac"
         };
 
-        var blockOnDataLossOption = new Option<bool>("--block-on-data-loss", "-b")
+        // Safety is the default (DacFx's own BlockOnPossibleDataLoss=true) — CONVENTIONS.md
+        // deliberately deviates from imagile-app here (which inverts this to opt-in blocking): a
+        // fork's production database deserves a safe default more than CI convenience does. Pass
+        // --allow-data-loss to explicitly opt out.
+        var allowDataLossOption = new Option<bool>("--allow-data-loss")
         {
-            Description = "Block the deployment if it could cause data loss"
+            Description = "Allow the deployment to proceed even if it could cause data loss (default: blocked)"
         };
 
         Add(dacpacArg);
         Add(connectionStringArg);
         Add(dropObjectsOption);
-        Add(blockOnDataLossOption);
+        Add(allowDataLossOption);
 
-        SetAction(context =>
+        SetAction(async (context, cancellationToken) =>
         {
             var dacpacPath = context.GetValue(dacpacArg)!;
             var connectionString = context.GetValue(connectionStringArg)!;
             var dropObjects = context.GetValue(dropObjectsOption);
-            var blockOnDataLoss = context.GetValue(blockOnDataLossOption);
+            var allowDataLoss = context.GetValue(allowDataLossOption);
 
-            Execute(dacpacPath, connectionString, dropObjects, blockOnDataLoss);
+            await ExecuteAsync(dacpacPath, connectionString, dropObjects, allowDataLoss, cancellationToken);
         });
     }
 
-    private static void Execute(string dacpacPath, string connectionString, bool dropObjects, bool blockOnDataLoss)
+    private static async Task ExecuteAsync(
+        string dacpacPath,
+        string connectionString,
+        bool dropObjects,
+        bool allowDataLoss,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(dacpacPath))
         {
@@ -69,7 +80,7 @@ internal sealed class DeployCommand : Command
         }
 
         Console.WriteLine($"Deploying {Path.GetFileName(dacpacPath)} to {builder.DataSource}/{databaseName}...");
-        Console.WriteLine($"  --drop-objects: {dropObjects}, --block-on-data-loss: {blockOnDataLoss}");
+        Console.WriteLine($"  --drop-objects: {dropObjects}, --allow-data-loss: {allowDataLoss} (BlockOnPossibleDataLoss: {!allowDataLoss})");
 
         var dacServices = new DacServices(connectionString);
         dacServices.ProgressChanged += (_, args) => Console.WriteLine(args.Message);
@@ -87,15 +98,22 @@ internal sealed class DeployCommand : Command
 
         var options = new DacDeployOptions
         {
-            BlockOnPossibleDataLoss = blockOnDataLoss,
+            BlockOnPossibleDataLoss = !allowDataLoss,
             GenerateSmartDefaults = true,
             DropObjectsNotInSource = dropObjects,
             ExcludeObjectTypes = [ObjectType.Users],
             ScriptDatabaseCompatibility = true
         };
 
+        // Same 10-minute deploy ceiling imagile-app's DeployCommand uses, linked to the process's
+        // own cancellation (Ctrl+C) so either one aborts the blocking DacServices.Deploy call.
+        using var timeoutSource = new CancellationTokenSource(DeployTimeout);
+        using var linkedSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+
         using var package = DacPackage.Load(dacpacPath);
-        dacServices.Deploy(package, databaseName, upgradeExisting: true, options);
+        await Task.Run(
+            () => dacServices.Deploy(package, databaseName, upgradeExisting: true, options, linkedSource.Token),
+            linkedSource.Token);
 
         Console.WriteLine($"Deployed {databaseName} successfully.");
     }

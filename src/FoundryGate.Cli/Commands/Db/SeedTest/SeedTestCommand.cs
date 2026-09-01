@@ -20,19 +20,19 @@ internal sealed class SeedTestCommand : Command
 
         Add(connectionStringArg);
 
-        SetAction(async context =>
+        SetAction(async (context, cancellationToken) =>
         {
             var connectionString = context.GetValue(connectionStringArg)!;
-            await ExecuteAsync(connectionString);
+            await ExecuteAsync(connectionString, cancellationToken);
         });
     }
 
-    private static async Task ExecuteAsync(string connectionString)
+    private static async Task ExecuteAsync(string connectionString, CancellationToken cancellationToken)
     {
         await using var context = CliDbContextFactory.Create(connectionString);
 
         Console.WriteLine("Seeding demo test data...");
-        await TestDataSeeder.SeedAsync(context, TimeProvider.System);
+        await TestDataSeeder.SeedAsync(context, TimeProvider.System, cancellationToken: cancellationToken);
 
         Console.WriteLine("Test data seeding complete.");
     }
