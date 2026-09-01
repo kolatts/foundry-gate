@@ -71,6 +71,16 @@ public static class AuditActions
     /// <summary>A developer revealing their own full key (spec &#167;11: "reveal action fetches directly, not stored in browser").</summary>
     public const string KeyRevealed = "key.revealed";
 
+    /// <summary>The APIM subscription behind a key was re-scoped to another quota-tier product (#82: a tier change moves the subscription between tier products).</summary>
+    public const string KeyTierChanged = "key.tier-changed";
+
+    /// <summary>
+    /// APIM regenerated the keys but the new primary could not be stored — the ciphertext on the user is
+    /// now stale and the remedy (rotate again, or revoke and re-provision) is in the details. Written so
+    /// an unrevealable key has a trail, not just a log line.
+    /// </summary>
+    public const string KeyRotationFailed = "key.rotation-failed";
+
     // -- Usage sync (spec 5.4, issue #39) --
 
     /// <summary>The Log Analytics → <c>QuotaAllocation.TokensUsed</c> reconciliation job (reconciliation, not enforcement).</summary>

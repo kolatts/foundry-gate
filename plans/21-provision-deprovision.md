@@ -58,20 +58,21 @@ Trigger C — Admin key revocation without deactivation (DELETE /keys/{userId})
 **Steps:**
 
 ```
-1. Call IApimKeyService.DeleteSubscriptionAsync:
-     a. APIM Management: DELETE /subscriptions/{apimSubscriptionId}
-     b. Set User.ApimSubscriptionId = null, User.ApimSubscriptionKey = null
+1. Call IApimKeyService.RevokeAsync (no-op when the user has no key):
+     a. APIM Management: DELETE /subscriptions/foundrygate-{userId}
+     b. Clear User.ApimSubscriptionId / ApimSubscriptionKey / ApimSubscriptionKeyHint / ApimKeyIssuedDate
+     c. Audit key.revoked
 2. [Triggers A + B only] Set User.IsActive = false
 3. Set QuotaAllocation.IsHardStopped = true for the current period
 4. Cancel any Pending QuotaIncreaseRequests for this user (set Status = Rejected, ReviewNotes = "User deactivated")
 5. Write audit log: user.deactivated | user.key-revoked | sync.user-departed (as appropriate)
 ```
 
-**Key distinction — suspend vs. delete:**
+**Every exit deletes — there is no suspended state (#116):**
 
 | Scenario | APIM action | User.IsActive | Key can be restored? |
 |---|---|---|---|
-| Quota exhausted (usage sync) | Suspend subscription | true | Yes — monthly reset re-enables |
+| Quota exhausted | None — the gateway's `llm-token-limit` returns `403` until the month resets (#81); the subscription stays `active` | true | n/a — the key keeps working the moment the window resets |
 | Admin deactivation | Delete subscription | false | Only via re-activation (Trigger C of provision) |
 | Entra departure | Delete subscription | false | Only if user returns to Entra and admin re-activates |
 | Admin key revocation only | Delete subscription | true | Yes — admin calls POST /keys/{userId}/provision |
@@ -113,7 +114,7 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/UsersController.cs` (deactivate/activate wired to lifecycle service)
 - `src/FoundryGate.Api/Services/EntraUserSyncService.cs` (departure path wired to lifecycle service)
 - `src/FoundryGate.Api/Controllers/KeysController.cs` (provision/revoke wired to lifecycle service)
-- `src/FoundryGate.Api/Services/IApimKeyService.cs` (add SuspendAsync, ReenableAsync, DeleteAsync)
+- `src/FoundryGate.Api/Services/Keys/IApimKeyService.cs` (already provides the building blocks: `ProvisionAsync`, `RotateAsync`, `RevokeAsync`, `MoveToProductAsync` — plan 09; no suspend/re-enable surface exists, #116)
 
 ### Add re-activation endpoint and orphan subscription detection (#66)
 `POST /users/{id}/activate` currently just sets `User.IsActive = true`. It must call `IUserLifecycleService.ReactivateAsync` which runs the full provision pipeline (Trigger C). Before calling APIM to create a new subscription, check if a subscription named `foundrygate-{userId}` already exists on the APIM Management plane — if it does (orphan from a failed previous deprovision), reuse it rather than creating a duplicate. `DELETE /keys/{userId}` (admin key revocation without deactivation) leaves `User.IsActive = true` and must not call the full deprovision pipeline — only step 1 (APIM delete) and step 5 (audit log).

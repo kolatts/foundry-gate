@@ -44,10 +44,13 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
    - Value: `FoundryGate.Admin`
    - Allowed member types: Users/Groups
 
-   **Add Graph API permissions** (Application, with admin consent):
-   - `User.Read.All`
-   - `Group.Read.All`
-   - `GroupMember.Read.All`
+   **Graph API permissions are granted later, not here.** The Entra sync calls Microsoft Graph as the
+   API's user-assigned managed identity (`id-foundrygate-api-{env}`, created by the Bicep deploy) — there is
+   no client secret. After the first infra deploy, grant that identity the Graph *application* roles
+   `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` as app-role assignments on the
+   Microsoft Graph service principal (the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)
+   lists them; [#120](https://github.com/kolatts/foundry-gate/issues/120) has a PowerShell snippet). Then set
+   `Entra__Enabled=true` on the API.
 
 3. ### Configure APIM
 
@@ -186,8 +189,14 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
 **APIM returns 401 on first AI call**  
 Check that the `foundrygate` product is published and your APIM subscription is in `active` state. Run `GET /keys/me` to confirm the key was provisioned.
 
-**Graph sync fails with 403**  
-Admin consent has not been granted for the Graph API permissions. Go to Entra → Enterprise Applications → your app → Permissions → Grant admin consent.
+**`POST /users/sync` returns 400**  
+`Entra__Enabled` is still `false` on the API — the response says so. Turn it on once the Graph roles below are granted.
+
+**`POST /users/sync` fails with 500 (`Authorization_RequestDenied` in the API logs)**  
+The API's managed identity (`id-foundrygate-api-{env}`) is missing one of the Graph application roles `Application.Read.All`, `User.Read.All`, `GroupMember.ReadBasic.All`. Grant them as app-role assignments on the Microsoft Graph service principal (see [#120](https://github.com/kolatts/foundry-gate/issues/120)); no restart is needed.
+
+**`POST /users/sync` returns `skippedGroupAssignmentCount > 0` and never deactivates anyone**  
+Your developers are assigned to the FoundryGate enterprise application through a group. Group assignments are not expanded yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)), so departure detection is suspended; assign developers individually if you need it now.
 
 **Container App shows "no healthy upstream"**  
 The API is still starting or the migration hasn't run. Check the Container App log stream and verify the SQL connection string Key Vault reference resolved correctly.

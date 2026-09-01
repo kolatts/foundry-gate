@@ -1,7 +1,7 @@
 ---
 // APIM subscription (developer key) state machine — gateway-centric model, lifecycle per
 // plans/21-provision-deprovision.md (#65/#66): a key IS an APIM subscription created under
-// a tier product. Rotation (regeneratePrimaryKey) and quota changes (re-scope to another
+// a tier product. Rotation (regeneratePrimaryKey + regenerateSecondaryKey — both keys) and quota changes (re-scope to another
 // tier product) keep it Active; 403/429 are gateway responses and change nothing. Admin
 // deactivation, Entra departure and admin key revocation all DELETE the subscription;
 // re-activation re-runs provisioning (reusing an orphan subscription if one exists).
@@ -12,7 +12,7 @@
   <p id="fgd-kl-title" class="fgd-sr-only">APIM key lifecycle state machine</p>
   <p id="fgd-kl-desc" class="fgd-sr-only">
     From No key, first login or admin provision creates an APIM subscription under the developer's tier product and
-    the key becomes Active. While Active: rotating the key calls regeneratePrimaryKey and stays Active; changing the
+    the key becomes Active. While Active: rotating the key regenerates both the primary and the secondary key and stays Active; changing the
     quota re-scopes the subscription to the new tier's product and stays Active (the gateway's monthly counter
     restarts for that subscription; live validation tracked in #88); a 403 for an exhausted monthly quota or a 429
     with Retry-After for the per-minute cap are gateway responses that change nothing. Admin deactivation, Entra
@@ -69,7 +69,7 @@
       <!-- Active ⟲ rotate (right loop) -->
       <path d="M 430,148 C 482,140 482,182 430,176" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />
       <text x="488" y="156" class="fgd-s-label fgd-s-label--green">rotate key</text>
-      <text x="488" y="170" class="fgd-s-label fgd-s-mono">regeneratePrimaryKey</text>
+      <text x="488" y="170" class="fgd-s-label fgd-s-mono">regenerate both keys</text>
 
       <!-- Active ⟲ change quota (left loop) -->
       <path d="M 220,148 C 168,140 168,182 220,176" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />

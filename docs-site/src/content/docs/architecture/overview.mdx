@@ -14,7 +14,7 @@ import KeyLifecycle from '../../../components/KeyLifecycle.astro';
 
 *The plain-English version of this page is [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/); the full platform detail lives in [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) and the [reference section](/foundry-gate/reference/configuration/).*
 
-FoundryGate is a governance and access-management layer for Azure AI Foundry. It provisions the gateway and the model deployments, then adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
+FoundryGate is a governance and access-management layer for Azure AI Foundry. It provisions the gateway and the model deployments — Claude models are set up by the infrastructure deploy, and admins manage OpenAI model deployments from the UI — then adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
 
 ## System diagram
 
@@ -39,7 +39,7 @@ Two details on the diagram are ground truths worth stating plainly:
 
 ## Entra ID sync — how access follows your org chart
 
-FoundryGate uses the Microsoft Graph API (app-only credentials stored in Key Vault) to keep developer access in sync with your Entra directory. This is how access governance works without any manual admin work after initial setup.
+FoundryGate uses the Microsoft Graph API to keep developer access in sync with your Entra directory. It calls Graph as its own managed identity, granted read-only Graph application roles — there is no client secret to store or rotate. This is how access governance works without any manual admin work after initial setup.
 
 ### First login — automatic provisioning
 
@@ -200,9 +200,13 @@ people-lifecycle events change its state — there is no suspended state:
 <KeyLifecycle />
 
 **Rotate** — `POST /keys/me/rotate` (or an admin's `POST /keys/{userId}/rotate`) calls
-`regeneratePrimaryKey` on the subscription. The primary key the developer holds is
-replaced instantly, the new one is shown once, and the subscription stays `active` with
-its counters intact.
+`regeneratePrimaryKey` *and* `regenerateSecondaryKey` on the subscription: the primary key
+the developer holds is replaced instantly and shown once, and the secondary — which
+FoundryGate never issues or stores — is replaced too, so no credential outlives a rotation.
+The subscription stays `active` with its counters intact. Stored keys are wrapped with a
+Key Vault RSA key before they reach SQL; `GET /keys/me` shows only the last four characters,
+and `POST /keys/me/reveal` decrypts on demand (audited) rather than caching anything in the
+browser.
 
 **Change quota** — the control plane re-scopes the subscription to the new tier's
 product. The new product's `llm-token-limit` applies from the next request, and because
@@ -243,6 +247,10 @@ server, the workflow waits for firewall propagation and probes port 1433, then t
 `allow-data-loss` override is passed) and reference data is seeded. Bicep re-runs pass
 `createModelDeployments=false` because Anthropic model deployments are create-once under
 ARM, and always pass the image the API is currently running so a re-run never resets it.
+That makes the ownership split explicit: Claude deployments belong to the infrastructure
+deploy end to end (created once, never re-PUT, never deleted from the app), while the API
+and admin UI list everything and manage OpenAI-format deployments
+(`/api/v1/foundry/deployments`, see the [API reference](/foundry-gate/reference/api/#foundry)).
 Code deploys read resource names from the infra deployment's outputs rather than from
 GitHub variables — the only variables are the three OIDC identifiers and the Entra client
 ids.
