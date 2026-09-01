@@ -19,20 +19,34 @@ public class GatewayTiersTests
         Assert.Equal(GatewayTiers.All.Count, GatewayTiers.All.Distinct(StringComparer.Ordinal).Count());
     }
 
+    /// <summary>
+    /// Scope, stated so the first person this breaks knows why: this pins the bicep parameter's
+    /// <em>default</em> value, not what a <c>.bicepparam</c> file actually deploys — a fork that
+    /// overrides <c>quotaTiers</c> at deploy time must update <see cref="GatewayTiers"/> to match
+    /// (nothing here can see that). Only <em>top-level</em> tier items are read: an item is a
+    /// <c>{ ... }</c> block indented exactly two spaces inside the array, and its <c>name:</c> is the
+    /// property indented exactly four — a nested block with its own <c>name:</c> key (six or more
+    /// spaces) is deliberately not matched. If main.bicep is ever re-indented, adjust the anchors.
+    /// </summary>
     [Fact]
     public void Tier_ids_match_the_quotaTiers_names_in_infra_main_bicep_in_the_same_order()
     {
         var bicep = File.ReadAllText(Path.Combine(FindRepoRoot(), "infra", "main.bicep"));
 
         // The default value of `param quotaTiers array = [ ... ]` runs from that line to the first
-        // line that is exactly "]" — each entry's `name: '<id>'` is the APIM product id.
-        var block = Regex.Match(bicep, @"param quotaTiers array = \[(?<body>.*?)^\]", RegexOptions.Singleline | RegexOptions.Multiline);
+        // line that is exactly "]" (the array's own closing bracket sits at column 0).
+        var block = Regex.Match(bicep, @"^param quotaTiers array = \[\r?\n(?<body>.*?)^\]", RegexOptions.Singleline | RegexOptions.Multiline);
         Assert.True(block.Success, "Could not find `param quotaTiers array = [ ... ]` in infra/main.bicep.");
 
-        var bicepTierNames = Regex.Matches(block.Groups["body"].Value, @"^\s*name:\s*'(?<name>[^']+)'", RegexOptions.Multiline)
-            .Select(m => m.Groups["name"].Value)
+        // Top-level items only: `  {` ... `  }` at two-space indentation; within one, the tier's own
+        // `name:` is at exactly four spaces. Anything deeper belongs to a nested object.
+        var bicepTierNames = Regex.Matches(block.Groups["body"].Value, @"^  \{\r?\n(?<item>.*?)^  \}", RegexOptions.Singleline | RegexOptions.Multiline)
+            .Select(item => Regex.Match(item.Groups["item"].Value, @"^ {4}name:\s*'(?<name>[^']+)'\s*$", RegexOptions.Multiline))
+            .Where(nameMatch => nameMatch.Success)
+            .Select(nameMatch => nameMatch.Groups["name"].Value)
             .ToList();
 
+        Assert.NotEmpty(bicepTierNames);
         Assert.Equal(bicepTierNames, GatewayTiers.All);
         Assert.Equal(GatewayTiers.Default, bicepTierNames[0]); // bicep's defaultProductId is quotaTiers[0].name
     }

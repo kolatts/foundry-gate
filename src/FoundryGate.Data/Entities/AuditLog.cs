@@ -7,6 +7,13 @@ namespace FoundryGate.Data.Entities;
 /// <summary>
 /// An immutable record of an admin/system action (e.g. <c>"quota.approved"</c>, <c>"key.rotated"</c>).
 /// </summary>
+/// <remarks>
+/// Indexed on <see cref="OccurredDate"/> because every page of <c>GET /audit</c> orders by it
+/// (newest first) and the date-range filter seeks on it — without the index an unfiltered admin
+/// view is a full sort of the table forever. Ascending is fine for a descending scan; SQL Server
+/// reads the index backwards. The FK index on <see cref="ActorUserId"/> is EF's implicit one.
+/// </remarks>
+[Index(nameof(OccurredDate))]
 public class AuditLog
 {
     public int AuditLogId { get; set; }

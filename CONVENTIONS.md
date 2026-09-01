@@ -74,10 +74,14 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
 
 - **Controllers** inherit `Controllers/ApiControllerBase` (`[ApiController]`,
   `[Route("api/v1/[controller]")]`, `[Produces("application/json")]`) and declare only
-  their `[Authorize(Policy = PolicyNames.AdminOnly)]` (class- or action-level) plus thin
-  actions that delegate to a service. Authentication is already global (the
-  `AuthorizeFilter` in Program.cs): anonymous → 401, non-admin on an admin-only route →
-  403, with no per-controller code.
+  their `[Authorize(Policy = PolicyNames.AdminOnly)]` (class- or action-level) plus
+  **expression-bodied** actions that delegate to a service. No `ThrowIfNull` on bound
+  parameters: `[ApiController]` never hands an action a null `[FromQuery]`/`[FromBody]`
+  record (an empty query string yields an instance with defaults; a missing body is a
+  400 before the action runs), so the guard is unreachable — the first-line
+  `ThrowIfNull` rule in §Style applies to services, not controller actions.
+  Authentication is already global (the `AuthorizeFilter` in Program.cs): anonymous →
+  401, non-admin on an admin-only route → 403, with no per-controller code.
 - **Services** live in `Services/<Area>/` with the single-implementation interface
   co-located (`IAuditService.cs` + `AuditService.cs`); primary constructors; take
   `AppDbContext` directly; throw `KeyNotFoundException` (404) / `ArgumentException` (400)
@@ -85,39 +89,59 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   status codes themselves.
 - **DI — one line per area, one file.** Each area owns
   `Services/<Area>/<Area>ServiceCollectionExtensions.cs` exposing `Add<Area>Services()`;
-  register it by adding ONE line to `Services/ServiceCollectionExtensions
+  register it by adding ONE line to `Services/ApiServiceCollectionExtensions
   .AddFoundryGateApiServices()`, which Program.cs calls once. Never register application
-  services in Program.cs — parallel waves would collide there.
+  services in Program.cs. (Parallel waves will still conflict on adjacent lines in that
+  one method — a trivially-resolved conflict, versus registrations-plus-usings churn in
+  Program.cs.) Data-layer services every host shares (`IAuditWriter`, the interceptor,
+  `TimeProvider`) are registered in Data's `AddFoundryGateData`, not here.
 - **Current user**: inject `ICurrentUserAccessor` (scoped) rather than reading
   `HttpContext.User`. `EntraObjectId` (accepts both `oid` and the long
   `.../objectidentifier` claim type), `IsAdmin` (same `IsInRole` check as the policy),
   `DisplayName`/`Email` (token claims, for auto-provisioning), `TryGetUserAsync(ct)`
-  (null = not provisioned yet — a first-class path; `GET /users/me` provisions on it),
-  `GetRequiredUserAsync(ct)` (→ 404). The returned `User` is tracked by the request's
-  context, so mutate it and `SaveChangesAsync`. No oid on an authenticated principal →
-  `UnauthorizedAccessException` (403).
-- **Audit**: inject `IAuditService` and call
-  `await audit.LogAsync(AuditActions.X, AuditTargetTypes.Y, id.ToString(), new { before, after }, ct)`
-  *before* the caller's own `SaveChangesAsync` — the row is added to the SAME
-  `AppDbContext` and commits atomically with the mutation. No fire-and-forget audit: a
-  mutation without its audit row (or vice versa) is worse than a failed request. System
-  actors (Functions, sync jobs) use the `LogAsync(int? actorUserId, ...)` overload with
-  `null`. New action/target kinds are constants in Domain's `AuditActions` /
-  `AuditTargetTypes`, never inline strings. `details` is JSON-serialized (camelCase) —
-  never put a key or token in it.
+  (null = not provisioned yet — a first-class path; `GET /users/me` provisions on it; it
+  checks the change tracker first, so a `User` you just `Add`ed is found before you
+  save), `GetRequiredUserAsync(ct)`. The returned `User` is tracked by the request's
+  context, so mutate it and `SaveChangesAsync`. **"No `User` row for this caller" is 403
+  everywhere, never 404** (`GetRequiredUserAsync` and `IAuditService.LogAsync` both throw
+  `UnauthorizedAccessException` saying "call `GET /users/me` first"): an authenticated
+  principal without a row is an authorization-state problem, not a missing resource. No
+  oid on an authenticated principal → `UnauthorizedAccessException` (403) too.
+- **Audit — one writer, two entry points.** The row builder is
+  `FoundryGate.Data.Audit.IAuditWriter` (Data, so Functions/Cli use the same one):
+  `Add(User actor, …)` (attributes via the `ActorUser` navigation — works for an actor
+  that is itself unsaved), `Add(int actorUserId, …)`, `AddSystem(…)` (null actor; the
+  monthly reset / usage sync / Entra sync jobs). Api code acting as the current caller
+  uses the thin wrapper `IAuditService.LogAsync(AuditActions.X, AuditTargetTypes.Y,
+  id.ToString(), new { before, after }, ct)`; Api code that already holds a `UserId` or
+  acts as the system uses `IAuditWriter` directly. Either way call it *before* your own
+  `SaveChangesAsync` — the row is added to the SAME `AppDbContext` and commits atomically
+  with the mutation; nothing in the audit path saves. No fire-and-forget audit: a
+  mutation without its audit row (or vice versa) is worse than a failed request. For
+  auto-provisioning that means `Add(user)` → `LogAsync(UserProvisioned…)` → one save.
+  New action/target kinds are constants in Domain's `AuditActions` / `AuditTargetTypes`,
+  never inline strings. `details` is JSON-serialized (camelCase, cycles ignored) — pass
+  the fields you mean rather than a tracked entity, and never a key or token.
 - **Paging**: bind `[FromQuery] PagedRequest paging` (alongside any `[FromQuery]` filter
   record) and finish the query with `.OrderBy(...).Select(projection).ToPagedAsync(paging, ct)`
   (`FoundryGate.Data.Extensions`) → `PagedResult<T>`. Order deterministically first;
-  the helper clamps page/size itself.
+  the helper clamps page/size itself. Index the columns your default ordering and
+  filters use (`AuditLog.OccurredDate` is the precedent) and mirror the index in
+  `FoundryGate.Database/dbo/Tables/*.sql` — `SchemaParityTests` checks name, uniqueness,
+  clustering and column composition.
 - **Integration tests** use `IClassFixture<ApiTestFactory>` (real pipeline, SQLite
   in-memory, header-driven `TestAuthHandler`): `factory.CreateClient()` is anonymous,
   `factory.CreateClientAs(oid, isAdmin: true)` is an admin, `factory.SeedUserAsync(...)`
   and `factory.CreateDbContext()` arrange/assert rows, `factory.TimeProvider` moves the
   clock. One database per test class — seed with unique markers, never assert absolute
   counts. Service-level tests use `InMemoryDatabaseTest` + `Support/MutableTimeProvider`
-  + hand-rolled stubs (no mocking library). Under SQLite, `AppDbContext` stores
-  `DateTimeOffset` as UTC ticks (provider-gated) so ordering and date-range filters
-  translate; the SQL Server model is untouched.
+  + `Support/FixedHttpContextAccessor` + hand-rolled stubs (no mocking library; the
+  framework's `HttpContextAccessor` is a static `AsyncLocal` — never use it in tests).
+  Under SQLite, `AppDbContext` stores `DateTimeOffset` as UTC ticks (provider-gated) so
+  ordering and date-range filters translate; the SQL Server model is untouched. Known
+  test-only divergence: values read back from SQLite always carry `+00:00` (the instant
+  is preserved, the original offset is not), where SQL Server's `datetimeoffset` keeps
+  it — assert on instants, never on `.Offset`.
 
 ## Schema pipeline (no EF migrations)
 

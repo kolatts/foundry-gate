@@ -3,6 +3,7 @@ using FoundryGate.Api.Services.Identity;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Tests.Predeployment.Data;
+using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Identity.Web;
@@ -94,13 +95,16 @@ public class CurrentUserAccessorTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task GetRequiredUserAsync_throws_KeyNotFoundException_for_an_unknown_oid()
+    public async Task GetRequiredUserAsync_throws_UnauthorizedAccessException_for_an_unknown_oid_telling_the_caller_to_provision_first()
     {
+        // 403, not 404: an authenticated principal with no row is an authorization-state problem
+        // (not provisioned yet), and it must read the same as IAuditService.LogAsync's failure.
         var accessor = CreateAccessor(new Claim(ClaimConstants.Oid, Oid));
 
-        var exception = await Assert.ThrowsAsync<KeyNotFoundException>(() => accessor.GetRequiredUserAsync(CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => accessor.GetRequiredUserAsync(CancellationToken.None));
 
         Assert.Contains(Oid, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("GET /users/me", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -127,13 +131,27 @@ public class CurrentUserAccessorTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task TryGetUserAsync_finds_a_User_that_was_added_to_the_context_but_not_yet_saved()
+    {
+        // The auto-provision unit of work (#28): Add the user, then resolve "the current user" for
+        // the audit row, then save once. Before the fix this went straight to the database and missed.
+        var accessor = CreateAccessor(new Claim(ClaimConstants.Oid, Oid));
+        var added = new User { EntraObjectId = Oid, DisplayName = "New Joiner", Email = "new@contoso.com" };
+        Context.Users.Add(added);
+
+        var resolved = await accessor.TryGetUserAsync(CancellationToken.None);
+
+        Assert.Same(added, resolved);
+        Assert.Equal(EntityState.Added, Context.Entry(added).State);
+    }
+
+    [Fact]
     public async Task TryGetUserAsync_does_not_cache_a_miss_so_a_caller_that_provisions_the_user_sees_it_on_the_next_call()
     {
         var accessor = CreateAccessor(new Claim(ClaimConstants.Oid, Oid));
 
         Assert.Null(await accessor.TryGetUserAsync(CancellationToken.None));
 
-        // What GET /users/me (#28) does on the null path.
         Context.Users.Add(new User { EntraObjectId = Oid, DisplayName = "New Joiner", Email = "new@contoso.com" });
         await Context.SaveChangesAsync();
 
@@ -147,15 +165,5 @@ public class CurrentUserAccessorTests : InMemoryDatabaseTest
         var identity = new ClaimsIdentity(claims, "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         return new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
-    }
-
-    /// <summary>
-    /// Not the framework's <see cref="HttpContextAccessor"/>: that one keeps its context in a
-    /// <em>static</em> <c>AsyncLocal</c>, so several instances created in one test all observe
-    /// whichever context was set last. This holds exactly the context it was given.
-    /// </summary>
-    private sealed class FixedHttpContextAccessor(HttpContext? httpContext) : IHttpContextAccessor
-    {
-        public HttpContext? HttpContext { get; set; } = httpContext;
     }
 }

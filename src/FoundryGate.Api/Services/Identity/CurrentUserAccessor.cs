@@ -52,6 +52,16 @@ public sealed class CurrentUserAccessor(IHttpContextAccessor httpContextAccessor
 
         var entraObjectId = EntraObjectId;
 
+        // Change tracker first: a User the calling service has just Add()ed is not in the database
+        // yet, and the auto-provisioning flow (GET /users/me) needs to add the user, then audit it
+        // against that same instance, then save once. Local is an in-memory scan of tracked Users —
+        // a handful of rows per request at most.
+        _user = dbContext.Users.Local.FirstOrDefault(u => u.EntraObjectId == entraObjectId);
+        if (_user is not null)
+        {
+            return _user;
+        }
+
         // SingleOrDefaultAsync (not AsNoTracking) deliberately: callers mutate the returned row, and
         // EF's identity resolution hands back the already-tracked instance if the calling service
         // has loaded this user through the same context — one instance per request, never two.
@@ -62,8 +72,8 @@ public sealed class CurrentUserAccessor(IHttpContextAccessor httpContextAccessor
     /// <inheritdoc />
     public async Task<User> GetRequiredUserAsync(CancellationToken cancellationToken) =>
         await TryGetUserAsync(cancellationToken)
-        ?? throw new KeyNotFoundException(
-            $"No FoundryGate user exists for the caller (oid {EntraObjectId}). GET /users/me provisions one on first login.");
+        ?? throw new UnauthorizedAccessException(
+            $"No FoundryGate user exists for the caller (oid {EntraObjectId}). Call GET /users/me first — it provisions the user on first login.");
 
     private string? FirstNonEmptyClaim(params string[] claimTypes)
     {

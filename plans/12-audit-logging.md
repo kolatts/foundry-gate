@@ -45,23 +45,32 @@ Files expected to be created or modified:
       correct outcome. `AuditServiceTests.LogAsync_adds_to_the_context_but_does_not_save…` pins it.
 - [x] Actor ID is always the authenticated user's `oid` claim, not a display name — amended for
       the int-PK model (#92): `AuditLog.ActorUserId` is the `User` FK resolved from the caller's
-      `oid` by `ICurrentUserAccessor` (both oid claim types; `CurrentUserAccessorTests`). A caller
-      with no `User` row cannot write a human-attributed audit row (`UnauthorizedAccessException`
-      → 403; they are provisioned by `GET /users/me` first); system jobs use the explicit
-      `LogAsync(actorUserId: null, …)` overload. `ActorDisplayName` on the response is a
-      read-time join, never stored.
+      `oid` by `ICurrentUserAccessor` (both oid claim types; `CurrentUserAccessorTests`), and the
+      row is attached via the `ActorUser` navigation so a caller whose `User` was just `Add`ed but
+      not yet saved (first-login auto-provisioning, #28) is attributed correctly in the same save
+      (`AuditWriterTests` / `AuditServiceTests` "auto_provision_pattern"). A caller with no `User`
+      row at all cannot write a human-attributed audit row — `UnauthorizedAccessException` → 403,
+      the same status and message (`call GET /users/me first`) `GetRequiredUserAsync` gives, so the
+      two "no row" paths never disagree; system jobs use `IAuditWriter.AddSystem(…)`.
+      `ActorDisplayName` on the response is a read-time join, never stored.
+- [x] `AuditLog.OccurredDate` indexed (`[Index]` + `IX_AuditLogs_OccurredDate` in
+      `dbo/Tables/AuditLogs.sql`; `SchemaParityTests` verifies the pair) — every page of
+      `GET /audit` orders by it and the date-range filter seeks on it.
 
 ### Deviations from this plan's original text (#42)
-- **Signature.** `LogAsync(string action, string targetType, string targetId, object? details, ct)`
-  with the actor taken from `ICurrentUserAccessor`, plus an explicit `LogAsync(int? actorUserId, …)`
-  overload for system actors — rather than the plan's `(AuditAction enum, string actorId, …)`.
-  Actions stay string constants (`AuditActions`, per #91's reasoning), `details` is any object
-  and is JSON-serialized here so call sites pass `new { before, after }` instead of hand-building
-  JSON, and the service returns the added `AuditLog` for callers/tests to inspect.
+- **One writer in Data, a wrapper in Api.** The plan put `IAuditService` in Api, but `FoundryGate
+  .Functions` (monthly reset, usage sync — #38/#39) references Data and Domain only, so the
+  actor-agnostic row builder is `FoundryGate.Data.Audit.IAuditWriter`/`AuditWriter` (`Add(User
+  actor, …)`, `Add(int actorUserId, …)`, `AddSystem(…)`; `TimeProvider` timestamp; camelCase JSON
+  with cycles ignored), registered in `AddFoundryGateData`. Api's `IAuditService` is the thin
+  current-user-attributing wrapper (`LogAsync(action, targetType, targetId, details, ct)`) plus the
+  admin read query — rather than the plan's `(AuditAction enum, string actorId, …)`. Actions stay
+  string constants (`AuditActions`, per #91's reasoning); `details` is any object so call sites
+  pass `new { before, after }` instead of hand-building JSON; both return the added `AuditLog`.
 - **File layout.** `Services/Audit/{IAuditService,AuditService,AuditServiceCollectionExtensions}.cs`
   and `Services/Identity/…` — the `Services/<Area>/` convention from CONVENTIONS.md, not the flat
   `Services/IAuditService.cs` this plan listed. Registration is one line in
-  `Services/ServiceCollectionExtensions.AddFoundryGateApiServices()`, not in Program.cs.
+  `Services/ApiServiceCollectionExtensions.AddFoundryGateApiServices()`, not in Program.cs.
 - **Scaffolding beyond audit**, because #42 is the first `/api/v1` controller and seven waves
   follow it: `ApiControllerBase`, `ICurrentUserAccessor`, `ToPagedAsync`, `AuditTargetTypes`,
   the remaining `AuditActions` later waves need, `GatewayTiers`, and the `ApiTestFactory` /

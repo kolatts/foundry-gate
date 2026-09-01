@@ -1,6 +1,6 @@
-using System.Text.Json;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Data;
+using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Extensions;
 using FoundryGate.Domain.Audit.Contracts;
@@ -10,17 +10,12 @@ using Microsoft.EntityFrameworkCore;
 namespace FoundryGate.Api.Services.Audit;
 
 /// <summary>
-/// Default <see cref="IAuditService"/>. Writes go into the request-scoped <see cref="AppDbContext"/>
-/// and are persisted by the caller's <c>SaveChangesAsync</c> (see the interface remarks for why);
-/// <see cref="AuditLog.OccurredDate"/> comes from the injected <see cref="TimeProvider"/>, never
-/// <c>DateTimeOffset.UtcNow</c> (CONVENTIONS.md).
+/// Default <see cref="IAuditService"/>: resolves the caller through <see cref="ICurrentUserAccessor"/>
+/// and delegates the row to <see cref="IAuditWriter"/>; owns the admin read query.
 /// </summary>
-public sealed class AuditService(AppDbContext dbContext, ICurrentUserAccessor currentUser, TimeProvider timeProvider)
+public sealed class AuditService(AppDbContext dbContext, IAuditWriter auditWriter, ICurrentUserAccessor currentUser)
     : IAuditService
 {
-    /// <summary>Web defaults (camelCase, relaxed escaping) so <c>Details</c> reads like the rest of the API's JSON.</summary>
-    private static readonly JsonSerializerOptions DetailsSerializerOptions = new(JsonSerializerDefaults.Web);
-
     /// <inheritdoc />
     public async Task<AuditLog> LogAsync(string action, string targetType, string targetId, object? details, CancellationToken cancellationToken)
     {
@@ -28,23 +23,11 @@ public sealed class AuditService(AppDbContext dbContext, ICurrentUserAccessor cu
         ArgumentNullException.ThrowIfNull(targetType);
         ArgumentNullException.ThrowIfNull(targetId);
 
-        var actor = await currentUser.TryGetUserAsync(cancellationToken)
-            ?? throw new UnauthorizedAccessException(
-                $"Cannot attribute '{action}' to the caller: no FoundryGate user exists for oid {currentUser.EntraObjectId}. " +
-                "Callers are provisioned by GET /users/me before they can perform audited actions.");
+        // GetRequiredUserAsync throws the same UnauthorizedAccessException (403, "call GET /users/me
+        // first") for a missing row, so the two "no User row" paths in the API agree.
+        var actor = await currentUser.GetRequiredUserAsync(cancellationToken);
 
-        return Add(actor.UserId, action, targetType, targetId, details);
-    }
-
-    /// <inheritdoc />
-    public Task<AuditLog> LogAsync(int? actorUserId, string action, string targetType, string targetId, object? details, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(action);
-        ArgumentNullException.ThrowIfNull(targetType);
-        ArgumentNullException.ThrowIfNull(targetId);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        return Task.FromResult(Add(actorUserId, action, targetType, targetId, details));
+        return auditWriter.Add(actor, action, targetType, targetId, details);
     }
 
     /// <inheritdoc />
@@ -101,21 +84,5 @@ public sealed class AuditService(AppDbContext dbContext, ICurrentUserAccessor cu
                 a.Details == string.Empty ? null : a.Details,
                 a.OccurredDate))
             .ToPagedAsync(paging, cancellationToken);
-    }
-
-    private AuditLog Add(int? actorUserId, string action, string targetType, string targetId, object? details)
-    {
-        var entry = new AuditLog
-        {
-            ActorUserId = actorUserId,
-            Action = action,
-            TargetType = targetType,
-            TargetId = targetId,
-            Details = details is null ? string.Empty : JsonSerializer.Serialize(details, DetailsSerializerOptions),
-            OccurredDate = timeProvider.GetUtcNow(),
-        };
-
-        dbContext.AuditLogs.Add(entry);
-        return entry;
     }
 }

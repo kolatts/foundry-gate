@@ -57,6 +57,14 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     /// interceptor writes. Never runs under SQL Server, so the production model and the
     /// <c>FoundryGate.Database</c> dacpac are untouched.
     /// </summary>
+    /// <remarks>
+    /// Known, accepted test-only divergence: SQL Server's <c>datetimeoffset</c> preserves the offset
+    /// a value was written with (<c>-05:00</c> reads back as <c>-05:00</c>); this converter reads
+    /// everything back as <c>+00:00</c>. The instant is identical, so <c>==</c>/ordering assertions
+    /// hold, but an assertion on <c>.Offset</c> or on <c>ToString()</c> of a non-UTC value would pass
+    /// on SQL Server and fail here. Application code only ever writes UTC (interceptor +
+    /// <see cref="TimeProvider"/>), so nothing in production depends on the offset surviving.
+    /// </remarks>
     private static void ApplySqliteDateTimeOffsetConversion(ModelBuilder modelBuilder)
     {
         var converter = new ValueConverter<DateTimeOffset, long>(

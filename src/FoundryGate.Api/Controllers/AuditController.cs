@@ -20,16 +20,16 @@ public sealed class AuditController(IAuditService auditService) : ApiControllerB
     /// <c>targetType</c>/<c>targetId</c>; inclusive <c>fromDate</c>/<c>toDate</c> range on
     /// <c>OccurredDate</c>); <c>page</c>/<c>pageSize</c> come from <see cref="PagedRequest"/>.
     /// </summary>
+    /// <remarks>
+    /// No <c>ThrowIfNull</c> on the bound records: <c>[ApiController]</c> always materializes a
+    /// <c>[FromQuery]</c> complex type (an empty query string yields an instance with defaults), so
+    /// the guard would be unreachable ceremony — controllers stay expression-bodied delegations.
+    /// </remarks>
     [HttpGet]
     [ProducesResponseType<PagedResult<AuditLogEntryResponse>>(StatusCodes.Status200OK)]
     public Task<PagedResult<AuditLogEntryResponse>> ListAsync(
         [FromQuery] AuditLogQuery filter,
         [FromQuery] PagedRequest paging,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(filter);
-        ArgumentNullException.ThrowIfNull(paging);
-
-        return auditService.QueryAsync(filter, paging, cancellationToken);
-    }
+        CancellationToken cancellationToken) =>
+        auditService.QueryAsync(filter, paging, cancellationToken);
 }
