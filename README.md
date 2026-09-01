@@ -45,8 +45,8 @@ docker compose up -d
 # Build the solution
 dotnet build FoundryGate.sln
 
-# Run the predeployment test suite
-dotnet test FoundryGate.sln
+# Run the predeployment test suite (Postdeployment needs a deployed environment)
+dotnet test src/FoundryGate.Tests.Predeployment
 
 # Verify formatting
 dotnet format FoundryGate.sln --verify-no-changes

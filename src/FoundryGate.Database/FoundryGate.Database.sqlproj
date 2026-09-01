@@ -1,14 +1,7 @@
 <Project Sdk="Microsoft.Build.Sql/2.2.0">
   <PropertyGroup>
-    <Name>FoundryGate.Database</Name>
     <DSP>Microsoft.Data.Tools.Schema.Sql.SqlAzureV12DatabaseSchemaProvider</DSP>
     <ModelCollation>1033, CI</ModelCollation>
-    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
     <TargetDatabaseSet>True</TargetDatabaseSet>
-    <ProjectGuid>{8f3f6f8f-9d4a-4e3b-9a7a-6a2f2c9c7a11}</ProjectGuid>
   </PropertyGroup>
-  <ItemGroup>
-    <Folder Include="dbo\" />
-    <Folder Include="dbo\Tables\" />
-  </ItemGroup>
 </Project>
