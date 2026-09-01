@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Required status check for branch protection — runs on EVERY PR (no path
+  # filter: a required check that never runs would block unrelated PRs forever).
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build (warnings are errors)
+        run: dotnet build FoundryGate.sln --configuration Release
+
+      - name: Predeployment tests
+        run: dotnet test src/FoundryGate.Tests.Predeployment --configuration Release --no-build --logger "trx;LogFileName=predeployment.trx" --results-directory TestResults
+
+      - name: Format check
+        run: dotnet format FoundryGate.sln --verify-no-changes
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore
+
+  # Docs build sanity on PRs that touch the site (not a required check).
+  docs-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect docs changes
+        id: docs
+        shell: bash
+        run: |
+          if git fetch origin "${{ github.base_ref }}" --depth=1 && \
+             git diff --quiet "origin/${{ github.base_ref }}"...HEAD -- docs-site/ content/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node
+        if: steps.docs.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build docs site
+        if: steps.docs.outputs.changed == 'true'
+        working-directory: docs-site
+        run: |
+          npm ci
+          npm run build
