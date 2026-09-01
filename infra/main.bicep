@@ -21,6 +21,9 @@ param publisherEmail string
 @description('APIM publisher display name.')
 param publisherName string = 'FoundryGate'
 
+@description('APIM v2 tier (BasicV2 is the cheapest viable; see modules/apim.bicep).')
+param apimSkuName string = 'StandardV2'
+
 @description('Regions to place Foundry accounts in. Two+ regions multiply TPM/RPM headroom via the APIM backend pool.')
 param foundryRegions array = ['eastus2', 'swedencentral']
 
@@ -139,6 +142,7 @@ module apim 'modules/apim.bicep' = {
     location: location
     publisherEmail: publisherEmail
     publisherName: publisherName
+    skuName: apimSkuName
     appInsightsId: monitoring.outputs.appInsightsId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     workspaceId: monitoring.outputs.workspaceId

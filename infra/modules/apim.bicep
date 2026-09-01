@@ -7,11 +7,15 @@ param appInsightsConnectionString string
 param workspaceId string
 param tags object = {}
 
+@description('APIM v2 tier. Anthropic-schema LLM policies require a v2 tier; BasicV2 is the cheapest viable option (all required features: token policies, pools, circuit breakers). StandardV2 adds headroom/features some tenants want.')
+@allowed(['BasicV2', 'StandardV2', 'PremiumV2'])
+param skuName string = 'StandardV2'
+
 resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
   name: apimName
   location: location
   tags: tags
-  sku: { name: 'StandardV2', capacity: 1 }
+  sku: { name: skuName, capacity: 1 }
   identity: { type: 'SystemAssigned' }
   properties: {
     publisherEmail: publisherEmail

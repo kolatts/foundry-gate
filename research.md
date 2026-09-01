@@ -172,10 +172,32 @@ built-in content filtering for Claude models.
 
 ## Open items to verify by PoC
 
-1. Anthropic cache-read/creation token handling in `llm-token-limit` (vs `usage`).
-2. Whether `token-quota`/`tokens-per-minute` accept policy expressions (per-user
-   values vs tier-products design) — #82.
-3. 300-concurrent cap applicability to Claude.
-4. `modelCapacities` API with `modelFormat=Anthropic`.
-5. Exact APIM v2 unit pricing (calculator).
-6. Codex default TPM values at deploy time.
+1. Anthropic cache-read/creation token handling in `llm-token-limit` (vs `usage`) —
+   **tracked in #88** (blocked with the rest of Claude e2e).
+2. ~~Whether `token-quota`/`tokens-per-minute` accept policy expressions~~ —
+   **ANSWERED (live, PR #87)**: `token-quota` rejects expressions
+   ("Expression return type 'System.Int32' is not allowed"); literals only →
+   **tiers-as-products is the design** (#82). Monthly 403 + mid-period literal raise
+   both verified live.
+3. 300-concurrent cap applicability to Claude — open (#88).
+4. `modelCapacities` API with `modelFormat=Anthropic` — open.
+5. Exact APIM v2 unit pricing (calculator) — open.
+6. Codex default TPM values at deploy time — open.
+
+## Live-validation corrections (2026-09-01, PR #87 / `fable-refactor-log.md`)
+
+- **Claude capacity semantics differ from the OpenAI rule above**: `sku.capacity` for
+  `claude-haiku-4-5` GlobalStandard (PAYG) scales BOTH limits — capacity 5 produced
+  `rateLimits: 5 RPM / 5,000 TPM` (1 unit ≈ 1 RPM + 1K TPM), consistent with the
+  80-unit regional quota mapping to the documented 80 RPM / 80K ITPM PAYG ceiling.
+- **Anthropic deployment creation is far more fragile than "concurrent → 409"**:
+  observed create-once behavior — re-PUT of an existing deployment (Conflict/500 →
+  provisioningState Failed), and after any delete/recreate cycle, creates fail
+  subscription-wide with opaque `InternalServerError` (even in fresh accounts).
+  Details: E-007. Treat deployments as create-once; lifecycle via control plane.
+- **Failed-state deployments still hold quota** and their accounts must be purged
+  after soft-delete to reclaim it (consistent with the ≤48h note above).
+- **Claude Code wire format** (claude-cli 2.1.251, Foundry mode): key sent as
+  `x-api-key` on `POST /v1/messages?beta=true`; Codex CLI requires
+  `env_http_headers = { "api-key" = "<ENV>" }` (`env_key` alone sends
+  `Authorization: Bearer` → 401 at APIM).
