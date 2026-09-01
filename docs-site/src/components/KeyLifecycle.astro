@@ -1,27 +1,30 @@
 ---
-// APIM subscription (developer key) state machine — gateway-centric model.
-// No props. Keys ARE APIM subscriptions created under a tier product; rotation is
-// regeneratePrimaryKey (state unchanged), quota changes move the subscription between
-// tier products (state unchanged), 403/429 are gateway responses (state unchanged).
-// Only people-lifecycle events change state: admin deactivation → suspended (reversible),
-// offboarding / Entra departure → deleted. Colours come from .fgd-s-* in diagrams.css.
-const ariaLabel =
-  'APIM key lifecycle state machine. From No key, first login or admin provision creates an APIM subscription ' +
-  'under the developer\'s tier product and the key becomes Active. While Active: rotating the key calls ' +
-  'regeneratePrimaryKey and stays Active; changing the quota moves the subscription to another tier product ' +
-  'and stays Active; a 403 for an exhausted monthly quota or a 429 with Retry-After for the per-minute cap are ' +
-  'gateway responses that change nothing. Admin deactivation moves the key to Suspended, which an admin can ' +
-  'reverse back to Active. Offboarding or Entra departure deletes the subscription from Active or Suspended; ' +
-  'Deleted is terminal and re-activation is a fresh provision.';
+// APIM subscription (developer key) state machine — gateway-centric model, lifecycle per
+// plans/21-provision-deprovision.md (#65/#66): a key IS an APIM subscription created under
+// a tier product. Rotation (regeneratePrimaryKey) and quota changes (re-scope to another
+// tier product) keep it Active; 403/429 are gateway responses and change nothing. Admin
+// deactivation, Entra departure and admin key revocation all DELETE the subscription;
+// re-activation re-runs provisioning (reusing an orphan subscription if one exists).
+// There is no suspend state. Colours come from .fgd-s-* in diagrams.css.
 ---
 
-<figure class="fgd fgd-kl not-content" role="img" aria-label={ariaLabel}>
-  <div class="fgd-svg-scroll">
+<figure class="fgd fgd-kl not-content" role="group" aria-labelledby="fgd-kl-title" aria-describedby="fgd-kl-desc">
+  <p id="fgd-kl-title" class="fgd-sr-only">APIM key lifecycle state machine</p>
+  <p id="fgd-kl-desc" class="fgd-sr-only">
+    From No key, first login or admin provision creates an APIM subscription under the developer's tier product and
+    the key becomes Active. While Active: rotating the key calls regeneratePrimaryKey and stays Active; changing the
+    quota re-scopes the subscription to the new tier's product and stays Active (the gateway's monthly counter
+    restarts for that subscription; live validation tracked in #88); a 403 for an exhausted monthly quota or a 429
+    with Retry-After for the per-minute cap are gateway responses that change nothing. Admin deactivation, Entra
+    departure, or admin key revocation delete the subscription: Deleted. Re-activation runs a fresh provision,
+    reusing an orphan subscription if one exists, and returns to Active. There is no suspended state.
+  </p>
+  <div class="fgd-svg-scroll" tabindex="0" aria-label="Key lifecycle diagram — scrolls sideways on narrow screens">
     <svg
       class="fgd-svg"
-      viewBox="0 0 680 400"
+      viewBox="0 0 700 372"
       xmlns="http://www.w3.org/2000/svg"
-      style="min-width:640px;max-width:720px;margin:0 auto;"
+      style="min-width:660px;max-width:740px;margin:0 auto;"
       aria-hidden="true"
       focusable="false"
     >
@@ -39,75 +42,61 @@ const ariaLabel =
       </defs>
 
       <!-- No key yet -->
-      <rect x="240" y="14" width="130" height="46" rx="8" class="fgd-s-box fgd-s-box--ext" />
-      <text x="305" y="33" text-anchor="middle" class="fgd-s-title">No key yet</text>
-      <text x="305" y="49" text-anchor="middle" class="fgd-s-sub">initial state</text>
+      <rect x="260" y="14" width="130" height="46" rx="8" class="fgd-s-box fgd-s-box--ext" />
+      <text x="325" y="33" text-anchor="middle" class="fgd-s-title">No key yet</text>
+      <text x="325" y="49" text-anchor="middle" class="fgd-s-sub">initial state</text>
 
       <!-- Gateway responses callout (no state change) -->
-      <rect x="430" y="10" width="240" height="84" rx="8" class="fgd-s-box fgd-s-box--callout" />
-      <text x="550" y="30" text-anchor="middle" class="fgd-s-title fgd-s-title--callout">Gateway responses — no state change</text>
-      <text x="550" y="47" text-anchor="middle" class="fgd-s-label fgd-s-label--ember">403 · monthly quota exhausted</text>
-      <text x="550" y="62" text-anchor="middle" class="fgd-s-label fgd-s-label--ember">429 + Retry-After · per-minute cap</text>
-      <text x="550" y="78" text-anchor="middle" class="fgd-s-label">key keeps working when the window resets</text>
-      <path d="M 432,90 L 408,132" class="fgd-s-edge fgd-s-edge--ember" />
+      <rect x="470" y="10" width="222" height="84" rx="8" class="fgd-s-box fgd-s-box--callout" />
+      <text x="581" y="30" text-anchor="middle" class="fgd-s-title fgd-s-title--callout">Gateway responses — no state change</text>
+      <text x="581" y="47" text-anchor="middle" class="fgd-s-label fgd-s-label--ember">403 · monthly quota exhausted</text>
+      <text x="581" y="62" text-anchor="middle" class="fgd-s-label fgd-s-label--ember">429 + Retry-After · per-minute cap</text>
+      <text x="581" y="78" text-anchor="middle" class="fgd-s-label">key keeps working when the window resets</text>
+      <path d="M 472,92 L 432,130" class="fgd-s-edge fgd-s-edge--ember" />
 
-      <!-- No key → Active -->
-      <line x1="305" y1="60" x2="305" y2="128" class="fgd-s-edge fgd-s-edge--azure" marker-end="url(#fgd-kl-head-azure)" />
-      <text x="312" y="82" class="fgd-s-label">first login / admin provision</text>
-      <text x="312" y="96" class="fgd-s-label fgd-s-mono">POST /subscriptions</text>
-      <text x="312" y="109" class="fgd-s-label fgd-s-mono">scope: tier product</text>
+      <!-- No key → Active (labels on the left, clear of the callout) -->
+      <line x1="325" y1="60" x2="325" y2="128" class="fgd-s-edge fgd-s-edge--azure" marker-end="url(#fgd-kl-head-azure)" />
+      <text x="317" y="82" text-anchor="end" class="fgd-s-label">first login / admin provision</text>
+      <text x="317" y="96" text-anchor="end" class="fgd-s-label fgd-s-mono">POST /subscriptions</text>
+      <text x="317" y="109" text-anchor="end" class="fgd-s-label fgd-s-mono">scope: tier product</text>
 
       <!-- Active -->
-      <rect x="200" y="130" width="210" height="60" rx="8" class="fgd-s-box fgd-s-box--active" />
-      <text x="305" y="152" text-anchor="middle" class="fgd-s-title fgd-s-title--active">Active</text>
-      <text x="305" y="168" text-anchor="middle" class="fgd-s-sub">APIM subscription · state = active</text>
-      <text x="305" y="182" text-anchor="middle" class="fgd-s-sub fgd-s-mono">under Standard / Power / Unlimited</text>
+      <rect x="220" y="130" width="210" height="60" rx="8" class="fgd-s-box fgd-s-box--active" />
+      <text x="325" y="152" text-anchor="middle" class="fgd-s-title fgd-s-title--active">Active</text>
+      <text x="325" y="168" text-anchor="middle" class="fgd-s-sub">APIM subscription · state = active</text>
+      <text x="325" y="182" text-anchor="middle" class="fgd-s-sub fgd-s-mono">under Standard / Power / Unlimited</text>
 
       <!-- Active ⟲ rotate (right loop) -->
-      <path d="M 410,148 C 462,140 462,182 410,176" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />
-      <text x="468" y="156" class="fgd-s-label fgd-s-label--green">rotate key</text>
-      <text x="468" y="170" class="fgd-s-label fgd-s-mono">regeneratePrimaryKey</text>
+      <path d="M 430,148 C 482,140 482,182 430,176" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />
+      <text x="488" y="156" class="fgd-s-label fgd-s-label--green">rotate key</text>
+      <text x="488" y="170" class="fgd-s-label fgd-s-mono">regeneratePrimaryKey</text>
 
-      <!-- Active ⟲ change tier (left loop) -->
-      <path d="M 200,148 C 148,140 148,182 200,176" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />
-      <text x="142" y="150" text-anchor="end" class="fgd-s-label fgd-s-label--green">change quota =</text>
-      <text x="142" y="163" text-anchor="end" class="fgd-s-label">move subscription</text>
-      <text x="142" y="176" text-anchor="end" class="fgd-s-label">to another tier product</text>
-
-      <!-- Active → Suspended -->
-      <line x1="245" y1="190" x2="150" y2="290" class="fgd-s-edge" marker-end="url(#fgd-kl-head)" />
-      <text x="183" y="232" text-anchor="end" class="fgd-s-label">admin deactivates</text>
-      <text x="183" y="245" text-anchor="end" class="fgd-s-label fgd-s-mono">state → suspended</text>
-
-      <!-- Suspended → Active -->
-      <line x1="190" y1="290" x2="285" y2="190" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />
-      <text x="258" y="232" class="fgd-s-label fgd-s-label--green">admin re-enables</text>
-      <text x="258" y="245" class="fgd-s-label fgd-s-mono">state → active</text>
+      <!-- Active ⟲ change quota (left loop) -->
+      <path d="M 220,148 C 168,140 168,182 220,176" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />
+      <text x="162" y="143" text-anchor="end" class="fgd-s-label fgd-s-label--green">change quota =</text>
+      <text x="162" y="156" text-anchor="end" class="fgd-s-label">re-scope subscription</text>
+      <text x="162" y="169" text-anchor="end" class="fgd-s-label">to the new tier product</text>
+      <text x="162" y="182" text-anchor="end" class="fgd-s-label">(monthly counter restarts)</text>
 
       <!-- Active → Deleted -->
-      <line x1="365" y1="190" x2="505" y2="290" class="fgd-s-edge" marker-end="url(#fgd-kl-head)" />
-      <text x="462" y="225" class="fgd-s-label">offboarding / Entra departure</text>
-      <text x="462" y="238" class="fgd-s-label fgd-s-mono">DELETE /keys/&#123;userId&#125;</text>
-      <text x="462" y="251" class="fgd-s-label fgd-s-mono">→ DELETE /subscriptions/&#123;sid&#125;</text>
-
-      <!-- Suspended -->
-      <rect x="30" y="290" width="200" height="56" rx="8" class="fgd-s-box fgd-s-box--suspended" />
-      <text x="130" y="312" text-anchor="middle" class="fgd-s-title fgd-s-title--suspended">Suspended</text>
-      <text x="130" y="329" text-anchor="middle" class="fgd-s-sub">admin deactivation · reversible</text>
-
-      <!-- Suspended → Deleted -->
-      <line x1="230" y1="318" x2="448" y2="318" class="fgd-s-edge" marker-end="url(#fgd-kl-head)" />
-      <text x="340" y="311" text-anchor="middle" class="fgd-s-label">offboarding</text>
+      <line x1="385" y1="190" x2="525" y2="270" class="fgd-s-edge" marker-end="url(#fgd-kl-head)" />
+      <text x="478" y="212" class="fgd-s-label">deactivation · Entra departure ·</text>
+      <text x="478" y="225" class="fgd-s-label">admin key revocation</text>
+      <text x="478" y="238" class="fgd-s-label fgd-s-mono">DELETE /subscriptions/&#123;sid&#125;</text>
 
       <!-- Deleted -->
-      <rect x="450" y="290" width="200" height="56" rx="8" class="fgd-s-box fgd-s-box--deleted" />
-      <text x="550" y="312" text-anchor="middle" class="fgd-s-title fgd-s-title--deleted">Deleted</text>
-      <text x="550" y="329" text-anchor="middle" class="fgd-s-sub">subscription removed · key dead</text>
+      <rect x="470" y="272" width="200" height="56" rx="8" class="fgd-s-box fgd-s-box--deleted" />
+      <text x="570" y="294" text-anchor="middle" class="fgd-s-title fgd-s-title--deleted">Deleted</text>
+      <text x="570" y="311" text-anchor="middle" class="fgd-s-sub">subscription removed · key dead</text>
 
-      <!-- Footnotes -->
-      <text x="340" y="372" text-anchor="middle" class="fgd-s-label">Only people-lifecycle events change state — rotation, tier moves, 403s and 429s never do.</text>
-      <text x="340" y="388" text-anchor="middle" class="fgd-s-label">Re-activation after Deleted is a fresh provision: new subscription, new key.</text>
+      <!-- Deleted → Active (re-activation = fresh provision) -->
+      <path d="M 470,302 C 360,302 250,296 250,194" class="fgd-s-edge fgd-s-edge--green" marker-end="url(#fgd-kl-head-green)" />
+      <text x="330" y="322" text-anchor="middle" class="fgd-s-label fgd-s-label--green">re-activation = fresh provision</text>
+      <text x="330" y="335" text-anchor="middle" class="fgd-s-label">reuses an orphan subscription if one exists</text>
+
+      <!-- Footnote -->
+      <text x="350" y="364" text-anchor="middle" class="fgd-s-label">Only people-lifecycle events change state — rotation, tier re-scoping, 403s and 429s never do.</text>
     </svg>
   </div>
-  <p class="fgd-svg-hint">Scroll sideways to see the whole state machine.</p>
 </figure>
+<p class="fgd-svg-hint">Scroll the diagram sideways to see the whole state machine.</p>

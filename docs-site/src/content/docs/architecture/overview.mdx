@@ -195,36 +195,42 @@ for the mitigation architecture.
 ## APIM key lifecycle
 
 A developer's key *is* an APIM subscription, created under their tier product. Only
-people-lifecycle events change its state:
+people-lifecycle events change its state — there is no suspended state:
 
 <KeyLifecycle />
 
 **Rotate** — `POST /keys/me/rotate` (or an admin's `POST /keys/{userId}/rotate`) calls
-`regeneratePrimaryKey` on the subscription. The old key dies instantly, the new one is
-shown once, and the subscription stays `active` with its counters intact.
+`regeneratePrimaryKey` on the subscription. The primary key the developer holds is
+replaced instantly, the new one is shown once, and the subscription stays `active` with
+its counters intact.
 
-**Change quota** — the control plane moves the subscription to another tier product.
-The new product's `llm-token-limit` applies from the next request; no state change.
+**Change quota** — the control plane re-scopes the subscription to the new tier's
+product. The new product's `llm-token-limit` applies from the next request, and because
+the gateway's monthly counter is keyed on the subscription *within* a product, the
+developer's used-so-far count restarts for the new tier (live validation of the mid-month
+move is tracked in #88). No state change.
 
 **Quota exhausted / burst** — the gateway's `token-quota` returns `403` for the rest of
 the calendar month; the per-minute cap returns `429 + Retry-After`. The subscription stays
 `active`; the key keeps working the moment the window resets. Nothing to undo.
 
-**Suspend** — admin deactivation (reversible): APIM subscription state → `suspended`.
-Key exists but APIM rejects it. Re-enabled by an admin action, not by the monthly reset.
-
-**Delete** — offboarding or Entra departure: `DELETE /subscriptions/{sid}` removes the
-subscription entirely. The key stops working immediately and cannot be restored without a
-full re-provision.
+**Delete** — admin deactivation (`POST /users/{id}/deactivate`), Entra departure, or
+admin key revocation (`DELETE /keys/{userId}`): `DELETE /subscriptions/{sid}` removes the
+subscription entirely and the key stops working immediately. Re-activation
+(`POST /users/{id}/activate`) runs the provision pipeline again — reusing an orphaned
+subscription if a previous deprovision left one behind — and issues a new key.
 
 ---
 
-## Deploy pipeline
+## Deploy pipeline (designed shape)
 
-Everything ships through GitHub Actions with OIDC federated credentials — no long-lived
-Azure secrets. A pull request is gated by build, tests, format and review; merging to
-`main` deploys the whole stack in dependency order through GitHub Environment gates
-(`dev`, then `production`):
+This is the pipeline FoundryGate is built around, as fixed in `CONVENTIONS.md` §CI/CD —
+GitHub Actions with OIDC federated credentials and no long-lived Azure secrets. **What
+runs today** on `main`: the pull-request track (`ci.yml`: build, tests, format;
+`claude-review.yml`) and the reusable database-deploy workflow file. **What is being
+implemented** under epic #67: the merge-to-main deploy chain — infra, database, app
+deploys, post-deploy tests — behind GitHub Environment gates (`dev`, then `production`).
+Badges on the diagram mark which is which.
 
 <DeployPipeline />
 
@@ -233,8 +239,7 @@ server, the workflow waits for firewall propagation and probes port 1433, then t
 `FoundryGate.Database` dacpac is deployed with DacFx (data-loss blocked unless a reviewed
 `allow-data-loss` override is passed) and reference data is seeded. Bicep re-runs pass
 `createModelDeployments=false` because Anthropic model deployments are create-once under
-ARM. The shape is fixed in `CONVENTIONS.md`; the workflow files live under
-`.github/workflows/`.
+ARM.
 
 ---
 

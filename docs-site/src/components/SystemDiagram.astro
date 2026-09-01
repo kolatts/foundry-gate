@@ -18,10 +18,14 @@ const ariaLabel =
   'Azure Static Web Apps calls FoundryGate.Api on Azure Container Apps, which stores state in Azure SQL ' +
   'through EF Core; FoundryGate.Functions run the monthly reset and usage reconciliation, reading ' +
   'ApiManagementGatewayLlmLog from Log Analytics; Key Vault holds secrets. The API manages APIM ' +
-  'subscriptions through the Management API: create under a tier product, regenerate key, move tier, delete.';
+  'subscriptions through the Management API: create under a tier product, regenerate key, move tier, delete. ' +
+  'Legend: solid azure arrows are the real-time enforcement path on the request; dashed grey arrows are telemetry ' +
+  'and reconciliation, out of band; dashed amber arrows are control-plane calls for lifecycle and tiers.';
 ---
 
-<figure class="fgd fgd-system not-content" role="img" aria-label={ariaLabel}>
+<figure class="fgd fgd-system not-content" role="group" aria-labelledby="fgd-system-title" aria-describedby="fgd-system-desc">
+  <p id="fgd-system-title" class="fgd-sr-only">FoundryGate system diagram — data plane and control plane</p>
+  <p id="fgd-system-desc" class="fgd-sr-only">{ariaLabel}</p>
   <!-- Developers -->
   <div class="fgd-center">
     <div class="fgd-node fgd-node--ext fgd-system__devs">

@@ -1,10 +1,14 @@
 ---
-// Deploy pipeline — the fully automated GitHub Actions flow (CONVENTIONS.md §CI/CD).
-// No props: hand-maintained picture of the designed pipeline; keep in step with
-// .github/workflows/* and plans/22-cicd-pipelines.md.
+// Deploy pipeline — the GitHub Actions flow FoundryGate is built around
+// (CONVENTIONS.md §CI/CD, plans/22-cicd-pipelines.md). This draws the DESIGNED shape and
+// labels what exists today: ci.yml (build/tests/format), claude-review.yml, docs.yml and
+// the reusable _deploy-database.yml exist on main; the merge-to-main deploy chain
+// (infra → db → api/functions/ui → post-deploy tests) is implemented under epic #67.
+// Keep the status badges in step with .github/workflows/*.
 interface Stage {
   title: string;
   detail: string;
+  status?: string;
   sub?: string[];
   parallel?: string[];
 }
@@ -14,17 +18,18 @@ const pr: Stage[] = [
   { title: 'Pre-deploy tests', detail: 'xUnit · SQLite in-memory · convention tests' },
   { title: 'Format check', detail: 'dotnet format --verify-no-changes' },
   { title: 'Claude review', detail: 'formal review on every PR, reads the test artifacts' },
-  { title: 'Bicep what-if', detail: 'posted as a PR comment when infra/** changes' },
 ];
 
 const main: Stage[] = [
   {
     title: 'Infra',
-    detail: 'Bicep, sub-scope · model deploys are create-once',
+    detail: 'Bicep, subscription scope · model deployments create-once',
+    status: '#67',
   },
   {
     title: 'Database',
     detail: 'reusable database workflow',
+    status: 'exists · #67',
     sub: [
       'whitelist runner IP',
       'wait 60 s for firewall',
@@ -36,33 +41,38 @@ const main: Stage[] = [
   {
     title: 'App deploys',
     detail: 'in parallel',
+    status: '#67',
     parallel: ['Api → Container Apps', 'Functions → Flex Consumption', 'UI → Static Web Apps'],
   },
-  { title: 'Post-deploy tests', detail: 'Playwright · live site · desktop + mobile' },
-  { title: 'Summary', detail: 'job summary · Environment deploy record' },
+  { title: 'Post-deploy tests', detail: 'Playwright · live site · desktop + mobile', status: '#67' },
+  { title: 'Summary', detail: 'job summary · Environment deploy record', status: '#67' },
 ];
-
-const ariaLabel =
-  'Deploy pipeline. Stage one, every pull request: build with warnings as errors, predeployment tests, ' +
-  'format check, Claude review, and a Bicep what-if posted as a PR comment. Merge to main is PR-only. ' +
-  'Stage two, on merge, fully automated with OIDC and GitHub Environment gates from dev to production: ' +
-  'infra deploy, then database deploy (whitelist runner IP, wait for firewall propagation, probe port 1433, ' +
-  'deploy the dacpac with data-loss blocking, seed reference data and test data outside production), then ' +
-  'API, Functions and UI deploys in parallel, then postdeployment Playwright tests, then a summary.';
 ---
 
-<figure class="fgd fgd-deploy not-content" role="img" aria-label={ariaLabel}>
-  <section class="fgd-plane fgd-plane--data">
-    <div class="fgd-plane__label">1 · Pull request <small>ci.yml on every PR · cancel-in-progress</small></div>
+<figure class="fgd fgd-deploy not-content" role="group" aria-labelledby="fgd-deploy-title" aria-describedby="fgd-deploy-desc">
+  <p id="fgd-deploy-title" class="fgd-sr-only">Deploy pipeline — the designed GitHub Actions flow</p>
+  <p id="fgd-deploy-desc" class="fgd-sr-only">
+    Two tracks. Track one runs on every pull request today (ci.yml and claude-review.yml): build with warnings as
+    errors, predeployment tests, format check, Claude review. Pull requests that change infra/** additionally get a
+    Bicep what-if posted as a comment (part of #67). Merging to main is PR-only. Track two, on merge, is the designed
+    fully automated deploy chain with OIDC and GitHub Environment gates from dev to production: infra, then database
+    (whitelist runner IP, wait for firewall propagation, probe port 1433, deploy the dacpac with data-loss blocking,
+    seed reference data and test data outside production), then API, Functions and UI deploys in parallel, then
+    post-deploy Playwright tests, then a summary. Badges mark which stages exist today and which are implemented
+    under #67.
+  </p>
+
+  <section class="fgd-plane fgd-plane--neutral">
+    <div class="fgd-plane__label">1 · Pull request <small>runs today — <code>ci.yml</code> + <code>claude-review.yml</code> · cancel-in-progress</small></div>
     <ol class="fgd-deploy__track">
       {pr.map((s, i) => (
         <li class="fgd-deploy__stage">
-          <div class="fgd-node fgd-node--azure fgd-deploy__step">
+          <div class="fgd-node fgd-deploy__step">
             <div class="fgd-node__title">{s.title}</div>
             <div class="fgd-node__sub">{s.detail}</div>
           </div>
           {i < pr.length - 1 && (
-            <span class="fgd-arrow fgd-arrow--h fgd-deploy__link" aria-hidden="true">
+            <span class="fgd-arrow fgd-arrow--dashed fgd-arrow--h fgd-deploy__link" aria-hidden="true">
               <span class="fgd-arrow__line"></span>
               <span class="fgd-arrow__head"></span>
             </span>
@@ -70,9 +80,13 @@ const ariaLabel =
         </li>
       ))}
     </ol>
+    <div class="fgd-deploy__aside">
+      <span class="fgd-badge fgd-badge--muted">infra/** PRs</span>
+      Bicep <strong>what-if</strong> posted as a PR comment before merge — part of the infra deploy workflow (#67)
+    </div>
   </section>
 
-  <div class="fgd-arrow fgd-arrow--app">
+  <div class="fgd-arrow fgd-arrow--dashed">
     <span class="fgd-arrow__line"></span>
     <span class="fgd-arrow__label">
       <strong>merge to main</strong> — PR-only · required check <code>build-test</code> · GitVersion Mainline
@@ -80,12 +94,12 @@ const ariaLabel =
     <span class="fgd-arrow__head"></span>
   </div>
 
-  <section class="fgd-plane fgd-plane--control">
-    <div class="fgd-plane__label">2 · Merge to main <small>automatic · OIDC only · Environment gates dev → production · concurrency lock</small></div>
+  <section class="fgd-plane fgd-plane--neutral">
+    <div class="fgd-plane__label">2 · Merge to main <small>designed shape (CONVENTIONS §CI/CD) — automatic · OIDC only · Environment gates dev → production · being implemented under #67</small></div>
     <ol class="fgd-deploy__track">
       {main.map((s, i) => (
-        <li class:list={['fgd-deploy__stage', { 'fgd-deploy__stage--wide': !!(s.sub || s.parallel) }]}>
-          <div class="fgd-node fgd-node--app fgd-deploy__step">
+        <li class="fgd-deploy__stage">
+          <div class="fgd-node fgd-deploy__step">
             <div class="fgd-node__title">{s.title}</div>
             <div class="fgd-node__sub">{s.detail}</div>
             {s.sub && (
@@ -98,9 +112,10 @@ const ariaLabel =
                 {s.parallel.map((t) => <li>{t}</li>)}
               </ul>
             )}
+            {s.status && <div class="fgd-deploy__status"><span class="fgd-badge fgd-badge--muted">{s.status}</span></div>}
           </div>
           {i < main.length - 1 && (
-            <span class="fgd-arrow fgd-arrow--app fgd-arrow--h fgd-deploy__link" aria-hidden="true">
+            <span class="fgd-arrow fgd-arrow--dashed fgd-arrow--h fgd-deploy__link" aria-hidden="true">
               <span class="fgd-arrow__line"></span>
               <span class="fgd-arrow__head"></span>
             </span>
@@ -111,8 +126,8 @@ const ariaLabel =
   </section>
 
   <figcaption class="fgd-legend">
-    <span class="fgd-legend__item"><span class="fgd-legend__swatch"></span> gates a PR</span>
-    <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--app"></span> mutates an environment (GitHub Environment approval applies)</span>
+    <span class="fgd-legend__item"><span class="fgd-badge fgd-badge--muted">#67</span> stage is designed, not yet on <code>main</code></span>
+    <span class="fgd-legend__item"><span class="fgd-badge fgd-badge--muted">exists · #67</span> workflow file is on <code>main</code>; #67 wires it into the chain</span>
   </figcaption>
 </figure>
 
@@ -130,7 +145,6 @@ const ariaLabel =
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    flex: 1 1 0;
     min-width: 0;
   }
 
@@ -139,9 +153,7 @@ const ariaLabel =
     text-align: left;
   }
 
-  .fgd-deploy__link {
-    flex: 0 0 auto;
-  }
+  .fgd-deploy__link { flex: 0 0 auto; }
 
   .fgd-deploy__sub {
     list-style: decimal;
@@ -153,7 +165,7 @@ const ariaLabel =
   }
 
   .fgd-deploy__sub li::marker {
-    color: var(--fg-ember-soft, #FFB347);
+    color: var(--fg-text-muted, #7E96AD);
     font-family: 'Monaspace Argon', ui-monospace, monospace;
     font-size: 0.68rem;
   }
@@ -171,36 +183,63 @@ const ariaLabel =
 
   .fgd-deploy__parallel li {
     border: 1px solid var(--fg-border-subtle, #1C2E44);
-    border-left: 3px solid var(--fg-ember-soft, #FFB347);
+    border-left: 3px solid var(--fg-border-strong, #2A4260);
     border-radius: 4px;
     padding: 0.2rem 0.45rem;
     background: var(--fg-bg-surface, #0C1420);
   }
+
+  .fgd-deploy__status {
+    margin-top: 0.45rem;
+    text-align: left;
+  }
+
+  /* Status badges may wrap inside a narrow stage; identifiers elsewhere stay nowrap. */
+  .fgd-deploy__status .fgd-badge {
+    white-space: normal;
+    line-height: 1.3;
+  }
+
+  .fgd-deploy__aside {
+    margin-top: 0.6rem;
+    padding: 0.45rem 0.7rem;
+    border: 1px dashed var(--fg-border-strong, #2A4260);
+    border-radius: 8px;
+    font-size: 0.72rem;
+    color: var(--fg-text-muted, #7E96AD);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.3rem 0.5rem;
+  }
+
+  .fgd-deploy__aside strong { color: var(--fg-text-secondary, #C4D0DC); }
 
   @media (min-width: 720px) {
     .fgd-deploy__track {
       flex-direction: row;
       align-items: stretch;
     }
+    /* Content-driven sizing: each stage starts from its own text width and all shrink
+       together, so a one-line stage is never starved by a stage with sub-steps. */
     .fgd-deploy__stage {
+      flex: 1 1 auto;
       flex-direction: row;
       align-items: center;
     }
-    /* Stages with sub-steps / parallel lists need more room than one-liners. */
-    .fgd-deploy__stage--wide { flex-grow: 1.45; }
     .fgd-deploy__step {
       height: 100%;
+      min-width: 6.5rem;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
     }
+    .fgd-deploy__step .fgd-node__title { font-size: 0.76rem; }
+    .fgd-deploy__step .fgd-node__sub { font-size: 0.7rem; }
     .fgd-deploy__link {
       min-width: 1.4rem;
       padding: 0 0.1rem;
       align-self: center;
     }
-    /* Five stages share ~680px of content width: tighten type so words stay whole. */
-    .fgd-deploy__step .fgd-node__title { font-size: 0.76rem; }
-    .fgd-deploy__step .fgd-node__sub { font-size: 0.7rem; }
   }
 </style>

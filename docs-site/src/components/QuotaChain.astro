@@ -50,15 +50,17 @@ const ariaLabel =
   'per month and 20 thousand tokens per minute, Power at 20 million and 40 thousand, or Unlimited with no ' +
   'monthly cap and 100 thousand tokens per minute. The developer\'s APIM subscription is created under, or ' +
   'moved to, that product, and the product\'s llm-token-limit policy enforces it in real time: 403 when the ' +
-  'monthly quota is exhausted, 429 with Retry-After on the per-minute cap. Suspension is never a quota outcome.';
+  'monthly quota is exhausted, 429 with Retry-After on the per-minute cap. The subscription state never changes.';
 ---
 
-<figure class="fgd fgd-qc not-content" role="img" aria-label={ariaLabel}>
+<figure class="fgd fgd-qc not-content" role="group" aria-labelledby="fgd-qc-title" aria-describedby="fgd-qc-desc">
+  <p id="fgd-qc-title" class="fgd-sr-only">Quota resolution — five levels to a tier product</p>
+  <p id="fgd-qc-desc" class="fgd-sr-only">{ariaLabel}</p>
   <ol class="qc-list">
     {levels.map((level) => (
       <li class="qc-row">
         <span class={`qc-badge qc-badge--${level.resultVariant}`}>{level.num}</span>
-        <code class="qc-rule">{level.rule}</code>
+        <code class="qc-rule fgd-wrap">{level.rule}</code>
         <span class={`qc-result qc-result--${level.resultVariant}`}>{level.result}</span>
       </li>
     ))}
@@ -150,6 +152,7 @@ const ariaLabel =
     border: none;
     padding: 0;
     min-width: 0;
+    white-space: normal; /* rules are sentences, not identifiers — let them wrap */
     overflow-wrap: anywhere;
   }
 
