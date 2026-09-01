@@ -1,0 +1,12 @@
+@inject NavigationManager Navigation
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="d-flex flex-column align-center justify-center" Style="min-height: 60vh;">
+    <MudText Typo="Typo.body1">Redirecting to sign-in&#8230;</MudText>
+</MudContainer>
+
+@code {
+    protected override void OnInitialized()
+    {
+        Navigation.NavigateTo($"authentication/login?returnUrl={Uri.EscapeDataString(Navigation.Uri)}");
+    }
+}
