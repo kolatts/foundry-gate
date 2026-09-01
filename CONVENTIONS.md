@@ -173,6 +173,9 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   `DomainArchitectureTests` fails the build for either broken placement;
   `Api/Endpoints/RequestDtoBindingTests` posts each request record through the real pipeline
   (via a test-only controller the factory registers) and asserts 400, never 500.
+- **Generated URLs are lowercase** (`RouteOptions.LowercaseUrls`, #129): `CreatedAtRoute`'s
+  `Location` reads `/api/v1/foundry/...`, route values included — so anything a route value
+  identifies must resolve case-insensitively (Foundry account and deployment names do).
 
 ## Schema pipeline (no EF migrations)
 
