@@ -142,8 +142,8 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         _timeProvider.Advance(TimeSpan.FromHours(1));
         var second = await CreateService(admin.EntraObjectId).SyncUsersAsync(CancellationToken.None);
 
-        Assert.Equal((1, 1, 1), (first.AddedCount, first.UpdatedCount, first.DeactivatedCount));
-        Assert.Equal((0, 2, 0), (second.AddedCount, second.UpdatedCount, second.DeactivatedCount));
+        Assert.Equal((1, 1, 1, 0), (first.AddedCount, first.UpdatedCount, first.DeactivatedCount, first.SkippedGroupAssignmentCount));
+        Assert.Equal((0, 2, 0, 0), (second.AddedCount, second.UpdatedCount, second.DeactivatedCount, second.SkippedGroupAssignmentCount));
         Assert.Equal(rowsAfterFirst, await Context.Users.CountAsync());
         Assert.Equal(2, await Context.AuditLogs.CountAsync(a => a.Action == AuditActions.UsersSynced));
     }
@@ -211,6 +211,8 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         Assert.Contains("\"addedCount\":1", entry.Details, StringComparison.Ordinal);
         Assert.Contains("\"updatedCount\":1", entry.Details, StringComparison.Ordinal);
         Assert.Contains("\"deactivatedCount\":1", entry.Details, StringComparison.Ordinal);
+        Assert.Contains("\"skippedGroupAssignmentCount\":0", entry.Details, StringComparison.Ordinal);
+        Assert.Contains("\"departureDetectionSuspended\":false", entry.Details, StringComparison.Ordinal);
         Assert.Contains($"\"deactivatedUserIds\":[{departed.UserId}]", entry.Details, StringComparison.Ordinal);
         Assert.Contains("\"addedEntraObjectIds\":[\"oid-new\"]", entry.Details, StringComparison.Ordinal);
     }
@@ -243,6 +245,46 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         await using var verification = CreateVerificationContext();
         Assert.Equal(0, await verification.Users.CountAsync());
         Assert.Equal(0, await verification.AuditLogs.CountAsync());
+    }
+
+    [Fact]
+    public async Task A_group_principal_assignment_suspends_departure_detection_but_not_adds_and_updates()
+    {
+        // The enterprise pattern: the app is assigned to a security group. Its members are invisible to
+        // the sync until #121, so an active user missing from the user list must NOT be deactivated.
+        var admin = await SeedCallerAsync();
+        var coveredByGroup = await SeedUserAsync("oid-covered-by-group");
+        _directory.AssignedUsers.Add(Present(admin));
+        _directory.AssignedUsers.Add(new EntraUser("oid-new", "New Joiner", "new@contoso.test", null));
+        _directory.SkippedGroupAssignments.Add(new EntraGroupAssignment("group-1", "AI Developers"));
+        _directory.SkippedGroupAssignments.Add(new EntraGroupAssignment("group-2", "Platform Team"));
+
+        var result = await CreateService(admin.EntraObjectId).SyncUsersAsync(CancellationToken.None);
+
+        Assert.Equal((1, 1, 0, 2), (result.AddedCount, result.UpdatedCount, result.DeactivatedCount, result.SkippedGroupAssignmentCount));
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == coveredByGroup.UserId);
+        Assert.True(saved.IsActive);
+        Assert.Null(saved.LastSyncedDate);
+        _ = await Context.Users.AsNoTracking().SingleAsync(u => u.EntraObjectId == "oid-new");
+
+        var entry = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.UsersSynced);
+        Assert.Contains("\"skippedGroupAssignmentCount\":2", entry.Details, StringComparison.Ordinal);
+        Assert.Contains("\"departureDetectionSuspended\":true", entry.Details, StringComparison.Ordinal);
+        Assert.Contains("\"displayName\":\"AI Developers\"", entry.Details, StringComparison.Ordinal);
+        Assert.Contains("\"deactivatedUserIds\":[]", entry.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_group_principal_assignment_with_no_user_assignees_is_not_a_conflict()
+    {
+        // Everyone is assigned through the group: zero users in the list is expected, not a misconfiguration.
+        var admin = await SeedCallerAsync();
+        _directory.SkippedGroupAssignments.Add(new EntraGroupAssignment("group-1", "AI Developers"));
+
+        var result = await CreateService(admin.EntraObjectId).SyncUsersAsync(CancellationToken.None);
+
+        Assert.Equal((0, 0, 0, 1), (result.AddedCount, result.UpdatedCount, result.DeactivatedCount, result.SkippedGroupAssignmentCount));
+        Assert.True((await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == admin.UserId)).IsActive);
     }
 
     [Fact]

@@ -15,9 +15,13 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 | `PUT` | `/users/{id}/quota` | Admin | Set `MonthlyTokenQuota` or `IsUnlimited` |
 | `POST` | `/users/{id}/activate` | Admin | Re-activate user — runs full provision pipeline |
 | `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription |
-| `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount }` |
+| `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount, skippedGroupAssignmentCount }` |
 
-`POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned are set `isActive = false` — never deleted, never auto-reactivated if they later return. One `users.synced` audit row is written per run. Errors: `400` when `Entra:Enabled` is false on the host, `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role).
+`POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned are set `isActive = false` — never deleted, never auto-reactivated if they later return. One `users.synced` audit row is written per run.
+
+**Group-assigned access suspends departure detection.** Only *user* assignees are read today; an app-role assignment granted to a *group* is not expanded to its members yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Because a user assigned through such a group is invisible to the sync, "not in the user list" cannot mean "departed" — so when the directory reports one or more group assignments the run still adds and updates users but deactivates nobody, returns `deactivatedCount: 0` with `skippedGroupAssignmentCount > 0`, names the groups in a warning log and in the audit row (`departureDetectionSuspended: true`). Assign developers individually to the application if you need departure detection before #121 lands.
+
+Errors: `400` when `Entra:Enabled` is false on the host, `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role).
 
 ## Groups
 

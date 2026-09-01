@@ -19,9 +19,9 @@ public class DisabledEntraDirectoryClientTests
     }
 
     [Fact]
-    public void ListAssignedUsersAsync_throws_ArgumentException_naming_the_setting()
+    public async Task ListAssignedUsersAsync_throws_ArgumentException_naming_the_setting()
     {
-        var exception = Assert.Throws<ArgumentException>(() => _client.ListAssignedUsersAsync(CancellationToken.None));
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => _client.ListAssignedUsersAsync(CancellationToken.None));
 
         AssertMessage(exception);
     }
@@ -38,7 +38,8 @@ public class DisabledEntraDirectoryClientTests
     {
         Assert.Contains("Entra:Enabled", exception.Message, StringComparison.Ordinal);
         Assert.Contains("User.Read.All", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("GroupMember.Read.All", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("GroupMember.ReadBasic.All", exception.Message, StringComparison.Ordinal);
         Assert.Contains("Application.Read.All", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("ServicePrincipalObjectId", exception.Message, StringComparison.Ordinal); // not an alternative to the roles
     }
 }

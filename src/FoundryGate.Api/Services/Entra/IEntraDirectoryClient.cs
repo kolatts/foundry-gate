@@ -25,14 +25,17 @@ public interface IEntraDirectoryClient
     Task<EntraUser?> GetUserAsync(string objectId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Streams every <em>user</em> that holds an app-role assignment on the FoundryGate service
-    /// principal (<c>GET /servicePrincipals/{id}/appRoleAssignedTo</c>, every page), resolved to
-    /// their directory fields. Assignments whose principal is a group or another service principal
-    /// are skipped — group-based assignment is not expanded to members in this wave (issue #121).
-    /// The same user is yielded at most once even if they hold several role assignments.
+    /// Every <em>user</em> that holds an app-role assignment on the FoundryGate service principal
+    /// (<c>GET /servicePrincipals/{id}/appRoleAssignedTo</c>, every page), resolved to their directory
+    /// fields, plus the assignments whose principal is a <em>group</em> — those are not expanded to
+    /// their members in this wave (issue #121) and are reported so the caller can refuse to treat
+    /// "not in the user list" as "departed". Service-principal assignees are dropped silently (they
+    /// are not people). The same user appears at most once even if they hold several role
+    /// assignments. Buffered rather than streamed: a fork's developer population is at most a few
+    /// thousand small records, and the caller needs the group list before it can act on the users.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
-    IAsyncEnumerable<EntraUser> ListAssignedUsersAsync(CancellationToken cancellationToken);
+    Task<EntraAssignedUsers> ListAssignedUsersAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Streams the object ids of the <em>user</em> members of an Entra group

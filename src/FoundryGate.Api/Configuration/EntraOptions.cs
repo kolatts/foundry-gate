@@ -13,8 +13,8 @@ namespace FoundryGate.Api.Configuration;
 /// <remarks>
 /// There is deliberately <b>no client secret</b> (#110). Graph is called with the app's registered
 /// <c>TokenCredential</c> — the API's user-assigned managed identity in cloud (granted Microsoft
-/// Graph <em>application</em> roles <c>User.Read.All</c>, <c>GroupMember.Read.All</c> and
-/// <c>Application.Read.All</c> by the owner), the developer's Azure CLI login locally. Nothing to
+/// Graph <em>application</em> roles <c>Application.Read.All</c>, <c>User.Read.All</c> and
+/// <c>GroupMember.ReadBasic.All</c> by the owner), the developer's Azure CLI login locally. Nothing to
 /// store, nothing to rotate.
 /// </remarks>
 public class EntraOptions : IValidatableObject

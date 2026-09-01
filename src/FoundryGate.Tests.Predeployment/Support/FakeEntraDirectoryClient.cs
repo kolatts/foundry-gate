@@ -5,15 +5,18 @@ namespace FoundryGate.Tests.Predeployment.Support;
 
 /// <summary>
 /// In-memory <see cref="IEntraDirectoryClient"/>: whatever a test puts in <see cref="AssignedUsers"/>
-/// and <see cref="GroupMembers"/> is what "the directory" returns. Streams asynchronously (one
-/// <c>Task.Yield</c> per item) so consumers are exercised as genuine <see cref="IAsyncEnumerable{T}"/>
-/// callers, not over a synchronously completed sequence. Hand-rolled — no mocking library
+/// and <see cref="GroupMembers"/> is what "the directory" returns. Completes asynchronously (a
+/// <c>Task.Yield</c> per call or item) so consumers are exercised over genuinely asynchronous results,
+/// not synchronously completed ones. Hand-rolled — no mocking library
 /// (CONVENTIONS.md).
 /// </summary>
 public sealed class FakeEntraDirectoryClient : IEntraDirectoryClient
 {
-    /// <summary>Users assigned to the FoundryGate application. Duplicates are yielded as-is so de-duplication is the consumer's job to prove.</summary>
+    /// <summary>Users assigned to the FoundryGate application. Duplicates are returned as-is so de-duplication is the consumer's job to prove.</summary>
     public List<EntraUser> AssignedUsers { get; } = [];
+
+    /// <summary>Group-principal app-role assignments the directory reports alongside the users (not expanded — #121).</summary>
+    public List<EntraGroupAssignment> SkippedGroupAssignments { get; } = [];
 
     /// <summary>Group object id → member object ids.</summary>
     public Dictionary<string, List<string>> GroupMembers { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -26,16 +29,13 @@ public sealed class FakeEntraDirectoryClient : IEntraDirectoryClient
         Task.FromResult(AssignedUsers.FirstOrDefault(u => string.Equals(u.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)));
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<EntraUser> ListAssignedUsersAsync([EnumeratorCancellation] CancellationToken cancellationToken)
+    public async Task<EntraAssignedUsers> ListAssignedUsersAsync(CancellationToken cancellationToken)
     {
         ListAssignedUsersCalls++;
+        cancellationToken.ThrowIfCancellationRequested();
+        await Task.Yield();
 
-        foreach (var user in AssignedUsers.ToList())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await Task.Yield();
-            yield return user;
-        }
+        return new EntraAssignedUsers(AssignedUsers.ToList(), SkippedGroupAssignments.ToList());
     }
 
     /// <inheritdoc />

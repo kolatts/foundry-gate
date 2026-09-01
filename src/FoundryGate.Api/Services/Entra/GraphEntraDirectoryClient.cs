@@ -11,15 +11,16 @@ namespace FoundryGate.Api.Services.Entra;
 /// <see cref="IEntraDirectoryClient"/> over <see cref="GraphServiceClient"/> (Microsoft Graph v1.0).
 /// Authenticates with the app's registered <c>TokenCredential</c> (#110) — no client secret; the
 /// scope is <see cref="EntraOptions.GraphScope"/>. Every collection call follows
-/// <c>@odata.nextLink</c> until the directory runs out, streaming results page by page.
+/// <c>@odata.nextLink</c> until the directory runs out.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Graph application roles the API identity needs</b>: <c>Application.Read.All</c> (resolve the
 /// service principal and read its <c>appRoleAssignedTo</c>), <c>User.Read.All</c> (user fields),
-/// <c>GroupMember.Read.All</c> (group members). Least privilege per the Graph reference for each
-/// call; <c>Directory.Read.All</c> is deliberately <em>not</em> required — which is why user details
-/// are fetched with <c>GET /users?$filter=id in (...)</c> in chunks of
+/// <c>GroupMember.ReadBasic.All</c> (group member ids — the least-privileged role for
+/// <c>/members</c> and <c>/transitiveMembers</c>; only <c>id</c> is selected). Least privilege per the
+/// Graph reference for each call; <c>Directory.Read.All</c> is deliberately <em>not</em> required —
+/// which is why user details are fetched with <c>GET /users?$filter=id in (...)</c> in chunks of
 /// <see cref="InFilterMaxValues"/> rather than <c>directoryObjects/getByIds</c> (that action needs
 /// <c>Directory.Read.All</c> and supports no <c>$select</c>, so it would not return
 /// <c>employeeId</c> anyway).
@@ -32,10 +33,10 @@ namespace FoundryGate.Api.Services.Entra;
 /// (CONVENTIONS.md: no unnecessary packages).
 /// </para>
 /// <para>
-/// <b>Paging</b> uses <c>WithUrl(nextLink)</c> rather than <c>PageIterator</c>: the iterator drives
-/// a callback and cannot <c>yield</c> into an <see cref="IAsyncEnumerable{T}"/> without buffering
-/// the whole collection first; a plain next-link loop streams each page as it arrives and keeps
-/// the code a dozen lines.
+/// <b>Paging</b> uses <c>WithUrl(nextLink)</c> loops rather than <c>PageIterator</c>: the iterator
+/// drives a callback and cannot <c>yield</c> into an <see cref="IAsyncEnumerable{T}"/> (used for group
+/// members) without buffering the whole collection first; a plain next-link loop streams each page
+/// as it arrives and keeps the code a dozen lines.
 /// </para>
 /// </remarks>
 public sealed class GraphEntraDirectoryClient(
@@ -53,11 +54,12 @@ public sealed class GraphEntraDirectoryClient(
     /// <summary>Graph's maximum page size for directory collections.</summary>
     private const int MaxPageSize = 999;
 
-    /// <summary><c>appRoleAssignment.principalType</c> value for a user principal (others: <c>Group</c>, <c>ServicePrincipal</c>).</summary>
+    /// <summary><c>appRoleAssignment.principalType</c> values (the third is <c>ServicePrincipal</c>).</summary>
     private const string UserPrincipalType = "User";
+    private const string GroupPrincipalType = "Group";
 
     private static readonly string[] UserSelect = ["id", "displayName", "mail", "userPrincipalName", "employeeId"];
-    private static readonly string[] AssignmentSelect = ["principalId", "principalType"];
+    private static readonly string[] AssignmentSelect = ["principalId", "principalType", "principalDisplayName"];
     private static readonly string[] IdSelect = ["id"];
 
     private readonly SemaphoreSlim _servicePrincipalLock = new(1, 1);
@@ -83,14 +85,16 @@ public sealed class GraphEntraDirectoryClient(
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<EntraUser> ListAssignedUsersAsync([EnumeratorCancellation] CancellationToken cancellationToken)
+    public async Task<EntraAssignedUsers> ListAssignedUsersAsync(CancellationToken cancellationToken)
     {
         var servicePrincipalObjectId = await GetServicePrincipalObjectIdAsync(cancellationToken);
 
-        // Pass 1: principal ids. appRoleAssignedTo carries no user fields (only principalId /
-        // principalType / principalDisplayName), so ids are collected here and hydrated in pass 2.
+        // Pass 1: principals. appRoleAssignedTo carries no user fields (only principalId /
+        // principalType / principalDisplayName), so user ids are collected here and hydrated in pass 2.
         var userIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var skippedNonUserPrincipals = 0;
+        var groups = new List<EntraGroupAssignment>();
+        var seenGroupIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var skippedServicePrincipals = 0;
 
         var assignments = graph.ServicePrincipals[servicePrincipalObjectId].AppRoleAssignedTo;
         var page = await assignments.GetAsync(
@@ -110,13 +114,21 @@ public sealed class GraphEntraDirectoryClient(
                     continue;
                 }
 
+                var id = principalId.ToString();
                 if (string.Equals(assignment.PrincipalType, UserPrincipalType, StringComparison.OrdinalIgnoreCase))
                 {
-                    _ = userIds.Add(principalId.ToString());
+                    _ = userIds.Add(id);
+                }
+                else if (string.Equals(assignment.PrincipalType, GroupPrincipalType, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (seenGroupIds.Add(id))
+                    {
+                        groups.Add(new EntraGroupAssignment(id, assignment.PrincipalDisplayName ?? id));
+                    }
                 }
                 else
                 {
-                    skippedNonUserPrincipals++;
+                    skippedServicePrincipals++;
                 }
             }
 
@@ -125,19 +137,20 @@ public sealed class GraphEntraDirectoryClient(
                 : await assignments.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
         }
 
-        if (skippedNonUserPrincipals > 0)
+        if (skippedServicePrincipals > 0)
         {
-            logger.LogWarning(
-                "Skipped {Count} app-role assignment(s) on service principal {ServicePrincipalObjectId} whose principal is a group or service principal; group-based assignment is not expanded to members (issue #121).",
-                skippedNonUserPrincipals,
+            logger.LogDebug(
+                "Ignored {Count} app-role assignment(s) on service principal {ServicePrincipalObjectId} whose principal is a service principal.",
+                skippedServicePrincipals,
                 servicePrincipalObjectId);
         }
 
         // Pass 2: hydrate in chunks of ≤15 ids per request (the `in` operator's default cap).
+        var users = new List<EntraUser>(userIds.Count);
         foreach (var chunk in userIds.Chunk(InFilterMaxValues))
         {
             var filter = "id in (" + string.Join(",", chunk.Select(id => $"'{id}'")) + ")";
-            var users = await graph.Users.GetAsync(
+            var response = await graph.Users.GetAsync(
                 request =>
                 {
                     request.QueryParameters.Filter = filter;
@@ -145,11 +158,10 @@ public sealed class GraphEntraDirectoryClient(
                 },
                 cancellationToken);
 
-            foreach (var user in users?.Value ?? [])
-            {
-                yield return Map(user);
-            }
+            users.AddRange((response?.Value ?? []).Select(Map));
         }
+
+        return new EntraAssignedUsers(users, groups);
     }
 
     /// <inheritdoc />

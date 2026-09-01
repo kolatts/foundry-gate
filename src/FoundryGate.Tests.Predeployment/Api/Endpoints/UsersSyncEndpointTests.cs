@@ -84,6 +84,7 @@ public class UsersSyncEndpointTests(ApiTestFactory factory) : IClassFixture<ApiT
         Assert.NotNull(result);
         Assert.Equal(1, result.AddedCount);
         Assert.True(result.UpdatedCount >= 1, "the calling admin is in the directory and must count as updated");
+        Assert.Equal(0, result.SkippedGroupAssignmentCount);
 
         await using var dbContext = factory.CreateDbContext();
         var imported = await dbContext.Users.AsNoTracking().SingleAsync(u => u.EntraObjectId == newOid);

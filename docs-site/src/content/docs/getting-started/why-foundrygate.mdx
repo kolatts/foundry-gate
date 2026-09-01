@@ -193,7 +193,7 @@ FoundryGate sets up the gateway (Azure API Management) and the AI model deployme
 **Two separate layers.** FoundryGate's per-developer budgets and caps ride on top of Microsoft Foundry's own deployment-level rate pools (requests per minute, uncached-input tokens per minute, output tokens per minute for Claude), which are shared across all callers. FoundryGate *mitigates* saturation — per-developer caps keep any one person from exhausting the pool, and multi-deployment backend pools reroute around 429s — but it cannot manufacture capacity beyond the platform's ceilings. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/) for the current numbers and [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) for how the mitigation works.
 </Aside>
 
-**Entra sync**: FoundryGate uses the Microsoft Graph API (app-only credentials) to read your Entra directory. Developers in a linked Entra group are auto-provisioned. Developers who leave the group are auto-deprovisioned. The sync runs on demand or can be triggered automatically.
+**Entra sync**: FoundryGate reads your Entra directory through the Microsoft Graph API using the app's own identity — no passwords or secrets to manage. Developers in a linked Entra group are auto-provisioned. Developers who leave the group are auto-deprovisioned. The sync runs on demand or can be triggered automatically.
 
 <Aside type="tip">
 FoundryGate is open-source and designed to be forked. Everything it creates — the gateway, the model deployments, its own database — lives in **your** Azure subscription, and sign-in uses **your** Entra tenant. No data leaves your Azure subscription.

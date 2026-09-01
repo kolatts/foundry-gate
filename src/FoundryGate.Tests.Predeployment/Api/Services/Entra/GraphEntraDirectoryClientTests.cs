@@ -30,7 +30,7 @@ public class GraphEntraDirectoryClientTests
         _http
             .OnJson(
                 url => url.StartsWith(assignmentsUrl + "?", StringComparison.Ordinal) && !url.Contains("skiptoken", StringComparison.Ordinal),
-                AssignmentsPage(ids.Take(10), nextLink: $"{assignmentsUrl}?$skiptoken=page2", extra: """{"principalId":"33333333-3333-3333-3333-333333333333","principalType":"Group"}"""))
+                AssignmentsPage(ids.Take(10), nextLink: $"{assignmentsUrl}?$skiptoken=page2", extra: """{"principalId":"33333333-3333-3333-3333-333333333333","principalType":"Group","principalDisplayName":"AI Developers"}"""))
             .OnJson(
                 url => url.Contains("skiptoken=page2", StringComparison.Ordinal),
                 AssignmentsPage(ids.Skip(10), nextLink: null, extra: """{"principalId":"44444444-4444-4444-4444-444444444444","principalType":"ServicePrincipal"}"""))
@@ -41,15 +41,18 @@ public class GraphEntraDirectoryClientTests
                 url => url.StartsWith($"{BaseUrl}/users?$filter=id in ('{ids[15]}'", StringComparison.Ordinal),
                 UsersPage(ids.Skip(15)));
 
-        var users = await CreateClient(ServicePrincipalId).ListAssignedUsersAsync(CancellationToken.None).ToListAsync();
+        var assigned = await CreateClient(ServicePrincipalId).ListAssignedUsersAsync(CancellationToken.None);
 
+        var users = assigned.Users;
         Assert.Equal(20, users.Count);
         Assert.Equal(ids, users.Select(u => u.ObjectId));
         Assert.All(users, u => Assert.StartsWith("User ", u.DisplayName, StringComparison.Ordinal));
+        var group = Assert.Single(assigned.SkippedGroupAssignments); // the Group principal is reported, the ServicePrincipal one is dropped
+        Assert.Equal(new EntraGroupAssignment("33333333-3333-3333-3333-333333333333", "AI Developers"), group);
 
         var firstAssignments = _http.Requests[0];
         Assert.StartsWith(assignmentsUrl, firstAssignments, StringComparison.Ordinal);
-        Assert.Contains("$select=principalId,principalType", firstAssignments, StringComparison.Ordinal);
+        Assert.Contains("$select=principalId,principalType,principalDisplayName", firstAssignments, StringComparison.Ordinal);
         Assert.Contains("$top=999", firstAssignments, StringComparison.Ordinal);
         Assert.Equal($"{assignmentsUrl}?$skiptoken=page2", _http.Requests[1]);
 
@@ -73,8 +76,8 @@ public class GraphEntraDirectoryClientTests
                 """{"value":[]}""");
         var client = CreateClient(servicePrincipalObjectId: null);
 
-        _ = await client.ListAssignedUsersAsync(CancellationToken.None).ToListAsync();
-        _ = await client.ListAssignedUsersAsync(CancellationToken.None).ToListAsync();
+        _ = await client.ListAssignedUsersAsync(CancellationToken.None);
+        _ = await client.ListAssignedUsersAsync(CancellationToken.None);
 
         var resolutions = _http.Requests.Where(r => r.Contains("servicePrincipals(appId=", StringComparison.Ordinal)).ToList();
         var resolution = Assert.Single(resolutions);
@@ -89,14 +92,14 @@ public class GraphEntraDirectoryClientTests
         var client = CreateClient(servicePrincipalObjectId: null);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            client.ListAssignedUsersAsync(CancellationToken.None).ToListAsync().AsTask());
+            client.ListAssignedUsersAsync(CancellationToken.None));
 
         Assert.Contains(ClientId, exception.Message, StringComparison.Ordinal);
         Assert.Contains("Entra:ServicePrincipalObjectId", exception.Message, StringComparison.Ordinal);
 
         // Not cached: the next call tries again (so a permission granted afterwards takes effect).
         _ = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            client.ListAssignedUsersAsync(CancellationToken.None).ToListAsync().AsTask());
+            client.ListAssignedUsersAsync(CancellationToken.None));
         Assert.Equal(2, _http.Requests.Count);
     }
 

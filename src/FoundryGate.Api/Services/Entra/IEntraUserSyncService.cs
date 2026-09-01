@@ -23,6 +23,12 @@ public interface IEntraUserSyncService
     /// <item><b>In the table, not in Entra</b> → <c>IsActive = false</c>. Rows are never deleted (audit
     /// history). Users already inactive are not counted again.</item>
     /// </list>
+    /// <b>Group-assigned access suspends departure detection.</b> Until #121 expands group-principal
+    /// app-role assignments to their members, a user who is assigned through a group is invisible to
+    /// the sync, so "absent from the user list" cannot mean "departed". When the directory reports one
+    /// or more such assignments the deactivation step is skipped entirely (<c>DeactivatedCount = 0</c>),
+    /// adds and updates still happen, the groups are named in a warning log and in the audit row, and
+    /// <c>UserSyncResult.SkippedGroupAssignmentCount</c> tells the admin why nobody was deactivated.
     /// </summary>
     /// <remarks>
     /// <b>Deprovision scope in this wave</b>: a departed user is only flagged inactive (plus the audit

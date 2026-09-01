@@ -10,7 +10,7 @@ namespace FoundryGate.Api.Services.Entra;
 
 /// <summary>
 /// Default <see cref="IEntraUserSyncService"/>. Loads the whole <c>Users</c> table once (tracked —
-/// it is mutated in place), streams the directory through <see cref="IEntraDirectoryClient"/>, and
+/// it is mutated in place), asks <see cref="IEntraDirectoryClient"/> for the assigned users, and
 /// commits every insert/update/deactivation together with its audit row in a single
 /// <c>SaveChangesAsync</c>. Semantics are documented on the interface.
 /// </summary>
@@ -40,15 +40,17 @@ public sealed class EntraUserSyncService(
         var existingByOid = await dbContext.Users
             .ToDictionaryAsync(u => u.EntraObjectId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
+        var assigned = await directory.ListAssignedUsersAsync(cancellationToken);
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var added = 0;
+        var addedOids = new List<string>();
         var updated = 0;
 
-        await foreach (var entraUser in directory.ListAssignedUsersAsync(cancellationToken))
+        foreach (var entraUser in assigned.Users)
         {
             if (!seen.Add(entraUser.ObjectId))
             {
-                continue; // a principal with several role assignments must count once
+                continue; // a principal listed twice must count once
             }
 
             if (existingByOid.TryGetValue(entraUser.ObjectId, out var user))
@@ -61,7 +63,7 @@ public sealed class EntraUserSyncService(
                 var newUser = new User { EntraObjectId = entraUser.ObjectId };
                 ApplyDirectoryFields(newUser, entraUser, now);
                 dbContext.Users.Add(newUser);
-                added++;
+                addedOids.Add(entraUser.ObjectId);
             }
         }
 
@@ -70,25 +72,43 @@ public sealed class EntraUserSyncService(
             .OrderBy(u => u.UserId)
             .ToList();
 
-        if (seen.Count == 0 && activeAbsent.Count > 0)
+        var skippedGroups = assigned.SkippedGroupAssignments;
+        List<User> deactivated;
+        if (skippedGroups.Count > 0)
+        {
+            // Users assigned through a group are invisible until #121 expands group assignees, so an
+            // active user missing from the user list may simply be covered by one of these groups.
+            // Departure detection is suspended for the run rather than flipping everyone to inactive
+            // (and, once #65 lands, deleting every APIM subscription) on a 200 with a clean audit row.
+            deactivated = [];
+            logger.LogWarning(
+                "Entra user sync skipped departure detection: {GroupCount} app-role assignment(s) are granted to groups, which are not expanded yet (#121). {ActiveAbsentCount} active user(s) absent from the assigned-user list were left active. Groups: {Groups}",
+                skippedGroups.Count,
+                activeAbsent.Count,
+                string.Join("; ", skippedGroups.Select(g => $"{g.DisplayName} ({g.GroupObjectId})")));
+        }
+        else if (seen.Count == 0 && activeAbsent.Count > 0)
         {
             // An empty assigned-user list with a populated table is almost always a wrong service
-            // principal or a missing Graph role, not a mass departure. Deactivating everyone (and,
-            // once #65 lands, deleting every APIM subscription) on that signal is not acceptable.
+            // principal or a missing Graph role, not a mass departure. Deactivating everyone on that
+            // signal is not acceptable.
             throw new ConflictException(
                 $"Entra returned no assigned users while {activeAbsent.Count} active user(s) exist locally; refusing to deactivate " +
                 "every user. Check Entra:ServicePrincipalObjectId / AzureAd:ClientId and that developers are assigned to the application.");
         }
-
-        foreach (var user in activeAbsent)
+        else
         {
-            // Flag only — the full Entra-departure deprovision (APIM subscription deletion, hard stop,
-            // pending-request cancellation; plan #21 trigger B) is issue #65's IUserLifecycleService.
-            user.IsActive = false;
-            user.LastSyncedDate = now;
+            deactivated = activeAbsent;
+            foreach (var user in deactivated)
+            {
+                // Flag only — the full Entra-departure deprovision (APIM subscription deletion, hard
+                // stop, pending-request cancellation; plan #21 trigger B) is issue #65's IUserLifecycleService.
+                user.IsActive = false;
+                user.LastSyncedDate = now;
+            }
         }
 
-        var result = new UserSyncResult(added, updated, activeAbsent.Count);
+        var result = new UserSyncResult(addedOids.Count, updated, deactivated.Count, skippedGroups.Count);
 
         // Audit before save, same context → commits atomically with the rows above (CONVENTIONS.md).
         // No single target: the whole table is the subject. Deactivated ids are known (saved rows);
@@ -102,18 +122,22 @@ public sealed class EntraUserSyncService(
                 result.AddedCount,
                 result.UpdatedCount,
                 result.DeactivatedCount,
-                DeactivatedUserIds = activeAbsent.Select(u => u.UserId).ToArray(),
-                AddedEntraObjectIds = dbContext.Users.Local.Where(u => u.UserId == 0).Select(u => u.EntraObjectId).ToArray(),
+                result.SkippedGroupAssignmentCount,
+                DeactivatedUserIds = deactivated.Select(u => u.UserId).ToArray(),
+                AddedEntraObjectIds = addedOids.ToArray(),
+                DepartureDetectionSuspended = skippedGroups.Count > 0,
+                SkippedGroupAssignments = skippedGroups.Select(g => new { g.GroupObjectId, g.DisplayName }).ToArray(),
             },
             cancellationToken);
 
         _ = await dbContext.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(
-            "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated.",
+            "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated, {SkippedGroups} group assignment(s) skipped.",
             result.AddedCount,
             result.UpdatedCount,
-            result.DeactivatedCount);
+            result.DeactivatedCount,
+            result.SkippedGroupAssignmentCount);
 
         return result;
     }

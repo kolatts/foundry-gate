@@ -19,14 +19,14 @@ public sealed class DisabledEntraDirectoryClient : IEntraDirectoryClient
     /// <summary>The detail every caller sees.</summary>
     public const string Message =
         "Entra directory sync is disabled on this host (Entra:Enabled is false). Set Entra:Enabled to true and grant the " +
-        "API identity the Microsoft Graph application roles User.Read.All, GroupMember.Read.All and Application.Read.All " +
-        "(or set Entra:ServicePrincipalObjectId) before calling the sync endpoints.";
+        "API identity the Microsoft Graph application roles Application.Read.All, User.Read.All and GroupMember.ReadBasic.All " +
+        "before calling the sync endpoints.";
 
     /// <inheritdoc />
     public Task<EntraUser?> GetUserAsync(string objectId, CancellationToken cancellationToken) => throw Disabled();
 
     /// <inheritdoc />
-    public IAsyncEnumerable<EntraUser> ListAssignedUsersAsync(CancellationToken cancellationToken) => throw Disabled();
+    public Task<EntraAssignedUsers> ListAssignedUsersAsync(CancellationToken cancellationToken) => throw Disabled();
 
     /// <inheritdoc />
     public IAsyncEnumerable<string> ListGroupMemberIdsAsync(string groupObjectId, bool transitive, CancellationToken cancellationToken) => throw Disabled();
