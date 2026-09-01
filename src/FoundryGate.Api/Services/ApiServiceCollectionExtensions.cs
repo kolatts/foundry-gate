@@ -2,6 +2,8 @@ using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Foundry;
 using FoundryGate.Api.Services.Identity;
+using FoundryGate.Api.Services.Keys;
+using FoundryGate.Api.Services.Security;
 
 namespace FoundryGate.Api.Services;
 
@@ -24,6 +26,8 @@ public static class ApiServiceCollectionExtensions
         services.AddAuditServices();
         services.AddFoundryServices();
         services.AddEntraServices();
+        services.AddSecurityServices();
+        services.AddKeysServices();
 
         return services;
     }
