@@ -1,12 +1,17 @@
 # Foundry Gate
 
-Foundry Gate is an open-source token budget management system for Azure AI Foundry and
-Azure API Management. It provides per-developer and per-group monthly token quotas, Entra ID
-user sync, quota increase approvals, APIM subscription key lifecycle management, and a
-monthly hard reset. Designed to be forked and configured against any Azure tenant.
+Foundry Gate is an open-source AI budget gateway for Azure AI Foundry and Azure API
+Management: every developer gets their own key and monthly token budget, enforced in
+real time at the gateway (`403` the second a budget is spent, `429` + `Retry-After`
+for per-minute caps), with Entra ID user sync, quota increase approvals, and APIM key
+lifecycle management. Designed to be forked and configured against any Azure tenant.
+
+**Docs: https://kolatts.github.io/foundry-gate/** — plain-English overview, architecture,
+CLI setup (Claude Code + Codex), rate limits, and cost & capacity planning.
 
 See [`foundrygate-spec.md`](foundrygate-spec.md) and [`CONVENTIONS.md`](CONVENTIONS.md) for
-the full design and engineering conventions.
+the full design and engineering conventions; `infra/` holds the deployable gateway
+data plane (Bicep).
 
 ## Tech stack
 
