@@ -104,6 +104,22 @@ When a developer's allocation is created or updated, `IQuotaResolutionService` w
 
 The resolved value is written to `QuotaAllocation` for the current period. Admins can see which level resolved each developer's quota in the user detail view.
 
+**From a number to a tier.** The gateway cannot enforce an arbitrary per-developer number
+(APIM's `token-quota` is a literal baked into each tier product's policy), so resolution
+also maps the number onto a tier: unlimited → the *Unlimited* product; otherwise the
+smallest tier whose cap covers the quota (5M → *Standard*, 5M+1 to 20M → *Power*, with
+the shipped caps). A quota above every finite cap lands on the largest finite tier and
+the allocation is flagged **gateway-capped** — the developer is cut off at that tier's cap,
+not at their nominal number, until an admin raises the caps or grants unlimited. The
+allocation records the level, the tier, and the flag, and moving the developer's
+subscription onto the tier product is what actually changes their budget.
+
+**Resets never zero usage.** The gateway's monthly window resets itself at the UTC month
+boundary, so the monthly job and the admin's manual `POST /quota/reset` only (re)resolve
+every active developer's allocation for the current UTC month: new rows start at zero,
+existing rows are re-resolved but keep their reconciled usage, and the hard-stop mirror is
+cleared. Running it twice in a month is safe and audited once per run.
+
 ---
 
 ## APIM enforcement — how limits actually block traffic

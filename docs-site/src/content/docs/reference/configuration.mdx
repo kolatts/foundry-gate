@@ -26,6 +26,27 @@ Blank values (`""`) are deliberate placeholders. The system will not function co
 
 ---
 
+## Gateway quota tiers (`Gateway:Tiers`)
+
+Quota resolution maps every numeric allocation onto an APIM tier **product**, because
+APIM's `token-quota` is a per-product literal. The Api learns the tier caps from the
+`Gateway:Tiers` section of `appsettings.json` (override per index with
+`Gateway__Tiers__{i}__ProductId` / `Gateway__Tiers__{i}__MonthlyTokenQuota`). The shipped
+values mirror `infra/main.bicep`'s `quotaTiers` parameter and a predeployment test
+(`GatewayTierOptionsTests`) fails if the two drift.
+
+| ProductId | MonthlyTokenQuota | Meaning |
+|---|---|---|
+| `standard` | `5000000` | Everyday agent usage; quotas ≤ 5M land here. |
+| `power` | `20000000` | Heavy agentic workloads; quotas 5M+1 … 20M land here. Quotas above 20M land here too, flagged `isGatewayCapped`. |
+| `unlimited` | `0` | No gateway-enforced monthly budget (`0` = unlimited, as in bicep). |
+
+Validated at startup (fail-fast): at least one tier, product ids ⊆ `GatewayTiers.All`, no
+duplicates, exactly one unlimited tier, and at least one finite tier. A fork that changes
+`quotaTiers` at deploy time must change this section to match — until #108 has infra emit it.
+
+---
+
 ## API environment variables / appsettings
 
 These are set as Container App environment variables (sourced from Key Vault references for secrets).

@@ -34,10 +34,36 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/quota/allocations` | Admin | All current-period allocations, paged |
-| `GET` | `/quota/allocations/me` | Any | Own current allocation |
-| `GET` | `/quota/allocations/{userId}` | Admin | Specific user's current allocation |
-| `POST` | `/quota/reset` | Admin | Manually trigger monthly reset (idempotent) |
+| `GET` | `/quota/allocations` | Admin | All current-period allocations, paged (`?page=&pageSize=`), ordered by user display name; includes `userDisplayName`/`userEmail` |
+| `GET` | `/quota/allocations/me` | Any | Own current allocation. Resolved and created on the first call of the month (`tokensUsed = 0`, no `resetDate`). `403` until `GET /users/me` has provisioned the caller. |
+| `GET` | `/quota/allocations/{userId}` | Admin | Specific user's current allocation. Read-only: `404` if the user has none for this period yet. |
+| `POST` | `/quota/reset` | Admin | Manually trigger monthly reset (idempotent) — see below |
+
+"Current period" is always the UTC calendar month, matching the gateway's `token-quota` window.
+
+`QuotaAllocationResponse` carries, besides the numeric fields (`allocatedTokens` — null when
+unlimited — `tokensUsed`, `percentUsed`, `isHardStopped`):
+
+- `resolvedLevelType` — which level of the five-level precedence chain produced the quota:
+  `0` UserUnlimited, `1` UserOverride, `2` GroupUnlimited, `3` GroupMax, `4` SystemDefault.
+  User-level settings (0, 1) always beat group-level ones (2, 3).
+- `tierProductId` — the APIM tier product (`standard` / `power` / `unlimited`) the numeric
+  quota mapped to: unlimited → `unlimited`; otherwise the smallest tier whose configured cap
+  (`Gateway:Tiers`, see [Configuration](/foundry-gate/reference/configuration/)) is ≥ the quota.
+  **This is what the gateway enforces**, not `allocatedTokens`.
+- `isGatewayCapped` — `true` when the quota exceeds every finite tier cap. The developer is
+  placed on the largest finite tier and the gateway returns `403` at *that tier's* cap, below
+  their nominal quota. Raise the tier caps in infra or grant unlimited to clear it.
+
+`POST /quota/reset` re-resolves every **active** user's allocation for the current UTC month
+in one transaction: rows that do not exist are created with `tokensUsed = 0`; rows that do
+exist are re-resolved (`allocatedTokens`, level, tier, capped flag) but **keep their reconciled
+`tokensUsed`** — the gateway's monthly window resets itself, so zeroing the mirror mid-month
+would only make dashboards lie. Every touched row gets `isHardStopped = false` and
+`resetDate = now`. Exactly one audit row (`quota.reset`, attributed to the calling admin, details
+`{ usersResetCount, periodYear, periodMonth, createdCount, tierSyncCount }`) per run. Returns
+`{ usersResetCount, periodYear, periodMonth, resetDate }`. Running it twice in a month produces
+the same row count.
 
 ## Quota Increase Requests
 

@@ -26,10 +26,37 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/Services/IQuotaAllocationService.cs`
 - `src/FoundryGate.Api/Services/QuotaAllocationService.cs`
 
+## Direction update (implemented in the #32/#33 PR)
+
+The APIM-side story above is superseded by the #7 direction-update comment and plans/24: enforcement
+is APIM's `llm-token-limit` on **tier products**, `token-quota` accepts literals only, so there is no
+`cache-store-value` push and no suspension on exhaustion. What landed instead:
+
+- `Services/Quota/QuotaResolutionService` walks the five levels and upserts `QuotaAllocation`, now
+  recording `ResolvedLevelType`, `TierProductId` and `IsGatewayCapped`. The numeric quota is mapped to
+  a tier by `GatewayTierMapper` from `Gateway:Tiers` (`Configuration/GatewayTierOptions.cs`, defaults
+  in `appsettings.json` mirroring `infra/main.bicep`, parity-tested): unlimited → `unlimited`;
+  otherwise the smallest tier whose cap ≥ quota; above every finite cap → largest finite tier,
+  flagged capped (the gateway 403s at the tier cap, not the numeric quota).
+- `IGatewayTierSync` is the seam to move the subscription between tier products; the real
+  `ApimGatewayTierSync` is #118 (a `NullGatewayTierSync` is registered until then).
+- Nothing in resolution saves; `QuotaAllocationService` (the `/quota` orchestrator) commits mutation +
+  audit atomically. `POST /quota/reset` re-resolves active users for the current UTC month, preserves
+  `TokensUsed` on existing rows (the gateway window resets itself — #10 direction update), clears
+  `IsHardStopped`, stamps `ResetDate`, one `quota.reset` audit row per run.
+- `BillingPeriod` lives in `FoundryGate.Domain.Quota` so the Functions host (#38) can share it; how
+  Functions reaches the resolution service at all is #119.
+
 ## Verification
-- [ ] `dotnet build` passes
-- [ ] A user with a group policy gets the group limit, not the system default
-- [ ] A user with a direct unlimited flag returns `AllocatedTokens = null`
-- [ ] When `TokensUsed >= AllocatedTokens`, the APIM subscription is suspended (verified in Azure portal)
-- [ ] Monthly reset re-enables suspended subscriptions and zeros `TokensUsed`
-- [ ] Manual reset (`POST /quota/reset`) is idempotent — running twice produces no duplicate rows
+- [x] `dotnet build FoundryGate.sln -c Release` passes with zero warnings; `dotnet format --verify-no-changes` clean
+- [x] A user with a group policy gets the group limit, not the system default — `QuotaResolutionServiceTests.Level4_*` / `Level3_*`
+- [x] A user with a direct unlimited flag returns `AllocatedTokens = null` — `Level1_*`; and a user override beats an unlimited group — `Level2_*` (pinned)
+- [x] Superseded: "When `TokensUsed >= AllocatedTokens`, the APIM subscription is suspended" — exhaustion is a real-time gateway 403 on the tier product (#7 direction update); suspension is offboarding-only. Replaced by: numeric quota → tier product mapping incl. boundaries and the gateway-capped flag — `GatewayTierMapperTests`, `QuotaResolutionServiceTests.Resolved_quota_is_mapped_*`
+- [x] Superseded: "Monthly reset re-enables suspended subscriptions and zeros `TokensUsed`" — the gateway window resets itself and `TokensUsed` is a reconciliation mirror that the reset preserves (#10 direction update) — `QuotaAllocationServiceTests.ResetAsync_*`. Re-enabling deactivation suspensions belongs to the lifecycle wave (#65/#66)
+- [x] Manual reset (`POST /quota/reset`) is idempotent — running twice produces no duplicate rows, preserves `TokensUsed`, audits once per run — `QuotaAllocationServiceTests.ResetAsync_is_idempotent_*`, `QuotaEndpointTests.Admin_reset_is_idempotent_*`
+- [x] `IGatewayTierSync` invoked only for users with an APIM subscription whose tier changed (or is unknown) — `QuotaResolutionServiceTests.Tier_sync_*`
+- [x] Endpoint auth contract (401 anonymous / 403 non-admin / 403 unprovisioned on `/me` / 200 admin), paging, `/me` auto-create, admin 404s — `QuotaEndpointTests`
+- [x] `SystemConfiguration[DefaultMonthlyTokenQuota]` missing or non-numeric fails with a clear configuration error, never a silent 0 — `QuotaResolutionServiceTests.System_default_*`
+- [x] Schema parity: `QuotaAllocations.sql` matches the entity (new columns + `(PeriodYear, PeriodMonth)` index) — `SchemaParityTests`
+- [ ] Deferred (#118): moving a subscription between tier products changes the enforced budget at the live gateway
+- [ ] Deferred (#119): the Functions monthly reset reaches the same resolution logic (HTTP to `POST /quota/reset` vs. move to Data)
