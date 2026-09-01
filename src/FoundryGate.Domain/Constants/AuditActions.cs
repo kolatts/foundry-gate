@@ -71,6 +71,9 @@ public static class AuditActions
     /// <summary>A developer revealing their own full key (spec &#167;11: "reveal action fetches directly, not stored in browser").</summary>
     public const string KeyRevealed = "key.revealed";
 
+    /// <summary>The APIM subscription behind a key was re-scoped to another quota-tier product (#82: a tier change moves the subscription between tier products).</summary>
+    public const string KeyTierChanged = "key.tier-changed";
+
     // -- Usage sync (spec 5.4, issue #39) --
 
     /// <summary>The Log Analytics → <c>QuotaAllocation.TokensUsed</c> reconciliation job (reconciliation, not enforcement).</summary>

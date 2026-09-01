@@ -1,3 +1,4 @@
+using FoundryGate.Api.Services.Keys;
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Interceptors;
@@ -5,6 +6,7 @@ using FoundryGate.Data.Seeding;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -48,6 +50,12 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
 
     /// <summary>The host's <see cref="System.TimeProvider"/>: <c>2026-09-01T12:00:00Z</c> until a test moves it.</summary>
     public MutableTimeProvider TimeProvider { get; } = new(DefaultNow);
+
+    /// <summary>
+    /// The in-memory APIM standing in for the management plane (<see cref="IApimManagementClient"/>):
+    /// seed orphan subscriptions, read back keys, or assert on calls. One per factory, like the database.
+    /// </summary>
+    public FakeApimManagementClient Apim => Services.GetRequiredService<FakeApimManagementClient>();
 
     /// <summary>
     /// A client authenticated as <paramref name="oid"/> (with the <c>FoundryGate.Admin</c> role when
@@ -147,6 +155,9 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 ["AzureAd:TenantId"] = "00000000-0000-0000-0000-000000000000",
                 ["AzureAd:ClientId"] = "00000000-0000-0000-0000-000000000000",
                 ["AzureAd:Audience"] = "api://00000000-0000-0000-0000-000000000000",
+                // Local-only key protector (#95): no Key Vault in tests; Gateway:* stays empty so the
+                // APIM client would be the "unconfigured" one — replaced with the fake below anyway.
+                ["KeyProtection:Provider"] = "DataProtection",
             }));
 
         builder.ConfigureTestServices(services =>
@@ -164,6 +175,15 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
 
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(TimeProvider);
+
+            // APIM management plane → in-memory fake (no Azure); exposed as its concrete type too so
+            // tests can seed/inspect it. Data Protection → ephemeral keys, so the local key protector
+            // never writes a key ring to the machine running the tests.
+            services.RemoveAll<IApimManagementClient>();
+            services.AddSingleton<FakeApimManagementClient>();
+            services.AddSingleton<IApimManagementClient>(serviceProvider => serviceProvider.GetRequiredService<FakeApimManagementClient>());
+            services.RemoveAll<IDataProtectionProvider>();
+            services.AddSingleton<IDataProtectionProvider>(new EphemeralDataProtectionProvider());
 
             // Registered after Program.cs's AddMicrosoftIdentityWebApiAuthentication, so this
             // Configure<AuthenticationOptions> runs last and wins the default-scheme selection. The

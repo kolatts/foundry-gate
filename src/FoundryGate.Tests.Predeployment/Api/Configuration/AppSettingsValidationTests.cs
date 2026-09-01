@@ -44,6 +44,53 @@ public class AppSettingsValidationTests
         Assert.Null(exception);
     }
 
+    [Fact]
+    public void ValidateRecursively_partially_addressed_APIM_throws_naming_the_three_Gateway_members()
+    {
+        var appSettings = ValidAppSettings();
+        appSettings.Gateway.ApimName = "apim-foundrygate-dev";
+
+        var exception = Assert.Throws<ConfigurationValidationException>(appSettings.ValidateRecursively);
+
+        Assert.Contains("SubscriptionId", exception.Message);
+        Assert.Contains("ResourceGroup", exception.Message);
+        Assert.Contains("ApimName", exception.Message);
+    }
+
+    [Fact]
+    public void ValidateRecursively_fully_addressed_APIM_does_not_throw()
+    {
+        var appSettings = ValidAppSettings();
+        appSettings.Gateway.SubscriptionId = "00000000-0000-0000-0000-000000000000";
+        appSettings.Gateway.ResourceGroup = "rg-foundrygate-dev";
+        appSettings.Gateway.ApimName = "apim-foundrygate-dev";
+
+        Assert.Null(Record.Exception(appSettings.ValidateRecursively));
+        Assert.True(appSettings.Gateway.IsApimConfigured);
+    }
+
+    [Theory]
+    [InlineData("http://kv.vault.azure.net/keys/fg-apim-key-encryption")]
+    [InlineData("kv.vault.azure.net/keys/fg-apim-key-encryption")]
+    public void ValidateRecursively_non_https_key_encryption_uri_throws(string uri)
+    {
+        var appSettings = ValidAppSettings();
+        appSettings.Gateway.KeyEncryptionKeyUri = uri;
+
+        var exception = Assert.Throws<ConfigurationValidationException>(appSettings.ValidateRecursively);
+
+        Assert.Contains("KeyEncryptionKeyUri", exception.Message);
+    }
+
+    [Fact]
+    public void ValidateRecursively_empty_Gateway_section_is_valid_local_dev_has_no_APIM()
+    {
+        var appSettings = ValidAppSettings();
+
+        Assert.Null(Record.Exception(appSettings.ValidateRecursively));
+        Assert.False(appSettings.Gateway.IsApimConfigured);
+    }
+
     private static AppSettings ValidAppSettings() =>
         new()
         {

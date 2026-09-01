@@ -200,9 +200,13 @@ people-lifecycle events change its state — there is no suspended state:
 <KeyLifecycle />
 
 **Rotate** — `POST /keys/me/rotate` (or an admin's `POST /keys/{userId}/rotate`) calls
-`regeneratePrimaryKey` on the subscription. The primary key the developer holds is
-replaced instantly, the new one is shown once, and the subscription stays `active` with
-its counters intact.
+`regeneratePrimaryKey` *and* `regenerateSecondaryKey` on the subscription: the primary key
+the developer holds is replaced instantly and shown once, and the secondary — which
+FoundryGate never issues or stores — is replaced too, so no credential outlives a rotation.
+The subscription stays `active` with its counters intact. Stored keys are wrapped with a
+Key Vault RSA key before they reach SQL; `GET /keys/me` shows only the last four characters,
+and `POST /keys/me/reveal` decrypts on demand (audited) rather than caching anything in the
+browser.
 
 **Change quota** — the control plane re-scopes the subscription to the new tier's
 product. The new product's `llm-token-limit` applies from the next request, and because

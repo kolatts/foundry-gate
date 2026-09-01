@@ -53,11 +53,14 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/keys/me` | Any | Own key info (masked, last 4 visible) |
-| `POST` | `/keys/me/rotate` | Any | Rotate own key — returns new key value once |
-| `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key |
-| `POST` | `/keys/{userId}/provision` | Admin | Provision a new key for a user with no active key |
-| `DELETE` | `/keys/{userId}` | Admin | Revoke key (user stays active) |
+| `GET` | `/keys/me` | Any | Own key info (masked, last 4 visible; `isProvisioned: false` when none). Served from a stored hint — no decryption |
+| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. `404` when no key |
+| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. `404` no key; `409` if the APIM subscription vanished |
+| `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key (same semantics) |
+| `POST` | `/keys/{userId}/provision` | Admin | Provision a key for a user with none, under `?tier=standard\|power\|unlimited` (default `standard`). Returns plaintext once. `409` key exists or user deactivated; `400` unknown tier; reuses an orphaned APIM subscription with fresh keys |
+| `DELETE` | `/keys/{userId}` | Admin | Revoke key only: APIM subscription deleted, stored key cleared, `key.revoked` audited. **User stays active** and can be re-provisioned; `204` even when no key existed. Deactivation is `POST /users/{id}/deactivate` |
+
+Callers of every `/keys/me` route must already have a FoundryGate user row (`GET /users/me` provisions one) — otherwise `403`. The plaintext key is stored encrypted (Key Vault RSA key wrapping; see [Configuration](/reference/configuration/)) and appears in exactly one response per mint or reveal.
 
 ## Foundry
 
