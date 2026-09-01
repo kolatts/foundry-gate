@@ -7,6 +7,8 @@ sidebar:
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
+*This is the most detailed rung of the "how it works" ladder — start with [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/) for the plain-English version or the [system overview](/foundry-gate/architecture/overview/) for the middle level.*
+
 FoundryGate's premise: a **drop-in Azure solution** that provisions Microsoft Foundry
 models for agentic coding harnesses (Claude Code, Codex CLI) and gives platform teams
 cost management, per-developer quotas, rate limiting, and metrics in one deployment.
@@ -104,8 +106,10 @@ pool routing with circuit breakers, retry-across-deployments on 429.
   </Card>
   <Card title="Two front doors, one gateway" icon="random">
     <code>/anthropic/*</code> passes Anthropic Messages traffic to Foundry for Claude
-    Code; <code>/openai/v1</code> serves Codex CLI's Responses API. The subscription key
-    header is <code>api-key</code>, so both CLIs work with native env vars.
+    Code; <code>/openai/v1</code> serves Codex CLI's Responses API. Each front door
+    accepts the key in the header its CLI actually sends (wire-verified):
+    <code>x-api-key</code> for Claude Code, <code>api-key</code> for Codex — which
+    additionally needs <code>env_http_headers</code> in its config.
   </Card>
   <Card title="Pools instead of PTU" icon="setting">
     Claude has no provisioned throughput and no spillover. Backend pools with priority

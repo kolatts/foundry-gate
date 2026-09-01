@@ -1,6 +1,10 @@
 ---
 // Foundry Gate — marketing landing page
 // Replaces the Starlight splash; Starlight still handles all /docs/* routes
+// CLAUDE.md invariant #1: this page is a dead-simple explainer for people who
+// don't understand technology. Plain language only in the hero and story
+// sections. Demo data below is hardcoded fake data; the "This is real"
+// section shows genuine responses captured from a live gateway (2026-09-01).
 const rawBase = import.meta.env.BASE_URL;
 const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 ---
@@ -10,10 +14,10 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Foundry Gate — Token budget management for Azure AI Foundry</title>
-  <meta name="description" content="Foundry Gate sits between your teams and Microsoft Foundry — enforcing budgets, surfacing spend, and routing models without changing a line of application code." />
+  <title>Foundry Gate — Give every developer their own AI budget</title>
+  <meta name="description" content="FoundryGate hands out the keys, watches the meter, and stops overspending — automatically. AI budgets for every developer, running in your own Azure account." />
   <meta property="og:title" content="Foundry Gate" />
-  <meta property="og:description" content="Token budgets, APIM keys, and quota governance for Azure AI Foundry." />
+  <meta property="og:description" content="Give every developer their own AI budget. FoundryGate hands out the keys, watches the meter, and stops overspending — automatically." />
   <meta property="og:image" content={`${base}og-logo.png`} />
   <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
   <style>
@@ -151,7 +155,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     .hero-left {
       display: flex;
       flex-direction: column;
-      gap: 2rem;
+      gap: 1.75rem;
     }
 
     .hero-eyebrow {
@@ -171,7 +175,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     }
 
     h1 {
-      font-size: clamp(2.8rem, 4.5vw, 4.2rem);
+      font-size: clamp(2.6rem, 4.2vw, 4rem);
       font-weight: 700;
       line-height: 1.08;
       letter-spacing: -0.03em;
@@ -183,10 +187,10 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     }
 
     .hero-sub {
-      font-size: 1rem;
+      font-size: 1.05rem;
       line-height: 1.65;
       color: var(--fg-text-secondary);
-      max-width: 38ch;
+      max-width: 44ch;
     }
 
     .cta-group {
@@ -232,14 +236,14 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       color: var(--fg-text-primary);
     }
 
-    /* ── Flow steps ─────────────────────────────────────── */
+    /* ── Flow steps (the four-step story) ───────────────── */
     .hero-flow {
-      display: flex;
-      align-items: flex-start;
-      gap: 0.5rem;
-      flex-wrap: wrap;
-      row-gap: 1rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.6rem;
     }
+
+    .flow-arrow { display: none; }
 
     .flow-step {
       display: flex;
@@ -251,7 +255,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       padding: 0.6rem 0.75rem;
       transition: border-color 0.2s;
       flex: 1;
-      min-width: 120px;
+      min-width: 140px;
     }
 
     .flow-step:hover {
@@ -260,28 +264,30 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 
     .flow-icon {
       color: var(--fg-azure-neon);
-      font-size: 14px;
+      font-size: 13px;
+      font-weight: 700;
       line-height: 1.4;
       flex-shrink: 0;
+      font-family: var(--fg-font-mono);
     }
 
     .flow-label {
-      font-size: 11px;
+      font-size: 11.5px;
       font-weight: 600;
       color: var(--fg-text-primary);
-      margin-bottom: 0.15rem;
+      margin-bottom: 0.2rem;
     }
 
     .flow-desc {
-      font-size: 10px;
+      font-size: 10.5px;
       color: var(--fg-text-muted);
-      line-height: 1.4;
+      line-height: 1.45;
     }
 
     .flow-arrow {
       color: var(--fg-border-strong);
       font-size: 16px;
-      padding-top: 0.65rem;
+      align-self: center;
       flex-shrink: 0;
     }
 
@@ -323,6 +329,332 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
         0 24px 64px color-mix(in srgb, #000 60%, transparent);
     }
 
+    /* ── Sections below the hero ────────────────────────── */
+    .section {
+      position: relative;
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 5rem 2.5rem 2rem;
+    }
+
+    .section-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--fg-azure-neon);
+      margin-bottom: 0.75rem;
+    }
+
+    .section h2 {
+      font-size: clamp(1.7rem, 2.6vw, 2.3rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 0.75rem;
+    }
+
+    .section-sub {
+      font-size: 0.98rem;
+      line-height: 1.65;
+      color: var(--fg-text-secondary);
+      max-width: 62ch;
+      margin-bottom: 2.25rem;
+    }
+
+    /* ── Demo dashboard (fake data) ─────────────────────── */
+    .demo-panel {
+      background: color-mix(in srgb, var(--fg-bg-surface) 88%, transparent);
+      border: 1px solid var(--fg-border-subtle);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 18px 48px color-mix(in srgb, #000 45%, transparent);
+    }
+
+    .demo-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid var(--fg-border-subtle);
+      background: var(--fg-bg-raised);
+    }
+
+    .demo-panel-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--fg-text-primary);
+    }
+
+    .demo-panel-badge {
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--fg-text-muted);
+      border: 1px dashed var(--fg-border-strong);
+      border-radius: 100px;
+      padding: 0.2rem 0.65rem;
+      white-space: nowrap;
+    }
+
+    .demo-table-scroll { overflow-x: auto; }
+
+    .demo-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 640px;
+    }
+
+    .demo-table th {
+      text-align: left;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--fg-text-muted);
+      padding: 0.7rem 1.25rem;
+      border-bottom: 1px solid var(--fg-border-subtle);
+      white-space: nowrap;
+    }
+
+    .demo-table td {
+      padding: 0.8rem 1.25rem;
+      border-bottom: 1px solid color-mix(in srgb, var(--fg-border-subtle) 55%, transparent);
+      vertical-align: middle;
+    }
+
+    .demo-table tr:last-child td { border-bottom: none; }
+
+    .demo-name {
+      font-weight: 600;
+      color: var(--fg-text-primary);
+      white-space: nowrap;
+    }
+
+    .demo-email {
+      display: block;
+      font-size: 11px;
+      color: var(--fg-text-muted);
+      font-family: var(--fg-font-mono);
+      margin-top: 0.15rem;
+    }
+
+    .demo-budget {
+      font-family: var(--fg-font-mono);
+      font-size: 12px;
+      color: var(--fg-text-secondary);
+      white-space: nowrap;
+    }
+
+    .meter {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      min-width: 170px;
+    }
+
+    .meter-track {
+      flex: 1;
+      height: 6px;
+      border-radius: 100px;
+      background: var(--fg-bg-overlay);
+      overflow: hidden;
+    }
+
+    .meter-fill {
+      display: block;
+      height: 100%;
+      border-radius: 100px;
+      background: var(--fg-azure);
+    }
+
+    .meter-fill--warn { background: var(--fg-ember-soft); }
+    .meter-fill--hot  { background: var(--fg-ember-hot); }
+    .meter-fill--info { background: var(--fg-info); opacity: 0.55; }
+
+    .meter-pct {
+      font-family: var(--fg-font-mono);
+      font-size: 11.5px;
+      color: var(--fg-text-secondary);
+      min-width: 3.2ch;
+      text-align: right;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 100px;
+      padding: 0.22rem 0.7rem;
+      white-space: nowrap;
+    }
+
+    .badge::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .badge--ok {
+      color: var(--fg-success);
+      background: color-mix(in srgb, var(--fg-success) 12%, transparent);
+    }
+
+    .badge--warn {
+      color: var(--fg-ember-soft);
+      background: color-mix(in srgb, var(--fg-ember-soft) 12%, transparent);
+    }
+
+    .badge--blocked {
+      color: var(--fg-ember-hot);
+      background: color-mix(in srgb, var(--fg-ember-hot) 14%, transparent);
+    }
+
+    .badge--info {
+      color: var(--fg-info);
+      background: color-mix(in srgb, var(--fg-info) 12%, transparent);
+    }
+
+    .badge--pending {
+      color: var(--fg-azure-neon);
+      background: color-mix(in srgb, var(--fg-azure-neon) 12%, transparent);
+    }
+
+    /* ── Evidence (real responses) ──────────────────────── */
+    .proof-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+    }
+
+    .proof-card {
+      display: flex;
+      flex-direction: column;
+      background: color-mix(in srgb, var(--fg-bg-surface) 90%, transparent);
+      border: 1px solid var(--fg-border-subtle);
+      border-radius: 12px;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+
+    .proof-card:hover { border-color: var(--fg-border-strong); }
+
+    .proof-head {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid var(--fg-border-subtle);
+      background: var(--fg-bg-raised);
+    }
+
+    .proof-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--fg-border-strong);
+    }
+
+    .proof-dot--green { background: var(--fg-success); }
+    .proof-dot--amber { background: var(--fg-ember-soft); }
+    .proof-dot--red   { background: var(--fg-ember-hot); }
+    .proof-dot--blue  { background: var(--fg-azure-neon); }
+
+    .proof-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--fg-text-secondary);
+    }
+
+    .proof-body {
+      flex: 1;
+      padding: 1rem 1.15rem;
+      font-family: var(--fg-font-mono);
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--fg-text-secondary);
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    .proof-body .st-ok   { color: var(--fg-success); font-weight: 700; }
+    .proof-body .st-warn { color: var(--fg-ember-soft); font-weight: 700; }
+    .proof-body .st-err  { color: var(--fg-ember-hot); font-weight: 700; }
+    .proof-body .hdr     { color: var(--fg-azure-neon); }
+    .proof-body .dim     { color: var(--fg-text-muted); }
+    .proof-body .out     { color: var(--fg-text-primary); }
+
+    .proof-caption {
+      padding: 0.75rem 1.15rem 0.95rem;
+      border-top: 1px solid color-mix(in srgb, var(--fg-border-subtle) 60%, transparent);
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--fg-text-secondary);
+    }
+
+    .proof-note {
+      margin-top: 1.5rem;
+      font-size: 12px;
+      color: var(--fg-text-muted);
+      font-style: italic;
+    }
+
+    /* ── Bottom CTA & footer ────────────────────────────── */
+    .cta-final {
+      text-align: center;
+      padding: 5rem 2.5rem 6rem;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .cta-final h2 {
+      font-size: clamp(1.6rem, 2.4vw, 2.1rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 0.75rem;
+    }
+
+    .cta-final p {
+      color: var(--fg-text-secondary);
+      font-size: 0.98rem;
+      line-height: 1.65;
+      margin-bottom: 1.75rem;
+    }
+
+    .cta-final .cta-group { justify-content: center; }
+
+    footer {
+      position: relative;
+      z-index: 2;
+      border-top: 1px solid var(--fg-border-subtle);
+      padding: 1.5rem 2.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      font-size: 12.5px;
+      color: var(--fg-text-muted);
+    }
+
+    footer .footer-links {
+      display: flex;
+      gap: 1.25rem;
+    }
+
+    footer a { color: var(--fg-text-secondary); transition: color 0.18s; }
+    footer a:hover { color: var(--fg-text-primary); }
+
     /* ── Ambient aurora layer ────────────────────────────── */
     .aurora {
       position: fixed;
@@ -336,8 +668,12 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     .aurora-nebula {
       position: absolute;
       inset: 0;
-      background: url('/foundry-gate/nebula.png') center / cover no-repeat;
-      opacity: 0.28;
+      background-position: center;
+      background-size: cover;
+      background-repeat: no-repeat;
+      /* background-image set inline on the element via ${base} so the page stays
+         relocatable — the image is the one asset CSS can't reach base for. */
+      opacity: 0.32;
       mix-blend-mode: screen;
     }
 
@@ -424,9 +760,6 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       to   { opacity: 1;    }
     }
 
-    /* Remove box-shadow animation — handled by ::after overlay instead */
-    @keyframes img-glow { from {} to {} }
-
     /* ── Animations ─────────────────────────────────────── */
     @keyframes rise {
       from { opacity: 0; transform: translateY(12px); }
@@ -435,6 +768,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 
     .hero-eyebrow { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.05s both; }
     h1            { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.12s both; }
+    .hero-sub     { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.16s both; }
     .hero-flow    { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.20s both; }
     .cta-group    { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.30s both; }
     .hero-icons   { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.38s both; }
@@ -443,13 +777,26 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; }
     }
+
+    /* ── Responsive ─────────────────────────────────────── */
+    @media (max-width: 920px) {
+      .hero {
+        grid-template-columns: 1fr;
+        min-height: 0;
+        padding: 3rem 1.5rem 2rem;
+      }
+      .section { padding: 3.5rem 1.5rem 1.5rem; }
+      .proof-grid { grid-template-columns: 1fr; }
+      nav { padding: 0 1.25rem; }
+      footer { padding: 1.5rem 1.25rem; }
+    }
   </style>
 </head>
 <body>
 
 <!-- ─── Ambient background ───────────────────────────────── -->
 <div class="aurora" aria-hidden="true">
-  <div class="aurora-nebula"></div>
+  <div class="aurora-nebula" style={`background-image:url('${base}nebula.webp')`}></div>
   <div class="aurora-orb aurora-1"></div>
   <div class="aurora-orb aurora-2"></div>
   <div class="aurora-orb aurora-3"></div>
@@ -475,43 +822,50 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 
     <!-- Left: copy -->
     <div class="hero-left">
-      <span class="hero-eyebrow">⬡ Open source · Azure AI Foundry · .NET 10</span>
+      <span class="hero-eyebrow">⬡ Open source · Runs in your own Azure account</span>
 
       <h1>
-        Tokens and budgets,<br />
-        <span class="accent">finally</span> in sync.
+        Every developer gets<br />
+        an AI budget.<br />
+        <span class="accent">Automatically.</span>
       </h1>
+
+      <p class="hero-sub">
+        Your company pays for AI, but nobody knows who's using it — or how to stop
+        one person from spending it all. FoundryGate hands out the keys, watches
+        the meter, and stops overspending the moment it starts.
+      </p>
 
       <div class="hero-flow">
         <div class="flow-step">
-          <span class="flow-icon">⬡</span>
+          <span class="flow-icon">1</span>
           <div>
-            <div class="flow-label">Entra</div>
-            <div class="flow-desc">Developers sync automatically from your directory</div>
+            <div class="flow-label">Someone joins</div>
+            <div class="flow-desc">A developer joins your company — they get their own AI key, automatically. No forms, no tickets.</div>
           </div>
         </div>
         <div class="flow-arrow">→</div>
         <div class="flow-step">
-          <span class="flow-icon">◈</span>
+          <span class="flow-icon">2</span>
           <div>
-            <div class="flow-label">Budget assigned</div>
-            <div class="flow-desc">Monthly token quota, individual APIM key</div>
+            <div class="flow-label">Every request is counted</div>
+            <div class="flow-desc">Each AI request they make is measured against their personal monthly budget.</div>
           </div>
         </div>
         <div class="flow-arrow">→</div>
         <div class="flow-step">
-          <span class="flow-icon">⬛</span>
+          <span class="flow-icon">3</span>
           <div>
-            <div class="flow-label">APIM enforces</div>
-            <div class="flow-desc">Access suspended the moment the cap is hit</div>
+            <div class="flow-label">Overspending stops itself</div>
+            <div class="flow-desc">When the budget runs out, requests stop — instantly. Not at the end of the month. Right then.</div>
           </div>
         </div>
         <div class="flow-arrow">→</div>
         <div class="flow-step">
-          <span class="flow-icon">↑</span>
+          <span class="flow-icon">4</span>
           <div>
-            <div class="flow-label">Adjust</div>
-            <div class="flow-desc">Approve a request or raise the limit in the dashboard</div>
+            <div class="flow-label">Need more?</div>
+            <div class="flow-desc">One click for the developer to ask. One click for you to approve.</div>
           </div>
         </div>
       </div>
@@ -520,8 +874,8 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
         <a href={`${base}getting-started/fork-guide/`} class="btn-primary">
           → Get started
         </a>
-        <a href="https://github.com/kolatts/foundry-gate" class="btn-secondary" target="_blank" rel="noopener">
-          &lt;/&gt; View on GitHub
+        <a href={`${base}getting-started/why-foundrygate/`} class="btn-secondary">
+          How it works
         </a>
       </div>
 
@@ -540,7 +894,234 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     </div>
 
   </section>
+
+  <!-- ─── See it working (demonstrative fake data) ───────── -->
+  <section class="section" id="see-it-working">
+    <span class="section-eyebrow">◈ See it working</span>
+    <h2>One page tells you everything.</h2>
+    <p class="section-sub">
+      This is the kind of view an admin gets: every developer, how much of their
+      monthly AI budget they've used, and who's asking for more. The names below
+      are made up — the dashboard is real.
+    </p>
+
+    <div class="demo-panel">
+      <div class="demo-panel-head">
+        <span class="demo-panel-title">Developers · September</span>
+        <span class="demo-panel-badge">Demo data</span>
+      </div>
+      <div class="demo-table-scroll">
+      <table class="demo-table">
+        <thead>
+          <tr>
+            <th>Developer</th>
+            <th>Monthly budget</th>
+            <th>Used</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="demo-name">Priya Raghavan</span><span class="demo-email">priya.raghavan@contoso.com</span></td>
+            <td class="demo-budget">2,000,000 tokens</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill" style="width:62%"></span></span>
+                <span class="meter-pct">62%</span>
+              </div>
+            </td>
+            <td><span class="badge badge--ok">Active</span></td>
+          </tr>
+          <tr>
+            <td><span class="demo-name">Marcus Webb</span><span class="demo-email">marcus.webb@contoso.com</span></td>
+            <td class="demo-budget">1,000,000 tokens</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill" style="width:38%"></span></span>
+                <span class="meter-pct">38%</span>
+              </div>
+            </td>
+            <td><span class="badge badge--ok">Active</span></td>
+          </tr>
+          <tr>
+            <td><span class="demo-name">Sofia Delgado-Ruiz</span><span class="demo-email">sofia.delgado@contoso.com</span></td>
+            <td class="demo-budget">2,000,000 tokens</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill meter-fill--warn" style="width:91%"></span></span>
+                <span class="meter-pct">91%</span>
+              </div>
+            </td>
+            <td><span class="badge badge--warn">Near limit</span></td>
+          </tr>
+          <tr>
+            <td><span class="demo-name">Tomasz Kowalski</span><span class="demo-email">tomasz.kowalski@contoso.com</span></td>
+            <td class="demo-budget">500,000 tokens</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill meter-fill--hot" style="width:100%"></span></span>
+                <span class="meter-pct">100%</span>
+              </div>
+            </td>
+            <td><span class="badge badge--blocked">Blocked until Oct 1</span></td>
+          </tr>
+          <tr>
+            <td><span class="demo-name">Jenna Okafor</span><span class="demo-email">jenna.okafor@contoso.com</span></td>
+            <td class="demo-budget">Unlimited</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill meter-fill--info" style="width:100%"></span></span>
+                <span class="meter-pct">—</span>
+              </div>
+            </td>
+            <td><span class="badge badge--info">Unlimited</span></td>
+          </tr>
+          <tr>
+            <td><span class="demo-name">Diego Fuentes</span><span class="demo-email">diego.fuentes@contoso.com</span></td>
+            <td class="demo-budget">1,000,000 tokens</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill" style="width:64%"></span></span>
+                <span class="meter-pct">64%</span>
+              </div>
+            </td>
+            <td><span class="badge badge--pending">Asked for more</span></td>
+          </tr>
+          <tr>
+            <td><span class="demo-name">Erik Lindqvist</span><span class="demo-email">erik.lindqvist@contoso.com</span></td>
+            <td class="demo-budget">1,000,000 tokens</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill" style="width:12%"></span></span>
+                <span class="meter-pct">12%</span>
+              </div>
+            </td>
+            <td><span class="badge badge--ok">Active</span></td>
+          </tr>
+          <tr>
+            <td><span class="demo-name">Aisha Rahman</span><span class="demo-email">aisha.rahman@contoso.com</span></td>
+            <td class="demo-budget">2,000,000 tokens</td>
+            <td>
+              <div class="meter">
+                <span class="meter-track"><span class="meter-fill" style="width:77%"></span></span>
+                <span class="meter-pct">77%</span>
+              </div>
+            </td>
+            <td><span class="badge badge--ok">Active</span></td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── This is real (live gateway evidence) ───────────── -->
+  <section class="section" id="this-is-real">
+    <span class="section-eyebrow">⬛ This is real</span>
+    <h2>Not a mockup. A running gateway.</h2>
+    <p class="section-sub">
+      These are real responses from a live FoundryGate gateway, captured during
+      testing on September 1, 2026. This is exactly what a developer's tools see.
+    </p>
+
+    <div class="proof-grid">
+
+      <div class="proof-card">
+        <div class="proof-head">
+          <span class="proof-dot proof-dot--green"></span>
+          <span class="proof-title">A normal request</span>
+        </div>
+        <pre class="proof-body"><span class="st-ok">HTTP/1.1 200 OK</span>
+<span class="hdr">x-fg-remaining-quota</span>: 97668
+<span class="hdr">x-fg-remaining-tpm</span>: 19984
+<span class="hdr">x-fg-tokens-consumed</span>: 16</pre>
+        <div class="proof-caption">
+          Every answer comes back with a live meter reading: this request used
+          16 tokens, and 97,668 remain in this developer's monthly budget.
+        </div>
+      </div>
+
+      <div class="proof-card">
+        <div class="proof-head">
+          <span class="proof-dot proof-dot--amber"></span>
+          <span class="proof-title">Going too fast</span>
+        </div>
+        <pre class="proof-body"><span class="st-warn">HTTP/1.1 429 Too Many Requests</span>
+<span class="hdr">Retry-After</span>: 50</pre>
+        <div class="proof-caption">
+          Burning through tokens too quickly? The gateway says "wait 50 seconds."
+          Coding tools understand this and slow down on their own.
+        </div>
+      </div>
+
+      <div class="proof-card">
+        <div class="proof-head">
+          <span class="proof-dot proof-dot--red"></span>
+          <span class="proof-title">Monthly budget spent</span>
+        </div>
+        <pre class="proof-body"><span class="st-err">HTTP/1.1 403 Forbidden</span>
+
+&#123;
+  <span class="hdr">"statusCode"</span>: 403,
+  <span class="hdr">"message"</span>: "Token quota is exceeded.
+    Try again in 29 days, 9 hours,
+    50 minutes, and 5 seconds."
+&#125;</pre>
+        <div class="proof-caption">
+          What a developer sees when their monthly budget runs out — the very
+          same second it runs out. It even says exactly when it comes back.
+        </div>
+      </div>
+
+      <div class="proof-card">
+        <div class="proof-head">
+          <span class="proof-dot proof-dot--blue"></span>
+          <span class="proof-title">A real AI assistant, through the gateway</span>
+        </div>
+        <pre class="proof-body"><span class="dim">$</span> codex exec "Reply with exactly: pong"
+<span class="out">pong</span>
+<span class="dim">tokens used: 9,139</span></pre>
+        <div class="proof-caption">
+          A real coding assistant (Codex CLI) answering through the gateway —
+          9,139 tokens counted against its owner's budget, like every other request.
+        </div>
+      </div>
+
+    </div>
+
+    <p class="proof-note">
+      Captured from a live FoundryGate gateway on 2026-09-01. Header names and timings are unedited.
+    </p>
+  </section>
+
+  <!-- ─── Final CTA ──────────────────────────────────────── -->
+  <section class="cta-final">
+    <h2>Your Azure. Your models. Your rules.</h2>
+    <p>
+      FoundryGate is free and open source. It runs entirely inside your own
+      Azure account — nothing leaves it, and no third party ever sees your
+      usage or your data.
+    </p>
+    <div class="cta-group">
+      <a href={`${base}getting-started/fork-guide/`} class="btn-primary">
+        → Get started
+      </a>
+      <a href={`${base}getting-started/why-foundrygate/`} class="btn-secondary">
+        Read the docs
+      </a>
+    </div>
+  </section>
 </main>
+
+<!-- ─── Footer ──────────────────────────────────────────── -->
+<footer>
+  <span>Foundry Gate — open source, built for Azure AI Foundry.</span>
+  <div class="footer-links">
+    <a href={`${base}getting-started/why-foundrygate/`}>Docs</a>
+    <a href={`${base}reference/api/`}>API</a>
+    <a href="https://github.com/kolatts/foundry-gate" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</footer>
 
 </body>
 </html>

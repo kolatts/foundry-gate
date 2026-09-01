@@ -7,6 +7,21 @@ sidebar:
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
+## In plain words
+
+Your company runs AI models in Microsoft's cloud, and developers use them through
+tools on their laptops. The problem: out of the box there's no way to give each
+developer their own key, their own monthly budget, or their own usage meter — it's
+one shared pool, and one person can drain it for everyone. FoundryGate fixes that.
+Each developer automatically gets a personal key and a monthly AI budget; every
+request is counted; when the budget runs out, requests stop instantly; and asking
+for more is one click to request, one click to approve.
+
+The rest of this page explains the same idea in more technical terms. For the
+next level of detail, see the [system overview](/foundry-gate/architecture/overview/).
+
+## The gap, technically
+
 Azure AI Foundry is excellent at what it does: hosting model deployments and exposing them through Azure API Management. But when you move from a single team's prototype to an org-wide AI platform, you hit a wall — Foundry was designed for deployment management, not developer access governance.
 
 ## What Foundry gives you out of the box

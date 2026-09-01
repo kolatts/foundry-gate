@@ -1,7 +1,7 @@
 # APIM GenAI gateway — real-time token quotas, 429 smoothing, and backend pools
 
 > GitHub: #81
-> Milestone: v0.2 — Core API (enforcement) + v0.3 — Infrastructure (Bicep)
+> Milestone: v0.5 — GenAI gateway
 > Labels: epic, backend, infra
 
 ## Overview
@@ -74,7 +74,9 @@ tripped, traffic drains to priority 2; 503 only when the whole pool is down.
 
 ### API front doors + harness onboarding (#85)
 
-Two pass-through APIs, subscription key header name set to `api-key`:
+Two pass-through APIs, each accepting the subscription key in the header its CLI
+actually sends (wire-verified 2026-09-01): `x-api-key` for the Anthropic front door
+(Claude Code), `api-key` for the OpenAI front door:
 
 - `/anthropic/*` → `https://{foundry}.services.ai.azure.com/anthropic` (Anthropic
   Messages, for Claude Code: `CLAUDE_CODE_USE_FOUNDRY=1`,
@@ -82,8 +84,10 @@ Two pass-through APIs, subscription key header name set to `api-key`:
   `ANTHROPIC_FOUNDRY_API_KEY={subscription key}`, model env vars pinned to deployment
   names).
 - `/openai/v1` → Azure OpenAI v1 path (for Codex CLI: `model_provider = "azure"`,
-  `base_url = "https://{gateway}/openai/v1"`, `env_key`, `wire_api = "responses"`;
-  API-key auth only — Codex has no Entra support).
+  `base_url = "https://{gateway}/openai/v1"`, `wire_api = "responses"`, and
+  `env_http_headers = { "api-key" = "<ENV>" }` — `env_key` alone sends
+  `Authorization: Bearer` and gets 401; API-key auth only, Codex has no Entra
+  support).
 
 Rewrite `docs-site/.../getting-started/cli-setup.mdx` (current Claude Code instructions
 are wrong) and spec the `/me` "Configure your CLI" panel to emit these snippets.

@@ -32,9 +32,10 @@ The gateway exposes two API paths — Anthropic-format for Claude models, OpenAI
 for GPT/Codex models. Smoke-test whichever you'll use:
 
 ```sh
-# Claude path (Anthropic Messages API)
+# Claude path (Anthropic Messages API) — note: x-api-key, matching what
+# Claude Code itself sends in Foundry mode (verified by wire capture)
 curl https://<gateway-url>/anthropic/v1/messages \
-  -H "api-key: <your-key>" \
+  -H "x-api-key: <your-key>" \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
   -d '{"model":"<claude-deployment-name>","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
@@ -90,8 +91,10 @@ rate — wait and retry.
   [model_providers.azure]
   name = "Azure via FoundryGate"
   base_url = "https://<gateway-url>/openai/v1"
-  env_key = "FOUNDRYGATE_API_KEY"
   wire_api = "responses"
+  # REQUIRED: send the key as the api-key header. env_key alone sends
+  # "Authorization: Bearer", which the gateway rejects with 401 (verified live).
+  env_http_headers = { "api-key" = "FOUNDRYGATE_API_KEY" }
   ```
 
   Then export the key the config references:
@@ -113,7 +116,7 @@ rate — wait and retry.
   |---|---|---|
   | Base path | `https://<gateway-url>/anthropic` | `https://<gateway-url>/openai/v1` |
   | API shape | Anthropic Messages (`/v1/messages`) | OpenAI Responses / Chat Completions |
-  | Auth header | `api-key: <your-key>` | `api-key: <your-key>` |
+  | Auth header | `x-api-key: <your-key>` | `api-key: <your-key>` |
   | Extra header | `anthropic-version: 2023-06-01` | — |
   | `model` field | Claude deployment name | GPT deployment name |
 

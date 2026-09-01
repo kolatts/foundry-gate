@@ -64,3 +64,7 @@ coverage/
 landing*.png
 why-foundrygate.png
 example-site.png
+
+# --- Image generation scratch (prompts/style are committed; rasters are reproducible) ---
+.claude/image-generation/**/*.png
+
