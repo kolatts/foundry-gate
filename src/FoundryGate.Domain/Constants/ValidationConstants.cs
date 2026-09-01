@@ -43,6 +43,31 @@ public static class ValidationConstants
     /// </summary>
     public const long MaxMonthlyTokenQuota = 100_000_000_000;
 
+    // -- Foundry model deployments (issue #61) --
+
+    /// <summary>Cognitive Services account names are 2–64 characters (Azure resource naming rules).</summary>
+    public const int FoundryAccountNameMaxLength = 64;
+
+    /// <summary>Letters, digits and hyphens, starting with a letter or digit — the Cognitive Services account-name rule (also the account's DNS sub-domain).</summary>
+    public const string FoundryAccountNamePattern = "^[A-Za-z0-9][A-Za-z0-9-]{1,63}$";
+
+    /// <summary>Cognitive Services deployment names are 2–64 characters (Azure resource naming rules).</summary>
+    public const int FoundryDeploymentNameMaxLength = 64;
+
+    /// <summary>Letters, digits, <c>.</c>, <c>_</c> and <c>-</c>, starting with a letter or digit — the Cognitive Services deployment-name rule.</summary>
+    public const string FoundryDeploymentNamePattern = "^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$";
+
+    public const int FoundryModelNameMaxLength = 128;
+    public const int FoundryModelVersionMaxLength = 64;
+    public const int FoundrySkuNameMaxLength = 64;
+
+    /// <summary>
+    /// Sanity ceiling for a deployment's <c>sku.capacity</c> (thousands of TPM) — a guardrail
+    /// against a fat-fingered value, not a business rule: 100,000 = 100M tokens/minute, far beyond
+    /// any single deployment's quota (ARM enforces the real, per-subscription/per-model limit).
+    /// </summary>
+    public const int FoundryDeploymentMaxCapacity = 100_000;
+
     /// <summary>
     /// Canonical (hyphenated, no braces) GUID shape, for <c>[RegularExpression]</c> on
     /// GUID-shaped identifier strings such as <c>Group.EntraGroupId</c> — kept as a

@@ -35,11 +35,23 @@ Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Admin/Foundry/Index.razor.cs`
 - `src/FoundryGate.Web/Shared/NavMenu.razor`
 
+### Implementation notes (#61, as built)
+
+- Controller is `FoundryController` (route `api/v1/foundry/…` derives from the class name via `ApiControllerBase`), with an extra `GET /foundry/deployments/{accountName}/{deploymentName}` so `POST` has a `Location` to point at and the UI has something to poll.
+- Multi-account: the gateway runs one Foundry account per region, so deployments are addressed `{accountName}/{deploymentName}` and the create body names its account. Accounts come from `Gateway__SubscriptionId` / `Gateway__ResourceGroup` / `Gateway__FoundryAccountNames__{i}` (#108) bound to `GatewayOptions`, not from `SystemConfiguration["FoundryResourceId"]`.
+- ARM is behind `IFoundryManagementClient` (`ArmFoundryManagementClient` over `Azure.ResourceManager.CognitiveServices` 1.5.2); tests use an in-memory fake — no live Azure in tests.
+- Safety rules (CLAUDE.md, E-006/E-007): create checks existence first → 409, never re-PUT; delete never recreates; **Anthropic-format create is refused with 400** because the SDK (1.5.2, and 1.6.0-beta.4) has no `modelProviderData` and its api-version predates the one that accepts it (E-005), and the identity lacks Marketplace permissions (#107). Lifting the refusal is #126; capacity resize (PATCH, from the #60 direction update) is #130.
+- Mutations resolve the caller's `User` row before touching ARM, so an unprovisioned admin gets 403 with nothing created; audit rows are written after ARM accepts, in the same `SaveChangesAsync`.
+- `WaitUntil.Started` on create/delete: the response carries ARM's initial state (`Creating`); the UI polls the single-deployment GET.
+
 ## Verification
-- [ ] `dotnet build` passes for both API and Web projects
-- [ ] `GET /foundry/deployments` returns real deployments from the configured Foundry resource
-- [ ] Creating a deployment via the UI provisions it in Azure (verify in portal)
-- [ ] Deleting a deployment via the UI removes it from Azure
-- [ ] Provisioning state chip updates on grid refresh
-- [ ] Audit log records `foundry.deployment.created` and `foundry.deployment.deleted` entries
-- [ ] Non-admin users cannot access `/foundry` (redirected to AccessDenied)
+- [x] `dotnet build` passes for the API project (Web: #62)
+- [x] Unit/integration coverage (no live Azure): multi-account aggregation, developer-view de-duplication, 409 on an existing name with no ARM PUT, Anthropic → 400 before any ARM call, unconfigured account → 400/404, delete → 204/404 with no recreate, auth matrix 401/403/200/201/204, request validation, options fail-fast (`FoundryDeploymentServiceTests`, `FoundryEndpointTests`, `RequestDtoValidationTests`, `AppSettingsValidationTests`)
+- [x] Audit log records `foundry.deployment.created` and `foundry.deployment.deleted` entries (target `{accountName}/{deploymentName}`; asserted at service and endpoint level)
+- [ ] `GET /foundry/deployments` returns real deployments from the configured Foundry accounts — live validation, #125
+- [ ] Creating an OpenAI deployment via the API provisions it in Azure (verify in portal) — live validation, #125
+- [ ] Deleting a deployment via the API removes it from Azure — live validation, #125
+- [ ] Creating a deployment via the UI provisions it in Azure (verify in portal) — #62
+- [ ] Deleting a deployment via the UI removes it from Azure — #62
+- [ ] Provisioning state chip updates on grid refresh — #62
+- [ ] Non-admin users cannot access `/foundry` (redirected to AccessDenied) — #62
