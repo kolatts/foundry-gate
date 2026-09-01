@@ -20,6 +20,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
   <meta property="og:description" content="Give every developer their own AI budget. FoundryGate hands out the keys, watches the meter, and stops overspending — automatically." />
   <meta property="og:image" content={`${base}og-logo.png`} />
   <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
+  <script is:inline>document.documentElement.classList.add('js');</script>
   <style>
     /* ── Tokens ─────────────────────────────────────────── */
     :root {
@@ -99,6 +100,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       color: var(--fg-text-secondary);
       transition: color 0.18s, background 0.18s;
       position: relative;
+      white-space: nowrap;
     }
 
     .nav-links a::after {
@@ -216,7 +218,11 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     .btn-primary:hover {
       background: var(--fg-azure-hover);
       box-shadow: 0 0 20px 2px color-mix(in srgb, var(--fg-azure-neon) 30%, transparent);
+      transform: translateY(-1px);
     }
+
+    .btn-primary, .btn-secondary { transition: background 0.2s, box-shadow 0.25s, border-color 0.2s, color 0.2s, transform 0.2s cubic-bezier(0.16,1,0.3,1); }
+    .btn-secondary:hover { transform: translateY(-1px); }
 
     .btn-secondary {
       display: inline-flex;
@@ -228,7 +234,6 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       font-weight: 500;
       border: 1px solid var(--fg-border-strong);
       color: var(--fg-text-secondary);
-      transition: border-color 0.2s, color 0.2s;
     }
 
     .btn-secondary:hover {
@@ -258,8 +263,14 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       min-width: 140px;
     }
 
+    .flow-step {
+      transition: border-color 0.2s, transform 0.25s cubic-bezier(0.16,1,0.3,1), background 0.2s;
+    }
+
     .flow-step:hover {
       border-color: var(--fg-border-strong);
+      background: var(--fg-bg-raised);
+      transform: translateY(-2px);
     }
 
     .flow-icon {
@@ -544,10 +555,14 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       border: 1px solid var(--fg-border-subtle);
       border-radius: 12px;
       overflow: hidden;
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, transform 0.25s cubic-bezier(0.16,1,0.3,1), box-shadow 0.25s;
     }
 
-    .proof-card:hover { border-color: var(--fg-border-strong); }
+    .proof-card:hover {
+      border-color: var(--fg-border-strong);
+      transform: translateY(-3px);
+      box-shadow: 0 12px 36px color-mix(in srgb, #000 45%, transparent);
+    }
 
     .proof-head {
       display: flex;
@@ -774,8 +789,104 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     .hero-icons   { animation: rise 0.5s cubic-bezier(0.16,1,0.3,1) 0.38s both; }
     .dashboard-wrap { animation: rise 0.6s cubic-bezier(0.16,1,0.3,1) 0.18s both; }
 
+    /* ── Scroll reveal (JS adds .in-view; no-JS renders everything visible) ── */
+    html.js [data-reveal] {
+      opacity: 0;
+      transform: translateY(14px);
+      transition:
+        opacity 0.65s cubic-bezier(0.16,1,0.3,1),
+        transform 0.65s cubic-bezier(0.16,1,0.3,1);
+      transition-delay: var(--reveal-delay, 0ms);
+    }
+
+    html.js [data-reveal].in-view {
+      opacity: 1;
+      transform: none;
+    }
+
+    /* ── Meter sweep — the signature moment. Bars sweep from 0 to their value in a
+       staggered cascade when the demo panel scrolls into view. ── */
+    html.js .demo-panel .meter-fill {
+      width: 0;
+      transition: width 1.1s cubic-bezier(0.22,1,0.36,1);
+      transition-delay: var(--meter-delay, 0ms);
+    }
+
+    html.js .demo-panel.in-view .meter-fill {
+      width: var(--w, 0%);
+    }
+
+    /* The blocked row pulses once, after its bar lands. */
+    html.js .demo-panel.in-view .meter-fill--hot {
+      animation: meter-blocked-pulse 1.4s ease-out 1.5s 1;
+    }
+
+    @keyframes meter-blocked-pulse {
+      0%, 100% { box-shadow: none; }
+      40% { box-shadow: 0 0 12px 1px color-mix(in srgb, var(--fg-ember-hot) 55%, transparent); }
+    }
+
+    /* ── Other projects strip ───────────────────────────── */
+    .projects {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 2.5rem 4rem;
+    }
+
+    .projects-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--fg-text-muted);
+      margin-bottom: 1rem;
+    }
+
+    .projects-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .project-card {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      padding: 1rem 1.15rem;
+      background: color-mix(in srgb, var(--fg-bg-surface) 80%, transparent);
+      border: 1px solid var(--fg-border-subtle);
+      border-radius: 10px;
+      transition: border-color 0.2s, transform 0.25s cubic-bezier(0.16,1,0.3,1);
+    }
+
+    .project-card:hover {
+      border-color: var(--fg-border-strong);
+      transform: translateY(-2px);
+    }
+
+    .project-card:hover .project-name { color: var(--fg-azure-neon); }
+
+    .project-name {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--fg-text-primary);
+      transition: color 0.2s;
+    }
+
+    .project-name .ext { font-size: 11px; color: var(--fg-text-muted); margin-left: 0.3rem; }
+
+    .project-desc {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--fg-text-muted);
+    }
+
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: 0.01ms !important; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+        transition-delay: 0ms !important;
+      }
     }
 
     /* ── Responsive ─────────────────────────────────────── */
@@ -789,6 +900,30 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       .proof-grid { grid-template-columns: 1fr; }
       nav { padding: 0 1.25rem; }
       footer { padding: 1.5rem 1.25rem; }
+      .projects { padding: 0 1.5rem 3rem; }
+    }
+
+    @media (max-width: 640px) {
+      .hero { padding: 2.25rem 1.25rem 1.5rem; gap: 2rem; }
+      .hero-flow { grid-template-columns: 1fr; }
+      .hero-sub { font-size: 0.98rem; }
+      .section { padding: 3rem 1.25rem 1.25rem; }
+      .section-sub { font-size: 0.92rem; }
+      .cta-final { padding: 3.5rem 1.25rem 4rem; }
+      .projects-grid { grid-template-columns: 1fr; }
+      .projects { padding: 0 1.25rem 2.5rem; }
+      .proof-body { font-size: 11px; }
+      .demo-table th, .demo-table td { padding-left: 0.9rem; padding-right: 0.9rem; }
+      .btn-primary, .btn-secondary { padding: 0.6rem 1.15rem; font-size: 13.5px; }
+    }
+
+    @media (max-width: 560px) {
+      .nav-links a:not(.nav-signin):not(.nav-keep) { display: none; }
+      .nav-logo img { height: 34px; }
+      nav { height: 56px; padding: 0 1rem; }
+      .nav-links a { padding: 0.4rem 0.5rem; }
+      .nav-signin { padding: 0.35rem 0.85rem !important; margin-left: 0.4rem; }
+      h1 { font-size: clamp(2.1rem, 9vw, 2.6rem); }
     }
   </style>
 </head>
@@ -811,7 +946,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
   <div class="nav-links">
     <a href={`${base}getting-started/why-foundrygate/`}>📖 Docs</a>
     <a href={`${base}reference/api/`}>⚡ API</a>
-    <a href="https://github.com/kolatts/foundry-gate" target="_blank" rel="noopener">✦ GitHub</a>
+    <a href="https://github.com/kolatts/foundry-gate" target="_blank" rel="noopener" class="nav-keep">✦ GitHub</a>
     <a href={`${base}getting-started/fork-guide/`} class="nav-signin">Get started →</a>
   </div>
 </nav>
@@ -897,15 +1032,15 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 
   <!-- ─── See it working (demonstrative fake data) ───────── -->
   <section class="section" id="see-it-working">
-    <span class="section-eyebrow">◈ See it working</span>
-    <h2>One page tells you everything.</h2>
-    <p class="section-sub">
+    <span class="section-eyebrow" data-reveal>◈ See it working</span>
+    <h2 data-reveal style="--reveal-delay:60ms">One page tells you everything.</h2>
+    <p class="section-sub" data-reveal style="--reveal-delay:120ms">
       This is the kind of view an admin gets: every developer, how much of their
       monthly AI budget they've used, and who's asking for more. The names below
       are made up — the dashboard is real.
     </p>
 
-    <div class="demo-panel">
+    <div class="demo-panel" data-reveal style="--reveal-delay:150ms">
       <div class="demo-panel-head">
         <span class="demo-panel-title">Developers · September</span>
         <span class="demo-panel-badge">Demo data</span>
@@ -926,7 +1061,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">2,000,000 tokens</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill" style="width:62%"></span></span>
+                <span class="meter-track"><span class="meter-fill" style="--w:62%;--meter-delay:0ms"></span></span>
                 <span class="meter-pct">62%</span>
               </div>
             </td>
@@ -937,7 +1072,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">1,000,000 tokens</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill" style="width:38%"></span></span>
+                <span class="meter-track"><span class="meter-fill" style="--w:38%;--meter-delay:70ms"></span></span>
                 <span class="meter-pct">38%</span>
               </div>
             </td>
@@ -948,7 +1083,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">2,000,000 tokens</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill meter-fill--warn" style="width:91%"></span></span>
+                <span class="meter-track"><span class="meter-fill meter-fill--warn" style="--w:91%;--meter-delay:140ms"></span></span>
                 <span class="meter-pct">91%</span>
               </div>
             </td>
@@ -959,7 +1094,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">500,000 tokens</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill meter-fill--hot" style="width:100%"></span></span>
+                <span class="meter-track"><span class="meter-fill meter-fill--hot" style="--w:100%;--meter-delay:210ms"></span></span>
                 <span class="meter-pct">100%</span>
               </div>
             </td>
@@ -970,7 +1105,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">Unlimited</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill meter-fill--info" style="width:100%"></span></span>
+                <span class="meter-track"><span class="meter-fill meter-fill--info" style="--w:100%;--meter-delay:280ms"></span></span>
                 <span class="meter-pct">—</span>
               </div>
             </td>
@@ -981,7 +1116,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">1,000,000 tokens</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill" style="width:64%"></span></span>
+                <span class="meter-track"><span class="meter-fill" style="--w:64%;--meter-delay:350ms"></span></span>
                 <span class="meter-pct">64%</span>
               </div>
             </td>
@@ -992,7 +1127,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">1,000,000 tokens</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill" style="width:12%"></span></span>
+                <span class="meter-track"><span class="meter-fill" style="--w:12%;--meter-delay:420ms"></span></span>
                 <span class="meter-pct">12%</span>
               </div>
             </td>
@@ -1003,7 +1138,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
             <td class="demo-budget">2,000,000 tokens</td>
             <td>
               <div class="meter">
-                <span class="meter-track"><span class="meter-fill" style="width:77%"></span></span>
+                <span class="meter-track"><span class="meter-fill" style="--w:77%;--meter-delay:490ms"></span></span>
                 <span class="meter-pct">77%</span>
               </div>
             </td>
@@ -1017,16 +1152,16 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 
   <!-- ─── This is real (live gateway evidence) ───────────── -->
   <section class="section" id="this-is-real">
-    <span class="section-eyebrow">⬛ This is real</span>
-    <h2>Not a mockup. A running gateway.</h2>
-    <p class="section-sub">
+    <span class="section-eyebrow" data-reveal>⬛ This is real</span>
+    <h2 data-reveal style="--reveal-delay:60ms">Not a mockup. A running gateway.</h2>
+    <p class="section-sub" data-reveal style="--reveal-delay:120ms">
       These are real responses from a live FoundryGate gateway, captured during
       testing on September 1, 2026. This is exactly what a developer's tools see.
     </p>
 
     <div class="proof-grid">
 
-      <div class="proof-card">
+      <div class="proof-card" data-reveal style="--reveal-delay:0ms">
         <div class="proof-head">
           <span class="proof-dot proof-dot--green"></span>
           <span class="proof-title">A normal request</span>
@@ -1041,7 +1176,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
         </div>
       </div>
 
-      <div class="proof-card">
+      <div class="proof-card" data-reveal style="--reveal-delay:80ms">
         <div class="proof-head">
           <span class="proof-dot proof-dot--amber"></span>
           <span class="proof-title">Going too fast</span>
@@ -1054,7 +1189,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
         </div>
       </div>
 
-      <div class="proof-card">
+      <div class="proof-card" data-reveal style="--reveal-delay:160ms">
         <div class="proof-head">
           <span class="proof-dot proof-dot--red"></span>
           <span class="proof-title">Monthly budget spent</span>
@@ -1073,7 +1208,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
         </div>
       </div>
 
-      <div class="proof-card">
+      <div class="proof-card" data-reveal style="--reveal-delay:240ms">
         <div class="proof-head">
           <span class="proof-dot proof-dot--blue"></span>
           <span class="proof-title">A real AI assistant, through the gateway</span>
@@ -1095,7 +1230,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
   </section>
 
   <!-- ─── Final CTA ──────────────────────────────────────── -->
-  <section class="cta-final">
+  <section class="cta-final" data-reveal>
     <h2>Your Azure. Your models. Your rules.</h2>
     <p>
       FoundryGate is free and open source. It runs entirely inside your own
@@ -1111,6 +1246,21 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       </a>
     </div>
   </section>
+
+  <!-- ─── Other projects ─────────────────────────────────── -->
+  <div class="projects" data-reveal>
+    <div class="projects-label">Also built here</div>
+    <div class="projects-grid">
+      <a class="project-card" href="https://kolatts.github.io/pncli/" target="_blank" rel="noopener">
+        <span class="project-name">pncli — The Paperwork Nightmare CLI<span class="ext">↗</span></span>
+        <span class="project-desc">Bridge GitHub Copilot, Claude Code, and Codex to the enterprise tools your org runs — structured JSON access to Jira, Bitbucket, Confluence, SonarQube, and more.</span>
+      </a>
+      <a class="project-card" href="https://context-overflow.dev" target="_blank" rel="noopener">
+        <span class="project-name">Context Overflow<span class="ext">↗</span></span>
+        <span class="project-desc">AI fluency training, administered by robots who have seen your org chart and filed it.</span>
+      </a>
+    </div>
+  </div>
 </main>
 
 <!-- ─── Footer ──────────────────────────────────────────── -->
@@ -1120,8 +1270,30 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     <a href={`${base}getting-started/why-foundrygate/`}>Docs</a>
     <a href={`${base}reference/api/`}>API</a>
     <a href="https://github.com/kolatts/foundry-gate" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://kolatts.github.io/pncli/" target="_blank" rel="noopener">pncli</a>
+    <a href="https://context-overflow.dev" target="_blank" rel="noopener">Context Overflow</a>
   </div>
 </footer>
+
+<script is:inline>
+  (function () {
+    var targets = document.querySelectorAll('[data-reveal]');
+    var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced || !('IntersectionObserver' in window)) {
+      targets.forEach(function (t) { t.classList.add('in-view'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          e.target.classList.add('in-view');
+          io.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.15, rootMargin: '0px 0px -48px 0px' });
+    targets.forEach(function (t) { io.observe(t); });
+  })();
+</script>
 
 </body>
 </html>
