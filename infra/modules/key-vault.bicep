@@ -17,15 +17,15 @@ param location string
 param tags object = {}
 
 @description('Purge protection. Irreversible once on; recommended for prod, off for dev so the vault can be purged after a teardown.')
-param enablePurgeProtection bool = false
+param enablePurgeProtection bool
 
 @minValue(7)
 @maxValue(90)
 @description('Soft-delete retention in days (7 for dev, 90 for prod).')
-param softDeleteRetentionInDays int = 7
+param softDeleteRetentionInDays int
 
 @description('Create the RSA wrapping key used to encrypt APIM subscription keys at rest (#95).')
-param createKeyEncryptionKey bool = true
+param createKeyEncryptionKey bool
 
 @description('Name of the wrapping key. Referenced by the API through the keyEncryptionKeyUri output.')
 param keyEncryptionKeyName string = 'fg-apim-key-encryption'

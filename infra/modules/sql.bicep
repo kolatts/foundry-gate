@@ -7,16 +7,22 @@
 // login/password" wording in #43/#44). Membership of that group is what grants admin
 // access, so two things cannot be expressed in Bicep and are operator/pipeline steps:
 //   1. Put the deploying/CI principal (the OIDC app registration) in the admin group so
-//      the dacpac deploy (`_deploy-database.yml`) can connect.
+//      the dacpac deploy (`_deploy-database.yml`) can connect (#109).
 //   2. Create contained users for the API and Functions managed identities inside the
 //      database (`CREATE USER [id-foundrygate-api-<env>] FROM EXTERNAL PROVIDER` +
-//      db_datareader/db_datawriter) — a post-dacpac step in the db deploy.
+//      db_datareader/db_datawriter) — a post-dacpac step in the db deploy (#106).
 //
 // FIREWALL: only the "Allow Azure services" rule is declared here (0.0.0.0-0.0.0.0), which
 // is what lets Container Apps / Functions connect without a VNet. Runner/developer IP rules
 // are created at deploy time by the CLI `ip setup` command (#96) and are NOT declared here
 // on purpose: undeclared child resources are left alone by an incremental deployment, so a
 // re-run never wipes a rule the pipeline just added.
+//
+// AUTO-PAUSE: serverless SKUs (GP_S_*) get autoPauseDelay/minCapacity, derived from the
+// SKU name so a provisioned SKU can never be sent serverless-only properties. Whether the
+// database actually pauses depends on nothing touching it for that long — the API's
+// readiness probe deliberately does not (modules/container-app.bicep); periodic Functions
+// jobs (#84) should keep their cadence above the pause delay or accept an always-on vCore.
 param sqlServerName string
 param sqlDatabaseName string
 param location string
@@ -28,16 +34,8 @@ param entraAdminGroupObjectId string
 @description('Display name of that group — becomes the server admin login name.')
 param entraAdminGroupName string
 
-@description('Database SKU: { name, tier, family?, capacity? }. Serverless dev default GP_S_Gen5 x1; prod uses provisioned General Purpose (see parameters/prod.bicepparam).')
-param databaseSku object = {
-  name: 'GP_S_Gen5'
-  tier: 'GeneralPurpose'
-  family: 'Gen5'
-  capacity: 1
-}
-
-@description('True when databaseSku is a serverless SKU (GP_S_*): enables auto-pause + min vCores.')
-param serverless bool = true
+@description('Database SKU: { name, tier, family?, capacity? }. GP_S_* names are serverless (auto-pause enabled); anything else is provisioned.')
+param databaseSku object
 
 @description('Serverless only: minutes of inactivity before auto-pause (-1 disables auto-pause).')
 param autoPauseDelayMinutes int = 60
@@ -53,6 +51,8 @@ param backupStorageRedundancy string = 'Local'
 param maxSizeBytes int = 34359738368
 
 param zoneRedundant bool = false
+
+var serverless = startsWith(databaseSku.name, 'GP_S_')
 
 resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
   name: sqlServerName
@@ -103,5 +103,6 @@ output sqlServerName string = sqlServer.name
 output sqlServerId string = sqlServer.id
 output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
 output sqlDatabaseName string = database.name
+output serverless bool = serverless
 @description('Entra-auth connection string (no secret in it). Same shape _deploy-database.yml computes for the dacpac deploy.')
 output entraConnectionString string = 'Server=tcp:${sqlServer.properties.fullyQualifiedDomainName},1433;Database=${database.name};Authentication=Active Directory Default;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'

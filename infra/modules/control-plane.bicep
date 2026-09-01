@@ -41,8 +41,11 @@ param tags object = {}
 param appEnvironment string
 
 // ---- Shared gateway/monitoring resources this module attaches to ----------------
+@description('ARM resource id of the Log Analytics workspace (diagnostic settings, RBAC scope).')
 param workspaceId string
 param workspaceName string
+@description('Workspace GUID (customerId) — what the Log Analytics query API calls the workspace id.')
+param workspaceCustomerId string
 param appInsightsConnectionString string
 param apimName string
 param apimGatewayUrl string
@@ -52,7 +55,6 @@ param foundryAccountNames array
 param sqlAdminGroupObjectId string
 param sqlAdminGroupName string
 param sqlDatabaseSku object
-param sqlServerless bool
 param sqlBackupStorageRedundancy string
 
 // ---- Entra (API app registration) -----------------------------------------------
@@ -138,7 +140,6 @@ module sql 'sql.bicep' = {
     entraAdminGroupObjectId: sqlAdminGroupObjectId
     entraAdminGroupName: sqlAdminGroupName
     databaseSku: sqlDatabaseSku
-    serverless: sqlServerless
     backupStorageRedundancy: sqlBackupStorageRedundancy
   }
 }
@@ -184,7 +185,11 @@ var sharedAppConfig = [
   { name: 'Gateway__ResourceGroup', value: resourceGroup().name }
   { name: 'Gateway__ApimName', value: apimName }
   { name: 'Gateway__ApimGatewayUrl', value: apimGatewayUrl }
-  { name: 'Gateway__LogAnalyticsWorkspaceId', value: workspaceId }
+  // Two different "workspace ids" on purpose: the GUID is what the query API wants
+  // (LogsQueryClient.QueryWorkspaceAsync, /v1/workspaces/{id}/query); the ARM id is for
+  // QueryResourceAsync and anything management-plane. #108 binds both.
+  { name: 'Gateway__LogAnalyticsWorkspaceId', value: workspaceCustomerId }
+  { name: 'Gateway__LogAnalyticsWorkspaceResourceId', value: workspaceId }
   { name: 'Gateway__KeyEncryptionKeyUri', value: keyVault.outputs.keyEncryptionKeyUri }
 ]
 
@@ -266,6 +271,7 @@ output containerRegistryLoginServer string = registry.outputs.loginServer
 output containerAppsEnvironmentName string = containerApp.outputs.containerAppsEnvironmentName
 output containerAppName string = containerApp.outputs.containerAppName
 output containerAppFqdn string = containerApp.outputs.containerAppFqdn
+output containerAppIsBootstrapImage bool = containerApp.outputs.isBootstrapImage
 output functionAppName string = functionApp.outputs.functionAppName
 output functionAppHostname string = functionApp.outputs.functionAppHostname
 output functionsStorageAccountName string = storage.outputs.storageAccountName

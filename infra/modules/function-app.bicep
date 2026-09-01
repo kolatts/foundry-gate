@@ -33,7 +33,7 @@ param deploymentContainerName string
 param appInsightsConnectionString string
 
 @description('.NET isolated worker runtime version.')
-param runtimeVersion string = '10.0'
+param runtimeVersion string
 
 @minValue(40)
 @maxValue(1000)

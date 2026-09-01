@@ -165,7 +165,7 @@ param sqlAdminGroupObjectId string = ''
 @description('Display name of that group (becomes the SQL server admin login name).')
 param sqlAdminGroupName string = ''
 
-@description('Azure SQL database SKU: { name, tier, family?, capacity? }. Default is serverless (dev); prod.bicepparam uses provisioned General Purpose.')
+@description('Azure SQL database SKU: { name, tier, family?, capacity? }. GP_S_* names are serverless (auto-pause derived from the name); default is serverless for dev, prod.bicepparam uses provisioned General Purpose.')
 param sqlDatabaseSku object = {
   name: 'GP_S_Gen5'
   tier: 'GeneralPurpose'
@@ -173,10 +173,8 @@ param sqlDatabaseSku object = {
   capacity: 1
 }
 
-@description('True when sqlDatabaseSku is serverless (enables auto-pause + min vCores).')
-param sqlServerless bool = true
-
 @allowed(['Local', 'Zone', 'Geo', 'GeoZone'])
+@description('Azure SQL backup storage redundancy: Local for dev, Geo for prod.')
 param sqlBackupStorageRedundancy string = 'Local'
 
 @description('Entra tenant the API validates bearer tokens against (AzureAd__TenantId).')
@@ -188,16 +186,19 @@ param entraApiClientId string = ''
 @description('Token audience (AzureAd__Audience). Empty = api://{entraApiClientId}.')
 param entraApiAudience string = ''
 
-@description('API image, e.g. crfoundrygatedeve7k2.azurecr.io/foundrygate-api:<sha>. Empty = public placeholder for the bootstrap deploy (the registry is created by this same run). Deploy workflows MUST pass the current tag on every infra re-run or the app is reset to the placeholder.')
+@description('API image, e.g. crfoundrygatedeve7k2.azurecr.io/foundrygate-api:<sha>. For the bootstrap deploy (registry created by this same run, nothing pushed yet) pass mcr.microsoft.com/k8se/quickstart:latest explicitly — the Container App module then switches to port 80 and /health-only probes. Every later infra run must pass the running tag; the param files read it from FG_API_IMAGE with no default so a forgotten variable fails build-params instead of silently resetting the app.')
 param apiContainerImage string = ''
 
 @minValue(1)
+@description('Container App minimum replicas. 1 keeps the admin API warm (it is the Blazor UI\'s only backend).')
 param containerAppMinReplicas int = 1
 
 @minValue(1)
+@description('Container App maximum replicas (HTTP concurrency scale rule, 50 concurrent requests per replica).')
 param containerAppMaxReplicas int = 3
 
 @allowed(['Free', 'Standard'])
+@description('Static Web App tier: Free for dev, Standard for prod (custom domain, SLA).')
 param staticWebAppSku string = 'Free'
 
 @description('Static Web Apps region (limited set: eastus2, centralus, westus2, westeurope, eastasia).')
@@ -211,6 +212,7 @@ param keyVaultPurgeProtection bool = false
 
 @minValue(7)
 @maxValue(90)
+@description('Key Vault soft-delete retention in days: 7 for dev (fast purge after teardown), 90 for prod.')
 param keyVaultSoftDeleteRetentionInDays int = 7
 
 @description('Create the Key Vault RSA key the API wraps APIM subscription keys with (#95).')
@@ -347,6 +349,7 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     appEnvironment: appEnvironment
     workspaceId: monitoring.outputs.workspaceId
     workspaceName: monitoring.outputs.workspaceName
+    workspaceCustomerId: monitoring.outputs.workspaceCustomerId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     apimName: apim.outputs.apimName
     apimGatewayUrl: apim.outputs.gatewayUrl
@@ -354,7 +357,6 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     sqlAdminGroupObjectId: sqlAdminGroupObjectId
     sqlAdminGroupName: sqlAdminGroupName
     sqlDatabaseSku: sqlDatabaseSku
-    sqlServerless: sqlServerless
     sqlBackupStorageRedundancy: sqlBackupStorageRedundancy
     entraTenantId: entraTenantId
     entraApiClientId: entraApiClientId
@@ -386,34 +388,38 @@ output productIds array = gateway.outputs.productIds
 output defaultProductId string = gateway.outputs.defaultProductId
 output logAnalyticsWorkspaceId string = monitoring.outputs.workspaceId
 output logAnalyticsWorkspaceName string = monitoring.outputs.workspaceName
+@description('Workspace GUID (customerId) — the "workspace id" the Log Analytics query API expects; logAnalyticsWorkspaceId above is the ARM resource id.')
+output logAnalyticsWorkspaceCustomerId string = monitoring.outputs.workspaceCustomerId
 output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output foundryAccountNames array = [for (region, i) in foundryRegions: foundry[i].outputs.accountName]
 
-// Control plane: empty strings when deployControlPlane=false. Names follow the convention
-// documented in modules/control-plane.bicep; the deploy workflows read these outputs
-// (az deployment sub show --query properties.outputs) rather than re-deriving names.
+// Control plane: empty strings when deployControlPlane=false (safe-dereference on the
+// conditional module, so these cannot drift from the module's own condition). Names follow
+// the convention documented in modules/control-plane.bicep; the deploy workflows read these
+// outputs (az deployment sub show --query properties.outputs) rather than re-deriving names.
 output controlPlaneDeployed bool = deployControlPlane
-output sqlServerName string = deployControlPlane ? controlPlane!.outputs.sqlServerName : ''
-output sqlServerFqdn string = deployControlPlane ? controlPlane!.outputs.sqlServerFqdn : ''
-output sqlDatabaseName string = deployControlPlane ? controlPlane!.outputs.sqlDatabaseName : ''
-output sqlEntraConnectionString string = deployControlPlane ? controlPlane!.outputs.sqlEntraConnectionString : ''
-output sqlAdminGroupName string = deployControlPlane ? controlPlane!.outputs.sqlAdminGroupName : ''
-output keyVaultName string = deployControlPlane ? controlPlane!.outputs.keyVaultName : ''
-output keyVaultUri string = deployControlPlane ? controlPlane!.outputs.keyVaultUri : ''
-output keyEncryptionKeyUri string = deployControlPlane ? controlPlane!.outputs.keyEncryptionKeyUri : ''
-output containerRegistryName string = deployControlPlane ? controlPlane!.outputs.containerRegistryName : ''
-output containerRegistryLoginServer string = deployControlPlane ? controlPlane!.outputs.containerRegistryLoginServer : ''
-output containerAppsEnvironmentName string = deployControlPlane ? controlPlane!.outputs.containerAppsEnvironmentName : ''
-output containerAppName string = deployControlPlane ? controlPlane!.outputs.containerAppName : ''
-output containerAppFqdn string = deployControlPlane ? controlPlane!.outputs.containerAppFqdn : ''
-output functionAppName string = deployControlPlane ? controlPlane!.outputs.functionAppName : ''
-output functionAppHostname string = deployControlPlane ? controlPlane!.outputs.functionAppHostname : ''
-output functionsStorageAccountName string = deployControlPlane ? controlPlane!.outputs.functionsStorageAccountName : ''
-output staticWebAppName string = deployControlPlane ? controlPlane!.outputs.staticWebAppName : ''
-output staticWebAppHostname string = deployControlPlane ? controlPlane!.outputs.staticWebAppHostname : ''
-output apiIdentityName string = deployControlPlane ? controlPlane!.outputs.apiIdentityName : ''
-output apiIdentityClientId string = deployControlPlane ? controlPlane!.outputs.apiIdentityClientId : ''
-output apiIdentityPrincipalId string = deployControlPlane ? controlPlane!.outputs.apiIdentityPrincipalId : ''
-output functionsIdentityName string = deployControlPlane ? controlPlane!.outputs.functionsIdentityName : ''
-output functionsIdentityClientId string = deployControlPlane ? controlPlane!.outputs.functionsIdentityClientId : ''
-output functionsIdentityPrincipalId string = deployControlPlane ? controlPlane!.outputs.functionsIdentityPrincipalId : ''
+output containerAppIsBootstrapImage bool = controlPlane.?outputs.containerAppIsBootstrapImage ?? false
+output sqlServerName string = controlPlane.?outputs.sqlServerName ?? ''
+output sqlServerFqdn string = controlPlane.?outputs.sqlServerFqdn ?? ''
+output sqlDatabaseName string = controlPlane.?outputs.sqlDatabaseName ?? ''
+output sqlEntraConnectionString string = controlPlane.?outputs.sqlEntraConnectionString ?? ''
+output sqlAdminGroupName string = controlPlane.?outputs.sqlAdminGroupName ?? ''
+output keyVaultName string = controlPlane.?outputs.keyVaultName ?? ''
+output keyVaultUri string = controlPlane.?outputs.keyVaultUri ?? ''
+output keyEncryptionKeyUri string = controlPlane.?outputs.keyEncryptionKeyUri ?? ''
+output containerRegistryName string = controlPlane.?outputs.containerRegistryName ?? ''
+output containerRegistryLoginServer string = controlPlane.?outputs.containerRegistryLoginServer ?? ''
+output containerAppsEnvironmentName string = controlPlane.?outputs.containerAppsEnvironmentName ?? ''
+output containerAppName string = controlPlane.?outputs.containerAppName ?? ''
+output containerAppFqdn string = controlPlane.?outputs.containerAppFqdn ?? ''
+output functionAppName string = controlPlane.?outputs.functionAppName ?? ''
+output functionAppHostname string = controlPlane.?outputs.functionAppHostname ?? ''
+output functionsStorageAccountName string = controlPlane.?outputs.functionsStorageAccountName ?? ''
+output staticWebAppName string = controlPlane.?outputs.staticWebAppName ?? ''
+output staticWebAppHostname string = controlPlane.?outputs.staticWebAppHostname ?? ''
+output apiIdentityName string = controlPlane.?outputs.apiIdentityName ?? ''
+output apiIdentityClientId string = controlPlane.?outputs.apiIdentityClientId ?? ''
+output apiIdentityPrincipalId string = controlPlane.?outputs.apiIdentityPrincipalId ?? ''
+output functionsIdentityName string = controlPlane.?outputs.functionsIdentityName ?? ''
+output functionsIdentityClientId string = controlPlane.?outputs.functionsIdentityClientId ?? ''
+output functionsIdentityPrincipalId string = controlPlane.?outputs.functionsIdentityPrincipalId ?? ''

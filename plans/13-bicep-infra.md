@@ -66,6 +66,14 @@ ids" wording):
   `infra/README.md` was not added — the reference lives in
   `docs-site/src/content/docs/reference/infrastructure.md` (one source of truth on the
   public site).
+- Review fix pass (PR #111): role GUIDs re-verified against `az role definition list`;
+  bootstrap placeholder image (`k8se/quickstart`, :80, `/health` only — verified under
+  docker) switches the Container App to port 80 + `/health`-only probes; readiness probe
+  is `/health` (hermetic) so serverless auto-pause stays real, startup probe is
+  `/health/ready`; `FG_API_IMAGE` (both) and `FG_SQL_ADMIN_GROUP_*` (prod) are required
+  env vars with no default; serverless is derived from the SQL SKU name;
+  `Gateway__LogAnalyticsWorkspaceId` is the workspace GUID (`customerId`), the ARM id is
+  `...WorkspaceResourceId`. Prod-grade knobs not yet plumbed: #134.
 
 ## Verification
 - [x] `az bicep build --file infra/main.bicep` compiles with no errors (and `az bicep lint`

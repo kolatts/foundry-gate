@@ -6,12 +6,22 @@
 // CONVENTIONS.md's storage/identity rules exist to avoid. Same workspace as the gateway's
 // ApiManagementGatewayLlmLog, so one KQL join covers gateway + control plane.
 //
-// The image is a parameter because the registry is created by the same deployment: on the
-// very first run nothing has been pushed yet, so the default is a public placeholder that
-// answers on 8080 and lets the app (and its probes) provision. The deploy workflows own the
-// image afterwards — they MUST pass the current tag on every infra run (see the
-// apiContainerImage description in main.bicep), or a re-run resets the app to the
-// placeholder.
+// BOOTSTRAP IMAGE. The registry is created by the same deployment, so on the very first
+// run nothing has been pushed yet and the app is provisioned with a public placeholder
+// (`mcr.microsoft.com/k8se/quickstart:latest`). That image listens on :80 and serves ONLY
+// `/` and `/health` (verified under docker 2026-09-01: /health 200, /health/ready 404), so
+// while it is in use the ingress port AND every probe path follow it — otherwise the first
+// revision fails its startup probe and never provisions. The deploy workflows own the
+// image afterwards and MUST pass the running tag on every infra run (main.bicep
+// apiContainerImage); a re-run without it resets the app to the placeholder.
+//
+// PROBE STANCE. Startup = /health/ready (opens a SQL connection: a misconfigured
+// connection string or identity fails the deploy right there, which is when you want to
+// know). Liveness and readiness = /health (hermetic). Readiness deliberately does NOT hit
+// the database: with minReplicas 1 a DB-touching readiness probe every 15 s would keep a
+// serverless Azure SQL database from ever reaching its auto-pause delay, making the dev
+// tier's auto-pause decorative — and for a single-replica admin API, "DB down" surfacing
+// as 500s instead of 503s is not worth an always-on vCore.
 param containerAppsEnvironmentName string
 param containerAppName string
 param location string
@@ -26,18 +36,18 @@ param identityId string
 @description('Login server of the registry the image is pulled from with the identity above.')
 param registryLoginServer string
 
-@description('Fully-qualified image reference. Empty = public placeholder for the bootstrap deploy.')
+@description('Fully-qualified image reference. Empty, or the public placeholder, = bootstrap mode (port 80, /health-only probes).')
 param containerImage string = ''
 
-@description('Port the API listens on (ASPNETCORE_URLS is set to match in modules/control-plane.bicep).')
+@description('Port the real API listens on (ASPNETCORE_URLS is set to match in modules/control-plane.bicep). Ignored in bootstrap mode.')
 param targetPort int = 8080
 
 @minValue(1)
 @description('Minimum replicas. 1 keeps the API warm: it is the admin plane and the Blazor UI\'s only backend, so cold starts are user-visible.')
-param minReplicas int = 1
+param minReplicas int
 
 @minValue(1)
-param maxReplicas int = 3
+param maxReplicas int
 
 @description('vCPU per replica, as a decimal string (Consumption profile pairs: 0.25/0.5Gi, 0.5/1Gi, 1/2Gi ...). The default matches the published cost model (docs reference/cost-and-capacity).')
 param cpu string = '0.25'
@@ -47,7 +57,11 @@ param memory string = '0.5Gi'
 param environmentVariables array = []
 
 var placeholderImage = 'mcr.microsoft.com/k8se/quickstart:latest'
-var image = empty(containerImage) ? placeholderImage : containerImage
+var isBootstrap = empty(containerImage) || containerImage == placeholderImage
+var image = isBootstrap ? placeholderImage : containerImage
+var port = isBootstrap ? 80 : targetPort
+var livenessPath = '/health'
+var startupPath = isBootstrap ? '/health' : '/health/ready'
 
 resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = {
   name: containerAppsEnvironmentName
@@ -96,7 +110,7 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         external: true
-        targetPort: targetPort
+        targetPort: port
         transport: 'auto'
         allowInsecure: false
         traffic: [
@@ -122,25 +136,25 @@ resource containerApp 'Microsoft.App/containerApps@2025-01-01' = {
             memory: memory
           }
           env: environmentVariables
-          // /health is hermetic liveness (no dependencies); /health/ready adds the
-          // AppDbContext connectivity check — see FoundryGate.Api HealthCheckExtensions.
           probes: [
             {
+              // Generous window: a paused serverless database takes up to ~a minute to
+              // resume on the first connection this probe makes.
               type: 'Startup'
-              httpGet: { path: '/health', port: targetPort, scheme: 'HTTP' }
+              httpGet: { path: startupPath, port: port, scheme: 'HTTP' }
               initialDelaySeconds: 5
               periodSeconds: 5
-              failureThreshold: 12
+              failureThreshold: 30
             }
             {
               type: 'Liveness'
-              httpGet: { path: '/health', port: targetPort, scheme: 'HTTP' }
+              httpGet: { path: livenessPath, port: port, scheme: 'HTTP' }
               periodSeconds: 30
               failureThreshold: 3
             }
             {
               type: 'Readiness'
-              httpGet: { path: '/health/ready', port: targetPort, scheme: 'HTTP' }
+              httpGet: { path: livenessPath, port: port, scheme: 'HTTP' }
               periodSeconds: 15
               failureThreshold: 3
             }
@@ -168,3 +182,5 @@ output containerAppsEnvironmentId string = containerAppsEnvironment.id
 output containerAppName string = containerApp.name
 output containerAppId string = containerApp.id
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
+@description('True when the app is running the public placeholder image (bootstrap run).')
+output isBootstrapImage bool = isBootstrap

@@ -46,13 +46,28 @@ Two invariants for re-runs:
    parameter files ship with `false`; override to `true` on the command line for the very
    first deployment of a new environment only. Model lifecycle after that belongs to the
    control plane, not Bicep.
-2. **Pass the current API image.** The Container App's image is a parameter
-   (`apiContainerImage`, read from the `FG_API_IMAGE` environment variable by the param
-   files). On the bootstrap run it is empty and a public placeholder image is used, because
-   the registry is created by the same deployment and holds nothing yet. Every later infra
-   run must set `FG_API_IMAGE` to the tag currently running (the api-deploy workflow's
-   `az containerapp update --image` is what moves it forward), or the re-run resets the app
-   to the placeholder.
+2. **Pass the current API image — always.** The Container App's image is a parameter
+   (`apiContainerImage`), and the param files read it from the `FG_API_IMAGE` environment
+   variable **with no default**, so `build-params` fails loudly rather than silently
+   swapping the API for a placeholder page. On the bootstrap run the registry is created by
+   the same deployment and holds nothing yet, so pass the public placeholder explicitly:
+   `FG_API_IMAGE=mcr.microsoft.com/k8se/quickstart:latest`. The Container App module
+   recognises it and switches to **port 80 with `/health`-only probes** (that image listens
+   on :80 and serves only `/` and `/health` — verified under docker). Every later infra run
+   sets `FG_API_IMAGE` to the tag currently running (the api-deploy workflow's
+   `az containerapp update --image` is what moves it forward):
+
+   ```bash
+   FG_API_IMAGE=$(az containerapp show -n ca-foundrygate-api-dev -g rg-foundrygate-dev \
+     --query properties.template.containers[0].image -o tsv)
+   ```
+
+   The `containerAppIsBootstrapImage` output reports which mode the app is in.
+
+Prod additionally requires `FG_SQL_ADMIN_GROUP_OBJECT_ID` and `FG_SQL_ADMIN_GROUP_NAME`
+(a dedicated production SQL admin group — with Entra-only auth, group membership *is* the
+access model, so prod deliberately fails to build until that group exists rather than
+pointing at the dev group; see [#109](https://github.com/kolatts/foundry-gate/issues/109)).
 
 ## Naming convention
 
@@ -97,7 +112,7 @@ workflows resolve resources from these patterns — changing one is a contract c
 | `storage-account.bicep` | Functions storage, shared keys off, `function-deployments` container |
 | `static-web-app.bicep` | SWA (Free/Standard), `provider: Custom` |
 | `control-plane-rbac.bicep` | all role assignments below |
-| `container-app.bicep` | Container Apps environment (logs via diagnostic setting — no workspace key) + the API app |
+| `container-app.bicep` | Container Apps environment (logs via diagnostic setting — no workspace key) + the API app; bootstrap-image detection (port 80, `/health`-only probes) |
 | `function-app.bicep` | Flex Consumption plan + Function App, identity-based storage |
 
 ## Control-plane parameters
@@ -106,13 +121,13 @@ workflows resolve resources from these patterns — changing one is a contract c
 |---|---|---|---|
 | `deployControlPlane` | `true` | `true` | default `false` (gateway only) |
 | `appEnvironment` | `qa` | `prod` | `ASPNETCORE_ENVIRONMENT` — lowercase `qa`/`prod`; `local` is docker-only |
-| `sqlAdminGroupObjectId` / `sqlAdminGroupName` | Entra group | Entra group | SQL server administrator (Entra-only auth; no SQL login exists) |
-| `sqlDatabaseSku` / `sqlServerless` | `GP_S_Gen5` ×1, serverless, 60-min auto-pause | `GP_Gen5_2`, provisioned | |
+| `sqlAdminGroupObjectId` / `sqlAdminGroupName` | `SG_IMAGILE_SQL_ADMINS` | `$FG_SQL_ADMIN_GROUP_OBJECT_ID` / `$FG_SQL_ADMIN_GROUP_NAME` (required) | SQL server administrator (Entra-only auth; no SQL login exists) |
+| `sqlDatabaseSku` | `GP_S_Gen5` ×1 — serverless, 60-min auto-pause | `GP_Gen5_2`, provisioned | serverless is derived from the SKU name (`GP_S_*`) |
 | `sqlBackupStorageRedundancy` | `Local` | `Geo` | |
 | `entraTenantId` | tenant | tenant | `AzureAd__TenantId` |
 | `entraApiClientId` | `$FG_ENTRA_API_CLIENT_ID` | same | `AzureAd__ClientId`; zero GUID until the app registration exists |
 | `entraApiAudience` | `api://{clientId}` | same | `AzureAd__Audience` |
-| `apiContainerImage` | `$FG_API_IMAGE` | same | see re-run invariant 2 |
+| `apiContainerImage` | `$FG_API_IMAGE` (required) | same | see re-run invariant 2 |
 | `containerAppMinReplicas` / `MaxReplicas` | 1 / 2 | 1 / 3 | min 1 — the admin API is the UI's only backend |
 | `staticWebAppSku` / `staticWebAppLocation` | `Free` / `eastus2` | `Standard` / `eastus2` | SWA is only offered in a handful of regions |
 | `functionsRuntimeVersion` | `10.0` | `10.0` | .NET isolated worker |
@@ -172,7 +187,8 @@ Core configuration paths (`__` = section separator). None of them is a secret.
 | `AzureAd__Instance` / `TenantId` / `ClientId` / `Audience` | bearer-token validation |
 | `Cors__AllowedOrigins__0` (API) | `https://<static web app hostname>` |
 | `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | `true` / App Insights connection string |
-| `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl`, `Gateway__LogAnalyticsWorkspaceId`, `Gateway__KeyEncryptionKeyUri`, `Gateway__FoundryAccountNames__{i}` | gateway addressing for the APIM key service, Foundry deployment service and reconciliation ([#108](https://github.com/kolatts/foundry-gate/issues/108)) |
+| `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl`, `Gateway__KeyEncryptionKeyUri`, `Gateway__FoundryAccountNames__{i}` | gateway addressing for the APIM key service, Foundry deployment service and reconciliation ([#108](https://github.com/kolatts/foundry-gate/issues/108)) |
+| `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | the workspace **GUID** (`customerId` — what `LogsQueryClient.QueryWorkspaceAsync` and `/v1/workspaces/{id}/query` mean by "workspace id") / the ARM resource id (`QueryResourceAsync`, management plane) |
 | `AzureWebJobsStorage__accountName` / `__credential=managedidentity` / `__clientId` (Functions) | identity-based host storage |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` (Functions) | host telemetry |
 
@@ -186,9 +202,9 @@ empty strings when `deployControlPlane = false`.
 |---|---|
 | `resourceGroupName` | every workflow |
 | `apimGatewayUrl`, `apimName`, `apimPrincipalId`, `anthropicApiUrl`, `openaiApiUrl`, `productIds`, `defaultProductId` | CLI setup docs, control plane |
-| `logAnalyticsWorkspaceId`, `logAnalyticsWorkspaceName`, `appInsightsConnectionString` | monitoring, reconciliation |
+| `logAnalyticsWorkspaceId` (ARM id), `logAnalyticsWorkspaceCustomerId` (GUID), `logAnalyticsWorkspaceName`, `appInsightsConnectionString` | monitoring, reconciliation |
 | `foundryAccountNames` | control plane |
-| `controlPlaneDeployed` | workflow branching |
+| `controlPlaneDeployed`, `containerAppIsBootstrapImage` | workflow branching (the api-deploy workflow's first push replaces the placeholder) |
 | `sqlServerName`, `sqlServerFqdn`, `sqlDatabaseName`, `sqlEntraConnectionString`, `sqlAdminGroupName` | `_deploy-database.yml` (`sql-server-name`, `sql-database-name`), CLI `ip setup` |
 | `keyVaultName`, `keyVaultUri`, `keyEncryptionKeyUri` | out-of-band secret management |
 | `containerRegistryName`, `containerRegistryLoginServer` | api-deploy (`docker push`, image tag) |
@@ -196,6 +212,23 @@ empty strings when `deployControlPlane = false`.
 | `functionAppName`, `functionAppHostname`, `functionsStorageAccountName` | functions-deploy |
 | `staticWebAppName`, `staticWebAppHostname` | ui-deploy (deployment token lookup), CORS, Entra redirect URI |
 | `apiIdentityName` / `ClientId` / `PrincipalId`, `functionsIdentityName` / `ClientId` / `PrincipalId` | contained DB users, Graph permission grants |
+
+## Health probes and serverless auto-pause
+
+The API exposes `/health` (hermetic liveness) and `/health/ready` (adds an
+`AppDbContext` connectivity check). The Container App wires them as:
+
+| Probe | Path | Why |
+|---|---|---|
+| Startup | `/health/ready` (30 × 5 s) | a wrong connection string or identity fails the deploy right there; the window covers a paused serverless database resuming |
+| Liveness | `/health` (30 s) | restart only on a hung process |
+| Readiness | `/health` (15 s) | **deliberately not** `/health/ready`: with `minReplicas: 1` a DB-touching readiness probe would open a SQL connection every 15 s and the dev serverless database would never reach its 60-minute auto-pause |
+
+The trade-off is explicit: for a single-replica admin API, "database down" surfacing as
+500s instead of 503s is not worth an always-on vCore in dev. The dev budget line on
+[Cost & Capacity](/foundry-gate/reference/cost-and-capacity/) (serverless, auto-pause)
+depends on this stance — and on periodic Functions jobs keeping their cadence above the
+pause delay. In the bootstrap-image mode all three probes use `/health` on port 80.
 
 ## Firewall model for Azure SQL
 

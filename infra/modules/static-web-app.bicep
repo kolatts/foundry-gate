@@ -12,7 +12,7 @@ param location string
 param tags object = {}
 
 @allowed(['Free', 'Standard'])
-param sku string = 'Free'
+param sku string
 
 resource staticWebApp 'Microsoft.Web/staticSites@2024-04-01' = {
   name: staticWebAppName
