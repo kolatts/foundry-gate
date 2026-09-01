@@ -17,7 +17,13 @@ public static class SystemConfigurationKeys
     /// <summary>APIM gateway base URL shown to developers on <c>/me</c> (see <see cref="Config.Contracts.GatewayConnectionInfo"/>).</summary>
     public const string ApimGatewayUrl = nameof(ApimGatewayUrl);
 
-    /// <summary>APIM product name covering the Foundry routes (spec &#167;5.1).</summary>
+    /// <summary>
+    /// <b>Legacy (single-product model).</b> APIM product name covering the Foundry routes (spec
+    /// &#167;5.1), from before quota tiers became per-tier APIM products. Superseded by
+    /// <see cref="GatewayTiers"/>: a developer's subscription is issued against the product for
+    /// their tier (<see cref="GatewayTiers.Default"/> for new users), not against this one value.
+    /// Kept because the seeded reference data references it; do not remove without a migration.
+    /// </summary>
     public const string ApimProductId = nameof(ApimProductId);
 
     /// <summary>ARM resource ID of the Azure AI Foundry account.</summary>

@@ -68,6 +68,57 @@
   (404/400/403/409 mapping), not per-controller try/catch. Controllers are thin
   expression-bodied delegations with class-level `[Authorize]`.
 
+## API service/controller conventions
+
+Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on these.
+
+- **Controllers** inherit `Controllers/ApiControllerBase` (`[ApiController]`,
+  `[Route("api/v1/[controller]")]`, `[Produces("application/json")]`) and declare only
+  their `[Authorize(Policy = PolicyNames.AdminOnly)]` (class- or action-level) plus thin
+  actions that delegate to a service. Authentication is already global (the
+  `AuthorizeFilter` in Program.cs): anonymous → 401, non-admin on an admin-only route →
+  403, with no per-controller code.
+- **Services** live in `Services/<Area>/` with the single-implementation interface
+  co-located (`IAuditService.cs` + `AuditService.cs`); primary constructors; take
+  `AppDbContext` directly; throw `KeyNotFoundException` (404) / `ArgumentException` (400)
+  / `ConflictException` (409) / `UnauthorizedAccessException` (403) and never touch HTTP
+  status codes themselves.
+- **DI — one line per area, one file.** Each area owns
+  `Services/<Area>/<Area>ServiceCollectionExtensions.cs` exposing `Add<Area>Services()`;
+  register it by adding ONE line to `Services/ServiceCollectionExtensions
+  .AddFoundryGateApiServices()`, which Program.cs calls once. Never register application
+  services in Program.cs — parallel waves would collide there.
+- **Current user**: inject `ICurrentUserAccessor` (scoped) rather than reading
+  `HttpContext.User`. `EntraObjectId` (accepts both `oid` and the long
+  `.../objectidentifier` claim type), `IsAdmin` (same `IsInRole` check as the policy),
+  `DisplayName`/`Email` (token claims, for auto-provisioning), `TryGetUserAsync(ct)`
+  (null = not provisioned yet — a first-class path; `GET /users/me` provisions on it),
+  `GetRequiredUserAsync(ct)` (→ 404). The returned `User` is tracked by the request's
+  context, so mutate it and `SaveChangesAsync`. No oid on an authenticated principal →
+  `UnauthorizedAccessException` (403).
+- **Audit**: inject `IAuditService` and call
+  `await audit.LogAsync(AuditActions.X, AuditTargetTypes.Y, id.ToString(), new { before, after }, ct)`
+  *before* the caller's own `SaveChangesAsync` — the row is added to the SAME
+  `AppDbContext` and commits atomically with the mutation. No fire-and-forget audit: a
+  mutation without its audit row (or vice versa) is worse than a failed request. System
+  actors (Functions, sync jobs) use the `LogAsync(int? actorUserId, ...)` overload with
+  `null`. New action/target kinds are constants in Domain's `AuditActions` /
+  `AuditTargetTypes`, never inline strings. `details` is JSON-serialized (camelCase) —
+  never put a key or token in it.
+- **Paging**: bind `[FromQuery] PagedRequest paging` (alongside any `[FromQuery]` filter
+  record) and finish the query with `.OrderBy(...).Select(projection).ToPagedAsync(paging, ct)`
+  (`FoundryGate.Data.Extensions`) → `PagedResult<T>`. Order deterministically first;
+  the helper clamps page/size itself.
+- **Integration tests** use `IClassFixture<ApiTestFactory>` (real pipeline, SQLite
+  in-memory, header-driven `TestAuthHandler`): `factory.CreateClient()` is anonymous,
+  `factory.CreateClientAs(oid, isAdmin: true)` is an admin, `factory.SeedUserAsync(...)`
+  and `factory.CreateDbContext()` arrange/assert rows, `factory.TimeProvider` moves the
+  clock. One database per test class — seed with unique markers, never assert absolute
+  counts. Service-level tests use `InMemoryDatabaseTest` + `Support/MutableTimeProvider`
+  + hand-rolled stubs (no mocking library). Under SQLite, `AppDbContext` stores
+  `DateTimeOffset` as UTC ticks (provider-gated) so ordering and date-range filters
+  translate; the SQL Server model is untouched.
+
 ## Schema pipeline (no EF migrations)
 
 - EF entities are the model source of truth. Local: CLI `local setup` runs
