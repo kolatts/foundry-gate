@@ -127,20 +127,21 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
     {
         var admin = await factory.SeedUserAsync(displayName: "Admin Ada");
         using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
-        var name = Marker();
+        var name = "Dep-" + Marker(); // mixed case on purpose, see the Location assertions
 
         var response = await client.PostAsJsonAsync(new Uri(DeploymentsPath, UriKind.Relative), ValidRequest(name));
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        // Case-insensitive: URL generation keeps the [controller] token's class-name casing ("Foundry")
-        // until RouteOptions.LowercaseUrls is set host-wide; routing itself is case-insensitive.
-        Assert.EndsWith($"{DeploymentsPath}/{ApiTestFactory.PrimaryFoundryAccount}/{name}", response.Headers.Location?.ToString(), StringComparison.OrdinalIgnoreCase);
+        // Exact-case: RouteOptions.LowercaseUrls (#129) makes URL generation render the whole path
+        // lowercase — the [controller] token ("foundry", as reference/api.md documents it) and the
+        // route values alike, so the deployment name comes back lowercased too.
+        Assert.EndsWith($"{DeploymentsPath}/{ApiTestFactory.PrimaryFoundryAccount}/{name.ToLowerInvariant()}", response.Headers.Location?.ToString(), StringComparison.Ordinal);
         var created = await response.Content.ReadFromJsonAsync<FoundryDeploymentResponse>(JsonOptions);
         Assert.NotNull(created);
         Assert.Equal(name, created.DeploymentName);
         Assert.Equal("Creating", created.ProvisioningState);
 
-        // The Location resolves.
+        // The lowercased Location still resolves: deployment lookups are case-insensitive.
         var follow = await client.GetAsync(response.Headers.Location);
         Assert.Equal(HttpStatusCode.OK, follow.StatusCode);
 

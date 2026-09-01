@@ -83,6 +83,18 @@ builder.Services.AddFoundryGateHealthChecks();
 // authenticated by default; opt out per-action with [AllowAnonymous].
 builder.Services.AddControllers(options => options.Filters.Add(new AuthorizeFilter()));
 
+// URL generation (CreatedAtRoute → Location headers) renders the whole path lowercase, so a 201
+// points at /api/v1/foundry/... exactly as reference/api.md documents it rather than the
+// [controller] token's class-name casing (/api/v1/Foundry/...) (#129). Matching was always
+// case-insensitive, and so are the lookups behind every route value today (Foundry account and
+// deployment names resolve case-insensitively in the service and in ARM). Query strings keep their
+// casing: their values can be case-sensitive identifiers.
+builder.Services.Configure<RouteOptions>(options =>
+{
+    options.LowercaseUrls = true;
+    options.LowercaseQueryStrings = false;
+});
+
 // Global error handling (CONVENTIONS.md: "one IExceptionHandler + ProblemDetails, not
 // per-controller try/catch"). AddProblemDetails also shapes the framework's own
 // non-exception error responses (e.g. the 404 catch-all wired up via UseStatusCodePages below).

@@ -51,13 +51,19 @@ public record UserProfileResponse(
     ApiKeyResponse ApiKey,
     GatewayConnectionInfo CliConfig);
 
-/// <summary>PUT /users/{id}/quota body — admin sets a user's quota or unlimited flag.</summary>
-/// <param name="IsUnlimited">When true, <paramref name="MonthlyTokenQuota"/> is ignored (spec &#167;3.2 step 1).</param>
-/// <param name="MonthlyTokenQuota">Null means "use the system/group default" (spec &#167;3.2 steps 2-5); ignored when <paramref name="IsUnlimited"/> is true.</param>
-public record UpdateUserQuotaRequest(
-    bool IsUnlimited,
-    [property: Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
-    long? MonthlyTokenQuota);
+/// <summary>
+/// PUT /users/{id}/quota body — admin sets a user's quota or unlimited flag.
+/// Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).
+/// </summary>
+public record UpdateUserQuotaRequest
+{
+    /// <summary>When true, <see cref="MonthlyTokenQuota"/> is ignored (spec &#167;3.2 step 1).</summary>
+    public bool IsUnlimited { get; init; }
+
+    /// <summary>Null means "use the system/group default" (spec &#167;3.2 steps 2-5); ignored when <see cref="IsUnlimited"/> is true.</summary>
+    [Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
+    public long? MonthlyTokenQuota { get; init; }
+}
 
 /// <summary>Result of POST /users/sync (spec &#167;7.2 bulk Entra sync).</summary>
 /// <param name="AddedCount">Users assigned in Entra that had no row and were inserted (no API key).</param>

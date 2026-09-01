@@ -10,8 +10,10 @@ namespace FoundryGate.Tests.Predeployment.Domain;
 /// Smoke-checks that request DTOs' <c>DataAnnotations</c> attributes actually fire
 /// (plans/03-shared-dtos.md verification: "All request DTOs have at least one
 /// validation attribute"). Not exhaustive over every DTO — enough to prove the
-/// pattern (<c>[Required]</c>/<c>[StringLength]</c>/<c>[Range]</c> composed on a
-/// positional record via <c>[property: ...]</c>) actually validates.
+/// pattern (<c>[Required]</c>/<c>[StringLength]</c>/<c>[Range]</c> on the init
+/// properties of a non-positional record, #128) actually validates through
+/// <see cref="Validator"/>, which is what Blazor's <c>DataAnnotationsValidator</c> uses.
+/// The MVC side of the same records is <c>Api/Endpoints/RequestDtoBindingTests</c>.
 /// </summary>
 public class RequestDtoValidationTests
 {
@@ -25,12 +27,7 @@ public class RequestDtoValidationTests
     [Fact]
     public void CreateGroupRequest_with_empty_name_fails_validation()
     {
-        var request = new CreateGroupRequest(
-            Name: string.Empty,
-            Description: null,
-            EntraGroupId: null,
-            IsUnlimited: false,
-            MonthlyTokenQuota: null);
+        var request = new CreateGroupRequest { Name = string.Empty };
 
         IList<ValidationResult> results = Validate(request);
 
@@ -40,12 +37,12 @@ public class RequestDtoValidationTests
     [Fact]
     public void CreateGroupRequest_with_a_valid_name_passes_validation()
     {
-        var request = new CreateGroupRequest(
-            Name: "Platform Team",
-            Description: "Core platform developers",
-            EntraGroupId: null,
-            IsUnlimited: false,
-            MonthlyTokenQuota: 5_000_000);
+        var request = new CreateGroupRequest
+        {
+            Name = "Platform Team",
+            Description = "Core platform developers",
+            MonthlyTokenQuota = 5_000_000,
+        };
 
         Assert.Empty(Validate(request));
     }
@@ -56,12 +53,7 @@ public class RequestDtoValidationTests
     [InlineData("11111111-2222-3333-4444-55555555555")] // one hex digit short
     public void CreateGroupRequest_with_a_non_guid_entraGroupId_fails_validation(string entraGroupId)
     {
-        var request = new CreateGroupRequest(
-            Name: "Platform Team",
-            Description: null,
-            EntraGroupId: entraGroupId,
-            IsUnlimited: false,
-            MonthlyTokenQuota: null);
+        var request = new CreateGroupRequest { Name = "Platform Team", EntraGroupId = entraGroupId };
 
         IList<ValidationResult> results = Validate(request);
 
@@ -71,20 +63,26 @@ public class RequestDtoValidationTests
     [Fact]
     public void CreateGroupRequest_with_a_guid_shaped_entraGroupId_passes_validation()
     {
-        var request = new CreateGroupRequest(
-            Name: "Platform Team",
-            Description: null,
-            EntraGroupId: "11111111-2222-3333-4444-555555555555",
-            IsUnlimited: false,
-            MonthlyTokenQuota: null);
+        var request = new CreateGroupRequest { Name = "Platform Team", EntraGroupId = "11111111-2222-3333-4444-555555555555" };
 
         Assert.Empty(Validate(request));
     }
 
     [Fact]
+    public void CreateGroupRequest_default_instance_fails_on_Name_only()
+    {
+        // What an empty JSON body binds to: Name is "" (not null), so [Required] reports a
+        // field-level error rather than the deserializer failing the whole body.
+        IList<ValidationResult> results = Validate(new CreateGroupRequest());
+
+        var single = Assert.Single(results);
+        Assert.Equal([nameof(CreateGroupRequest.Name)], single.MemberNames);
+    }
+
+    [Fact]
     public void SubmitQuotaIncreaseRequest_with_too_short_justification_fails_validation()
     {
-        var request = new SubmitQuotaIncreaseRequest(RequestedQuota: 2_000_000, Justification: "need more");
+        var request = new SubmitQuotaIncreaseRequest { RequestedQuota = 2_000_000, Justification = "need more" };
 
         IList<ValidationResult> results = Validate(request);
 
@@ -94,9 +92,11 @@ public class RequestDtoValidationTests
     [Fact]
     public void SubmitQuotaIncreaseRequest_with_negative_requestedQuota_fails_validation()
     {
-        var request = new SubmitQuotaIncreaseRequest(
-            RequestedQuota: -1,
-            Justification: "Running large batch evals against the shared model this sprint.");
+        var request = new SubmitQuotaIncreaseRequest
+        {
+            RequestedQuota = -1,
+            Justification = "Running large batch evals against the shared model this sprint.",
+        };
 
         IList<ValidationResult> results = Validate(request);
 
