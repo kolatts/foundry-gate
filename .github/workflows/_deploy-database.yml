@@ -1,19 +1,32 @@
 name: Deploy Database (Reusable)
 
 # Reusable workflow_call: deploys the FoundryGate.Database dacpac to a target environment's Azure
-# SQL Server, then syncs reference data. Modeled on imagile-app's .github/workflows/_deploy-database.yml
-# (runner IP whitelist -> firewall propagation wait -> TCP probe -> dacpac deploy -> seed), minus
-# the metabase/tenant shard split (a FoundryGate fork IS the tenant, CONVENTIONS.md).
+# SQL Server, then syncs reference data and grants the app identities access. Modeled on imagile-app's
+# .github/workflows/_deploy-database.yml (runner IP whitelist -> firewall propagation wait -> TCP probe
+# -> dacpac deploy -> seed), minus the metabase/tenant shard split (a FoundryGate fork IS the tenant,
+# CONVENTIONS.md), plus two steps imagile-app does by hand:
+#   - `db grant-identities` after seeding: the contained database users for the API and Functions
+#     user-assigned managed identities (Entra-only server, #106 — Bicep cannot express this).
+#   - `ip cleanup` at the very end (`if: always()`): removes this run's `gha-*` firewall rule and any
+#     stale ones a cancelled/crashed earlier run left behind (#96). Developer `fg-dev-*` rules and the
+#     Bicep-declared `AllowAllWindowsAzureIps` are never touched.
 #
-# Expects two artifacts to already exist in the calling workflow run (produced by a build-dacpac
-# job and a CLI publish job — neither exists yet as of #77/#78/#79; the full-stack orchestration
-# lands with #67's CI/CD epic, e.g. deploy-all.yml):
+# Expects two artifacts to already exist in the calling workflow run (produced by the caller's build
+# jobs — the deploy orchestration in #68-#75):
 #   - "dacpac": contains FoundryGate.Database.dacpac (dotnet build src/FoundryGate.Database -o artifacts)
 #   - "foundrygate-cli": contains a framework-dependent publish of FoundryGate.Cli
 #     (dotnet publish src/FoundryGate.Cli --no-self-contained -o cli)
 #
-# Standalone-valid today: this file's shape (inputs, jobs, steps) does not depend on anything else
-# in #67 to be syntactically/semantically complete, only to actually run successfully end-to-end.
+# Azure permissions the OIDC principal needs (beyond what azure/login@v2 itself needs):
+#   - SQL Server Contributor (or Contributor) on the resource group — `ip setup`/`ip cleanup` are plain
+#     ARM writes to Microsoft.Sql/servers/firewallRules.
+#   - Membership of the SQL server's Entra admin group (#109) — `db deploy`, the seeders and
+#     `db grant-identities` all connect with Authentication=Active Directory Default; there is no
+#     password fallback by design.
+#   - For `CREATE USER ... FROM EXTERNAL PROVIDER` issued BY a service principal, Azure SQL must be able
+#     to look the identity up in Entra: either the server has a managed identity with Directory Readers,
+#     or the caller passes the identities' client ids (api-identity-client-id / functions-identity-client-id,
+#     both `az deployment sub show` outputs) so the users are created WITH SID and no lookup happens.
 #
 # OIDC permissions: a reusable workflow cannot grant itself `id-token: write` — GitHub only issues
 # the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN that azure/login@v2 needs when the CALLING workflow (or
@@ -36,7 +49,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: "GitHub Environment name (dev, production, ...) — provides the deployment gate and scopes environment secrets."
+        description: "GitHub Environment name (dev, production, ...) — provides the deployment gate and scopes environment secrets. Also passed to the CLI as --env; it maps 'production' to the Bicep environmentName 'prod' when deriving resource/identity names."
         required: true
         type: string
       sql-server-name:
@@ -48,7 +61,7 @@ on:
         required: true
         type: string
       sql-resource-group:
-        description: "Resource group containing the SQL Server, used for connectivity diagnostics."
+        description: "Resource group containing the SQL Server, used for connectivity diagnostics and firewall-rule writes."
         required: true
         type: string
       run-seed-test:
@@ -61,6 +74,31 @@ on:
         required: false
         type: boolean
         default: false
+      api-identity-name:
+        description: "API user-assigned managed identity name for the contained database user. Empty = the naming convention id-foundrygate-api-{env}."
+        required: false
+        type: string
+        default: ""
+      functions-identity-name:
+        description: "Functions user-assigned managed identity name for the contained database user. Empty = the naming convention id-foundrygate-func-{env}."
+        required: false
+        type: string
+        default: ""
+      api-identity-client-id:
+        description: "API identity client id (deployment output apiIdentityClientId). When set the user is created WITH SID, which needs no Directory Readers permission on the SQL server; empty = CREATE USER ... FROM EXTERNAL PROVIDER."
+        required: false
+        type: string
+        default: ""
+      functions-identity-client-id:
+        description: "Functions identity client id (deployment output functionsIdentityClientId). Same semantics as api-identity-client-id."
+        required: false
+        type: string
+        default: ""
+      firewall-rule-max-age-hours:
+        description: "gha-* firewall rules older than this are removed by the final `ip cleanup` step (this run's own rules are always removed)."
+        required: false
+        type: number
+        default: 2
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -70,7 +108,7 @@ on:
         required: true
 
 # One deploy at a time per target environment — a second run queued mid-deploy would race the
-# first over the same database.
+# first over the same database (and its firewall rules — `ip cleanup` assumes no sibling run is live).
 concurrency:
   group: deploy-database-${{ inputs.environment }}
   cancel-in-progress: false
@@ -83,6 +121,13 @@ jobs:
     permissions:
       id-token: write
       contents: read
+    env:
+      # Read by the CLI's ArmClient so firewall-rule calls target the same subscription azure/login
+      # selected, rather than whichever subscription ARM happens to list first for the principal.
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TARGET_ENVIRONMENT: ${{ inputs.environment }}
+      SQL_SERVER_NAME: ${{ inputs.sql-server-name }}
+      SQL_RESOURCE_GROUP: ${{ inputs.sql-resource-group }}
     steps:
       - uses: actions/checkout@v4
 
@@ -109,12 +154,14 @@ jobs:
           path: ./artifacts
 
       - name: Download CLI artifact
+        id: cli
         uses: actions/download-artifact@v4
         with:
           name: foundrygate-cli
           path: ./cli
 
       - name: Azure Login
+        id: login
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -122,10 +169,12 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Resolve SQL Server connection details
+        env:
+          SQL_DATABASE_NAME: ${{ inputs.sql-database-name }}
         run: |
           SERVER_FQDN=$(az sql server show \
-            --name ${{ inputs.sql-server-name }} \
-            --resource-group ${{ inputs.sql-resource-group }} \
+            --name "${SQL_SERVER_NAME}" \
+            --resource-group "${SQL_RESOURCE_GROUP}" \
             --query fullyQualifiedDomainName -o tsv)
 
           echo "Server: $SERVER_FQDN"
@@ -135,19 +184,19 @@ jobs:
           # token azure/login@v2 already established for this runner (CONVENTIONS.md: no SQL
           # passwords in the cloud). Computed once here so every later step uses the identical
           # string instead of re-deriving (and risking drift between) their own copies.
-          echo "CONNECTION_STRING=Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True" >> "$GITHUB_ENV"
+          echo "CONNECTION_STRING=Server=${SERVER_FQDN};Database=${SQL_DATABASE_NAME};Authentication=Active Directory Default;Encrypt=True" >> "$GITHUB_ENV"
 
-      # STUB: `foundrygate ip setup` doesn't whitelist anything real yet — it needs an Azure SQL
-      # Server resource that doesn't exist until the Bicep infra modules (#43/#44) deploy. This
-      # step is kept continue-on-error so the rest of the deploy pipeline shape is exercised today
-      # instead of hard-blocking on infra that isn't built yet. Remove continue-on-error once
-      # https://github.com/kolatts/foundry-gate/issues/96 implements the command for real.
+      # Creates/updates a `gha-{run id}-{UTC minute}` rule for this runner's public IP (idempotent: a
+      # rule that already allows the IP is left alone). The server and resource group come from the
+      # caller's inputs so the CLI never has to guess the deployment's nameSuffix; --env still drives
+      # the naming conventions and the summary it prints.
       - name: Whitelist runner IP address
-        continue-on-error: true
         run: |
           dotnet ./cli/FoundryGate.Cli.dll \
             ip setup \
-            --env ${{ inputs.environment }} \
+            --env "${TARGET_ENVIRONMENT}" \
+            --server "${SQL_SERVER_NAME}" \
+            --resource-group "${SQL_RESOURCE_GROUP}" \
             --yes
 
       - name: Wait for firewall rule propagation
@@ -166,9 +215,11 @@ jobs:
           fi
 
       - name: Deploy dacpac
+        env:
+          ALLOW_DATA_LOSS: ${{ inputs.allow-data-loss }}
         run: |
           DATA_LOSS_FLAG=""
-          if [ "${{ inputs.allow-data-loss }}" = "true" ]; then
+          if [ "${ALLOW_DATA_LOSS}" = "true" ]; then
             echo "::warning::--allow-data-loss is set — this deploy can drop/truncate data. Only use this for an intentional, reviewed migration, never a routine deploy."
             DATA_LOSS_FLAG="--allow-data-loss"
           fi
@@ -195,3 +246,40 @@ jobs:
           dotnet ./cli/FoundryGate.Cli.dll \
             db seed-test \
             "${CONNECTION_STRING}"
+
+      # Idempotent T-SQL (IF NOT EXISTS ... CREATE USER; IS_ROLEMEMBER-guarded ALTER ROLE ... ADD MEMBER
+      # for db_datareader + db_datawriter) over the same Entra connection the deploy used. The dacpac
+      # excludes Users (ExcludeObjectTypes) so `--drop-objects` never removes what this step creates.
+      - name: Grant database access to the API and Functions identities
+        env:
+          API_IDENTITY_NAME: ${{ inputs.api-identity-name }}
+          FUNCTIONS_IDENTITY_NAME: ${{ inputs.functions-identity-name }}
+          API_IDENTITY_CLIENT_ID: ${{ inputs.api-identity-client-id }}
+          FUNCTIONS_IDENTITY_CLIENT_ID: ${{ inputs.functions-identity-client-id }}
+        run: |
+          ARGS=()
+          [ -n "${API_IDENTITY_NAME}" ] && ARGS+=(--api-identity "${API_IDENTITY_NAME}")
+          [ -n "${FUNCTIONS_IDENTITY_NAME}" ] && ARGS+=(--functions-identity "${FUNCTIONS_IDENTITY_NAME}")
+          [ -n "${API_IDENTITY_CLIENT_ID}" ] && ARGS+=(--api-identity-client-id "${API_IDENTITY_CLIENT_ID}")
+          [ -n "${FUNCTIONS_IDENTITY_CLIENT_ID}" ] && ARGS+=(--functions-identity-client-id "${FUNCTIONS_IDENTITY_CLIENT_ID}")
+
+          dotnet ./cli/FoundryGate.Cli.dll \
+            db grant-identities \
+            --env "${TARGET_ENVIRONMENT}" \
+            --connection-string "${CONNECTION_STRING}" \
+            "${ARGS[@]}"
+
+      # Always runs once the CLI and az session exist, even when an earlier step failed: removes this
+      # run's own gha-* rule(s) and any gha-* rule older than firewall-rule-max-age-hours (a cancelled or
+      # crashed earlier run never reached this step). Only CI rules are candidates.
+      - name: Remove runner firewall rules
+        if: always() && steps.login.outcome == 'success' && steps.cli.outcome == 'success'
+        env:
+          FIREWALL_RULE_MAX_AGE_HOURS: ${{ inputs.firewall-rule-max-age-hours }}
+        run: |
+          dotnet ./cli/FoundryGate.Cli.dll \
+            ip cleanup \
+            --env "${TARGET_ENVIRONMENT}" \
+            --server "${SQL_SERVER_NAME}" \
+            --resource-group "${SQL_RESOURCE_GROUP}" \
+            --older-than "${FIREWALL_RULE_MAX_AGE_HOURS}"

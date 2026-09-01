@@ -159,19 +159,17 @@ All scoped to the individual resource, never the resource group; names are
 | Functions | Storage Table Data Contributor | storage | table bindings |
 | APIM (system-assigned) | Cognitive Services User | each Foundry account | gateway → model backends, no account keys |
 
-Not expressible in Bicep — operator steps tracked in
+Not expressible in Bicep. Two of these the deploy pipeline now does itself through the
+`foundrygate` CLI; the rest remain operator steps tracked in
 [#109](https://github.com/kolatts/foundry-gate/issues/109):
 
-- The CI/OIDC principal must be a **member of the SQL Entra admin group** or the dacpac
-  deploy cannot connect (there is no password fallback by design).
-- **Contained database users** for `id-foundrygate-api-{env}` and
-  `id-foundrygate-func-{env}` (`CREATE USER ... FROM EXTERNAL PROVIDER` +
-  `db_datareader`/`db_datawriter`) are created after the dacpac deploy
-  ([#106](https://github.com/kolatts/foundry-gate/issues/106)).
-- Runtime creation of **Claude** deployments needs Marketplace/SaaS permissions beyond
-  Cognitive Services Contributor ([#107](https://github.com/kolatts/foundry-gate/issues/107)).
-- Graph application permissions for the Entra sync go on the API identity's service
-  principal — no client secret ([#110](https://github.com/kolatts/foundry-gate/issues/110)).
+| Step | Who does it |
+|---|---|
+| **Contained database users** for `id-foundrygate-api-{env}` and `id-foundrygate-func-{env}` — `CREATE USER ... FROM EXTERNAL PROVIDER` + `db_datareader`/`db_datawriter`, never `db_ddladmin` (the dacpac owns the schema) | **Automated**: `foundrygate db grant-identities --env {env}`, run by `_deploy-database.yml` after seeding. Idempotent T-SQL (`IF NOT EXISTS` / `IS_ROLEMEMBER` guards); identity names default from the naming convention (`--api-identity` / `--functions-identity` override). Pass `--api-identity-client-id` / `--functions-identity-client-id` (deployment outputs `apiIdentityClientId` / `functionsIdentityClientId`) to create the users `WITH SID` instead, which needs no Directory Readers permission when the executing principal is itself a service principal. `--dry-run` prints the T-SQL. ([#106](https://github.com/kolatts/foundry-gate/issues/106)) |
+| **Runner / developer firewall rules** on the SQL server | **Automated**: `foundrygate ip setup --env {env}` and `ip cleanup` — see [Firewall model](#firewall-model-for-azure-sql). ([#96](https://github.com/kolatts/foundry-gate/issues/96)) |
+| The CI/OIDC principal must be a **member of the SQL Entra admin group** or the dacpac deploy, the seeders and `db grant-identities` cannot connect (there is no password fallback by design). It also needs **SQL Server Contributor** (or Contributor) on the resource group for the firewall-rule writes. | Operator (#109) |
+| Runtime creation of **Claude** deployments needs Marketplace/SaaS permissions beyond Cognitive Services Contributor | Operator ([#107](https://github.com/kolatts/foundry-gate/issues/107)) |
+| Graph application permissions for the Entra sync go on the API identity's service principal — no client secret | Operator ([#110](https://github.com/kolatts/foundry-gate/issues/110)) |
 
 ## What the hosts are told
 
@@ -205,13 +203,13 @@ empty strings when `deployControlPlane = false`.
 | `logAnalyticsWorkspaceId` (ARM id), `logAnalyticsWorkspaceCustomerId` (GUID), `logAnalyticsWorkspaceName`, `appInsightsConnectionString` | monitoring, reconciliation |
 | `foundryAccountNames` | control plane |
 | `controlPlaneDeployed`, `containerAppIsBootstrapImage` | workflow branching (the api-deploy workflow's first push replaces the placeholder) |
-| `sqlServerName`, `sqlServerFqdn`, `sqlDatabaseName`, `sqlEntraConnectionString`, `sqlAdminGroupName` | `_deploy-database.yml` (`sql-server-name`, `sql-database-name`), CLI `ip setup` |
+| `sqlServerName`, `sqlServerFqdn`, `sqlDatabaseName`, `sqlEntraConnectionString`, `sqlAdminGroupName` | `_deploy-database.yml` (`sql-server-name`, `sql-database-name`, `sql-resource-group` → CLI `ip setup` / `ip cleanup` / `db grant-identities`) |
 | `keyVaultName`, `keyVaultUri`, `keyEncryptionKeyUri` | out-of-band secret management |
 | `containerRegistryName`, `containerRegistryLoginServer` | api-deploy (`docker push`, image tag) |
 | `containerAppsEnvironmentName`, `containerAppName`, `containerAppFqdn` | api-deploy (`az containerapp update`), postdeployment tests |
 | `functionAppName`, `functionAppHostname`, `functionsStorageAccountName` | functions-deploy |
 | `staticWebAppName`, `staticWebAppHostname` | ui-deploy (deployment token lookup), CORS, Entra redirect URI |
-| `apiIdentityName` / `ClientId` / `PrincipalId`, `functionsIdentityName` / `ClientId` / `PrincipalId` | contained DB users, Graph permission grants |
+| `apiIdentityName` / `ClientId` / `PrincipalId`, `functionsIdentityName` / `ClientId` / `PrincipalId` | `_deploy-database.yml` (`api-identity-name` / `functions-identity-name`, `api-identity-client-id` / `functions-identity-client-id` → CLI `db grant-identities`), Graph permission grants |
 
 ## Health probes and serverless auto-pause
 
@@ -241,6 +239,26 @@ Public endpoint, Entra-only authentication, and two kinds of firewall rule:
   `sql-foundrygate-{env}-{suffix}` in `rg-foundrygate-{env}`. Deliberately **not** declared
   in Bicep: an incremental deployment leaves undeclared child resources alone, so a re-run
   never wipes a rule the pipeline just added.
+
+`ip setup` detects the caller's public IPv4 address (api.ipify.org, then ifconfig.me;
+`--ip` overrides), finds the server by listing `rg-foundrygate-{env}` for the single
+`sql-foundrygate-{env}-*` server (`--server` / `--resource-group` override — the pipeline
+passes both from its inputs), and creates or updates a single-address rule. It is
+idempotent: a rule that already allows the address is left alone. Rule names tell you who
+made them:
+
+| Rule | Made by | Lifetime |
+|---|---|---|
+| `AllowAllWindowsAzureIps` | Bicep | permanent |
+| `gha-{run id}-{yyyyMMddHHmm}` | a GitHub Actions runner (`GITHUB_ACTIONS=true`); the UTC minute is in the name because ARM keeps no creation time on a firewall rule | removed by `foundrygate ip cleanup --env {env} --older-than {hours}`, which `_deploy-database.yml` runs `if: always()` at the end: this run's own `gha-{run id}-*` rules go unconditionally, other `gha-*` rules once they are older than the threshold (default 2 h) or carry no timestamp. Developer and hand-made rules are never candidates. `--dry-run` previews. |
+| `fg-dev-{machine}-{user}` | a developer running `foundrygate ip setup --env dev` locally (Azure CLI credential) | until removed by hand |
+
+Both commands authenticate with the same `AppTokenCredential` chain as the API (Azure CLI
+locally; on a runner the `azure/login@v2` session, with `AZURE_SUBSCRIPTION_ID` selecting
+the subscription), and a firewall-rule write is a plain ARM operation — SQL Server
+Contributor on the resource group is enough; SQL Entra admin membership is only needed to
+*connect* to the database afterwards. Names such as `production` are accepted for `--env`
+and mapped to the Bicep `environmentName` (`prod`) before any resource name is derived.
 
 Private endpoints (spec §11 for prod) are a later hardening step and would replace the
 first rule, not the second.
