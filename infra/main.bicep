@@ -1,12 +1,15 @@
-// FoundryGate — gateway data plane (subscription scope).
+// FoundryGate — full stack (subscription scope).
 // Provisions: resource group, monitoring, Foundry accounts + model deployments per
-// region, APIM (StandardV2), and the AI gateway layer (backends, pools, APIs,
-// product, policies). The FoundryGate control-plane app (API/UI/SQL) is provisioned
-// separately; this file is deliberately deployable on its own so a fork can stand up
-// the data plane first and prove traffic flows before any app code exists.
+// region, APIM (StandardV2), the AI gateway layer (backends, pools, APIs, products,
+// policies) and — behind `deployControlPlane` — the FoundryGate control plane (API on
+// Container Apps, Blazor UI on Static Web Apps, Functions Flex Consumption, Azure SQL,
+// Key Vault, registry, role assignments; see modules/control-plane.bicep).
+// The gateway data plane is deliberately deployable on its own (deployControlPlane=false,
+// the default) so a fork can stand it up first and prove traffic flows before any app
+// code exists; parameters/test.bicepparam is exactly that shape.
 targetScope = 'subscription'
 
-@description('Deployment environment name, used in resource names (e.g. test, prod).')
+@description('Deployment environment name, used in resource names (e.g. test, dev, prod). Lowercase alphanumeric — it lands in storage/registry names.')
 param environmentName string
 
 @description('Primary Azure region for shared resources (APIM, monitoring).')
@@ -144,6 +147,75 @@ param productModelAliases object = {
 @description('Create model deployments (first run). Set false on re-runs — Anthropic deployments are create-once under ARM; see modules/foundry.bicep.')
 param createModelDeployments bool = true
 
+// ---- Control plane (#43/#44) -----------------------------------------------------
+// Off by default so the gateway-only deployment keeps working unchanged; dev/prod param
+// files turn it on. When on, sqlAdminGroupObjectId/sqlAdminGroupName and
+// entraApiClientId are effectively required (Bicep has no conditional-required, so an
+// empty group id fails at deploy time inside modules/sql.bicep rather than here).
+@description('Deploy the control plane (SQL, Container Apps API, Static Web App, Functions, Key Vault, registry, RBAC) alongside the gateway.')
+param deployControlPlane bool = false
+
+@allowed(['qa', 'prod'])
+@description('ASPNETCORE_ENVIRONMENT for the control-plane hosts (lowercase per CONVENTIONS.md). Distinct from environmentName, which only names resources.')
+param appEnvironment string = 'qa'
+
+@description('Object id of the Entra security group that administers Azure SQL (Entra-only auth). The CI/OIDC principal that runs the dacpac deploy must be a member — a manual step, see docs reference/infrastructure.')
+param sqlAdminGroupObjectId string = ''
+
+@description('Display name of that group (becomes the SQL server admin login name).')
+param sqlAdminGroupName string = ''
+
+@description('Azure SQL database SKU: { name, tier, family?, capacity? }. Default is serverless (dev); prod.bicepparam uses provisioned General Purpose.')
+param sqlDatabaseSku object = {
+  name: 'GP_S_Gen5'
+  tier: 'GeneralPurpose'
+  family: 'Gen5'
+  capacity: 1
+}
+
+@description('True when sqlDatabaseSku is serverless (enables auto-pause + min vCores).')
+param sqlServerless bool = true
+
+@allowed(['Local', 'Zone', 'Geo', 'GeoZone'])
+param sqlBackupStorageRedundancy string = 'Local'
+
+@description('Entra tenant the API validates bearer tokens against (AzureAd__TenantId).')
+param entraTenantId string = tenant().tenantId
+
+@description('Client id of the FoundryGate.Api app registration (AzureAd__ClientId).')
+param entraApiClientId string = ''
+
+@description('Token audience (AzureAd__Audience). Empty = api://{entraApiClientId}.')
+param entraApiAudience string = ''
+
+@description('API image, e.g. crfoundrygatedeve7k2.azurecr.io/foundrygate-api:<sha>. Empty = public placeholder for the bootstrap deploy (the registry is created by this same run). Deploy workflows MUST pass the current tag on every infra re-run or the app is reset to the placeholder.')
+param apiContainerImage string = ''
+
+@minValue(1)
+param containerAppMinReplicas int = 1
+
+@minValue(1)
+param containerAppMaxReplicas int = 3
+
+@allowed(['Free', 'Standard'])
+param staticWebAppSku string = 'Free'
+
+@description('Static Web Apps region (limited set: eastus2, centralus, westus2, westeurope, eastasia).')
+param staticWebAppLocation string = 'eastus2'
+
+@description('Functions .NET isolated runtime version.')
+param functionsRuntimeVersion string = '10.0'
+
+@description('Key Vault purge protection — irreversible once on; true for prod.')
+param keyVaultPurgeProtection bool = false
+
+@minValue(7)
+@maxValue(90)
+param keyVaultSoftDeleteRetentionInDays int = 7
+
+@description('Create the Key Vault RSA key the API wraps APIM subscription keys with (#95).')
+param createKeyEncryptionKey bool = true
+
 // Standard tags on every resource. Scale model: one FoundryGate stack per environment
 // per subscription; additional REGIONS scale inside a stack (foundryRegions → pool
 // members, all tagged fg-role=foundry); additional SUBSCRIPTIONS scale by deploying
@@ -261,9 +333,50 @@ module gateway 'modules/ai-gateway.bicep' = {
   dependsOn: [foundryRbac]
 }
 
-// Everything a control plane needs to attach: gateway addresses, the tier products that
-// developer subscriptions scope to, the workspace holding billing-grade token logs,
-// and the identities/names for further role assignments.
+// The app that manages the gateway. Attaches to the gateway/monitoring resources above by
+// name (role assignments on APIM, each Foundry account and the workspace), so it runs
+// after the gateway layer is in place.
+module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
+  name: 'foundrygate-control-plane'
+  scope: rg
+  params: {
+    environmentName: environmentName
+    location: location
+    nameSuffix: nameSuffix
+    tags: standardTags
+    appEnvironment: appEnvironment
+    workspaceId: monitoring.outputs.workspaceId
+    workspaceName: monitoring.outputs.workspaceName
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    apimName: apim.outputs.apimName
+    apimGatewayUrl: apim.outputs.gatewayUrl
+    foundryAccountNames: [for (region, i) in foundryRegions: foundry[i].outputs.accountName]
+    sqlAdminGroupObjectId: sqlAdminGroupObjectId
+    sqlAdminGroupName: sqlAdminGroupName
+    sqlDatabaseSku: sqlDatabaseSku
+    sqlServerless: sqlServerless
+    sqlBackupStorageRedundancy: sqlBackupStorageRedundancy
+    entraTenantId: entraTenantId
+    entraApiClientId: entraApiClientId
+    entraApiAudience: entraApiAudience
+    apiContainerImage: apiContainerImage
+    containerAppMinReplicas: containerAppMinReplicas
+    containerAppMaxReplicas: containerAppMaxReplicas
+    staticWebAppSku: staticWebAppSku
+    staticWebAppLocation: staticWebAppLocation
+    functionsRuntimeVersion: functionsRuntimeVersion
+    keyVaultPurgeProtection: keyVaultPurgeProtection
+    keyVaultSoftDeleteRetentionInDays: keyVaultSoftDeleteRetentionInDays
+    createKeyEncryptionKey: createKeyEncryptionKey
+  }
+  dependsOn: [gateway]
+}
+
+// ---- Outputs: the contract the deploy workflows and the CLI consume -------------
+// Gateway: addresses, the tier products that developer subscriptions scope to, the
+// workspace holding billing-grade token logs, and the identities/names for further role
+// assignments.
+output resourceGroupName string = rg.name
 output apimGatewayUrl string = apim.outputs.gatewayUrl
 output apimName string = apim.outputs.apimName
 output apimPrincipalId string = apim.outputs.principalId
@@ -272,5 +385,35 @@ output openaiApiUrl string = gateway.outputs.openaiApiUrl
 output productIds array = gateway.outputs.productIds
 output defaultProductId string = gateway.outputs.defaultProductId
 output logAnalyticsWorkspaceId string = monitoring.outputs.workspaceId
-output resourceGroupName string = rg.name
+output logAnalyticsWorkspaceName string = monitoring.outputs.workspaceName
+output appInsightsConnectionString string = monitoring.outputs.appInsightsConnectionString
 output foundryAccountNames array = [for (region, i) in foundryRegions: foundry[i].outputs.accountName]
+
+// Control plane: empty strings when deployControlPlane=false. Names follow the convention
+// documented in modules/control-plane.bicep; the deploy workflows read these outputs
+// (az deployment sub show --query properties.outputs) rather than re-deriving names.
+output controlPlaneDeployed bool = deployControlPlane
+output sqlServerName string = deployControlPlane ? controlPlane!.outputs.sqlServerName : ''
+output sqlServerFqdn string = deployControlPlane ? controlPlane!.outputs.sqlServerFqdn : ''
+output sqlDatabaseName string = deployControlPlane ? controlPlane!.outputs.sqlDatabaseName : ''
+output sqlEntraConnectionString string = deployControlPlane ? controlPlane!.outputs.sqlEntraConnectionString : ''
+output sqlAdminGroupName string = deployControlPlane ? controlPlane!.outputs.sqlAdminGroupName : ''
+output keyVaultName string = deployControlPlane ? controlPlane!.outputs.keyVaultName : ''
+output keyVaultUri string = deployControlPlane ? controlPlane!.outputs.keyVaultUri : ''
+output keyEncryptionKeyUri string = deployControlPlane ? controlPlane!.outputs.keyEncryptionKeyUri : ''
+output containerRegistryName string = deployControlPlane ? controlPlane!.outputs.containerRegistryName : ''
+output containerRegistryLoginServer string = deployControlPlane ? controlPlane!.outputs.containerRegistryLoginServer : ''
+output containerAppsEnvironmentName string = deployControlPlane ? controlPlane!.outputs.containerAppsEnvironmentName : ''
+output containerAppName string = deployControlPlane ? controlPlane!.outputs.containerAppName : ''
+output containerAppFqdn string = deployControlPlane ? controlPlane!.outputs.containerAppFqdn : ''
+output functionAppName string = deployControlPlane ? controlPlane!.outputs.functionAppName : ''
+output functionAppHostname string = deployControlPlane ? controlPlane!.outputs.functionAppHostname : ''
+output functionsStorageAccountName string = deployControlPlane ? controlPlane!.outputs.functionsStorageAccountName : ''
+output staticWebAppName string = deployControlPlane ? controlPlane!.outputs.staticWebAppName : ''
+output staticWebAppHostname string = deployControlPlane ? controlPlane!.outputs.staticWebAppHostname : ''
+output apiIdentityName string = deployControlPlane ? controlPlane!.outputs.apiIdentityName : ''
+output apiIdentityClientId string = deployControlPlane ? controlPlane!.outputs.apiIdentityClientId : ''
+output apiIdentityPrincipalId string = deployControlPlane ? controlPlane!.outputs.apiIdentityPrincipalId : ''
+output functionsIdentityName string = deployControlPlane ? controlPlane!.outputs.functionsIdentityName : ''
+output functionsIdentityClientId string = deployControlPlane ? controlPlane!.outputs.functionsIdentityClientId : ''
+output functionsIdentityPrincipalId string = deployControlPlane ? controlPlane!.outputs.functionsIdentityPrincipalId : ''
