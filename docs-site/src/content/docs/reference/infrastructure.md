@@ -169,7 +169,23 @@ Not expressible in Bicep. Two of these the deploy pipeline now does itself throu
 | **Runner / developer firewall rules** on the SQL server | **Automated**: `foundrygate ip setup --env {env}` and `ip cleanup` — see [Firewall model](#firewall-model-for-azure-sql). ([#96](https://github.com/kolatts/foundry-gate/issues/96)) |
 | The CI/OIDC principal must be a **member of the SQL Entra admin group** or the dacpac deploy, the seeders and `db grant-identities` cannot connect (there is no password fallback by design). It also needs **SQL Server Contributor** (or Contributor) on the resource group for the firewall-rule writes. | Operator (#109) |
 | Runtime creation of **Claude** deployments needs Marketplace/SaaS permissions beyond Cognitive Services Contributor | Operator ([#107](https://github.com/kolatts/foundry-gate/issues/107)) |
-| Graph application permissions for the Entra sync go on the API identity's service principal — no client secret | Operator ([#110](https://github.com/kolatts/foundry-gate/issues/110)) |
+| **Microsoft Graph application roles** for the Entra sync on the API identity's service principal — no client secret; details below | Operator ([#110](https://github.com/kolatts/foundry-gate/issues/110)) |
+
+The Graph roles go on the API identity's service principal (`id-foundrygate-api-{env}`) as
+app-role assignments on the Microsoft Graph service principal (appId
+`00000003-0000-0000-c000-000000000000`); `az ad app permission` does not apply to managed
+identities, and no separate admin-consent step is needed. Least privilege per the Graph
+reference for each call the API makes:
+
+| Graph app role | Used for |
+|---|---|
+| `Application.Read.All` | `GET /servicePrincipals(appId='{clientId}')` and `GET /servicePrincipals/{id}/appRoleAssignedTo` — who is assigned to FoundryGate |
+| `User.Read.All` | `GET /users?$filter=id in (...)&$select=id,displayName,mail,userPrincipalName,employeeId` and `GET /users/{id}` |
+| `GroupMember.ReadBasic.All` | `GET /groups/{id}/members` / `transitiveMembers` with `$select=id` (group sync, #41) |
+
+Verification runbook and a PowerShell grant snippet:
+[#120](https://github.com/kolatts/foundry-gate/issues/120). Locally the Azure CLI login is
+used instead, so the developer's own delegated Graph access applies.
 
 ## What the hosts are told
 

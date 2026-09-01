@@ -15,13 +15,13 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 | `ApimResourceId` | `""` | ARM resource ID of the APIM instance (`/subscriptions/.../Microsoft.ApiManagement/service/...`). Used by `IApimKeyService` to target Management plane calls. |
 | `ApimGatewayUrl` | `""` | APIM gateway base URL shown to developers on `/me` for CLI configuration (e.g., `https://my-apim.azure-api.net`). |
 | `ApimProductId` | `"foundrygate"` | APIM product name that all Foundry API routes belong to. New APIM subscriptions are scoped to this product. |
-| `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. Used by `IFoundryDeploymentService` for model deployment management. |
+| `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. **Superseded** for deployment management by the `Gateway__*` environment variables below (the gateway runs one account per region, and infra sets them, so nothing has to be typed here); kept as seeded reference data. |
 | `EntraTenantId` | `""` | Azure AD tenant ID used by the Microsoft Graph SDK for bulk user sync. |
 | `EntraGroupSyncEnabled` | `"false"` | Set to `"true"` to enable automatic Entra group member sync. When `false`, group sync must be triggered manually from the admin UI. |
 | `ResetDayOfMonth` | `"1"` | Day the monthly quota reset fires. Always `"1"` in v1 — changing this is unsupported and reserved for a future release. |
 
 <Aside type="caution">
-Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl`, `ApimProductId`, and `FoundryResourceId` are set to real values.
+Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl` and `ApimProductId` are set to real values. Foundry deployment management reads the `Gateway__*` variables instead, which infra sets automatically.
 </Aside>
 
 ---
@@ -48,12 +48,12 @@ and referenced from appsettings as `@KeyVault(SecretName)`.
 | `Cors__AllowedOrigins__0` | env var | The Static Web App origin allowed to call `/api/v1` |
 | `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | env var | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` |
 | `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl` | env var | Where the APIM instance lives — for subscription create/rotate/delete and alias named-value edits |
-| `Gateway__FoundryAccountNames__{i}` | env var | Foundry account names in pool order (index 0 = primary) — for model deployment management |
+| `Gateway__FoundryAccountNames__{i}` | env var | Foundry account names in pool order (index 0 = primary) — the API manages OpenAI model deployments in exactly these accounts. The whole `Gateway` section may be absent locally (no gateway to manage; `/foundry/*` then answers `503`); account names without a subscription/resource group fail startup |
 | `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | env var | Workspace GUID (what the Log Analytics query API calls the workspace id) / ARM resource id |
 | `Gateway__KeyEncryptionKeyUri` | env var | Versionless Key Vault key URI for wrapping APIM subscription keys at rest |
-| `Azure__KeyVaultUri` | Config / env var | Key Vault URI for key wrapping (APIM key encryption) |
-| `Graph__ClientId` | Config / env var | App registration client ID for Graph SDK (may differ from AzureAd__ClientId) |
-| `Graph__ClientSecret` | Key Vault secret | Client secret for Graph app-only credentials |
+| `Entra__Enabled` | env var | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` (see the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)). While `false`, the sync endpoints return `400`. |
+| `Entra__ServicePrincipalObjectId` | env var | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application. |
+| `Entra__GraphBaseUrl` | env var | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it). |
 
 ---
 

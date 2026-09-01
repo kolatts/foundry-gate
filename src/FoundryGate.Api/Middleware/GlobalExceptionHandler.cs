@@ -18,7 +18,10 @@ namespace FoundryGate.Api.Middleware;
 /// </summary>
 /// <remarks>
 /// Mapping: <see cref="KeyNotFoundException"/> → 404, <see cref="ArgumentException"/> → 400,
-/// <see cref="ConflictException"/> → 409, <see cref="UnauthorizedAccessException"/> → 403.
+/// <see cref="ConflictException"/> → 409, <see cref="UnauthorizedAccessException"/> → 403,
+/// <see cref="FeatureNotConfiguredException"/> → 503 (an optional feature's configuration is
+/// absent or points at a missing Azure resource — the operator's problem, described on the wire
+/// so the UI can tell "not set up" from "broken").
 /// </remarks>
 public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
 {
@@ -40,6 +43,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
             ConflictException => (StatusCodes.Status409Conflict, "Conflict"),
             ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request"),
             UnauthorizedAccessException => (StatusCodes.Status403Forbidden, "Forbidden"),
+            FeatureNotConfiguredException => (StatusCodes.Status503ServiceUnavailable, "Service unavailable — feature not configured"),
             _ => null,
         };
 
