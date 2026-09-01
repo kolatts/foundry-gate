@@ -1,7 +1,7 @@
 # APIM GenAI gateway — real-time token quotas, 429 smoothing, and backend pools
 
 > GitHub: #81
-> Milestone: v0.2 — Core API (enforcement) + v0.3 — Infrastructure (Bicep)
+> Milestone: v0.5 — GenAI gateway
 > Labels: epic, backend, infra
 
 ## Overview

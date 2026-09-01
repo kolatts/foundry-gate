@@ -50,7 +50,22 @@ any docs/issues are rewritten.
 | 7 | GitHub issues: new gateway epic + sub-issues; comments on affected epics (#7, #10, #13, #60) | ✅ done (epic #81, sub-issues #82–#85, 4 comments) |
 | 8 | Docs site builds clean locally (`npm run build`) | ✅ 11 pages, asides verified rendering |
 | 9 | Commit + push to designated branch (mirrored to main) | ✅ done |
-| 10 | Follow-ups (not started): CLI-setup rewrite ripples into `/me` panel spec (#85); `estimate-prompt-tokens` PoC; Bicep implementation per #13 comment | ⬜ future work |
+| 10 | Follow-ups (not started): CLI-setup rewrite ripples into `/me` panel spec (#85); `estimate-prompt-tokens` PoC; Bicep implementation per #13 comment | 🔄 session 2 (below) |
+
+## Session 2 — live validation pass (2026-09-01, branch `claude/fable-refactor-review-212bae`)
+
+Decision log: `fable-refactor-log.md`. Scope: execute task 10 empirically against the
+Imagile Paid subscription (`rg-foundrygate-test`, torn down after).
+
+| # | Item | Status |
+|---|------|--------|
+| 10a | `infra/` Bicep: Foundry accounts + deployments, APIM StandardV2, backend pools + circuit breakers, Anthropic/OpenAI front doors, llm policies, LLM logging pipeline | ✅ authored |
+| 10b | Live deploy to Imagile Paid | 🔄 gateway layer deploying; Claude deployments fighting Anthropic RP fragility (E-007) |
+| 10c | Validation matrix T1–T11 (front doors, 429/403, metrics, LlmLog, pool failover, cache counting, real Claude Code + Codex runs) | ⬜ pending 10b |
+| 10d | Routers/classifiers investigation (user request) → `plans/25-model-aliases-routing.md`: adopt alias map + per-product allowlist; reject Model Router / semantic cache / prompt classifiers for CLI traffic | ✅ done |
+| 10e | Docs-site restyle: generated on-palette nebula (WebP, −94% weight), hero copy fixed to real-time enforcement | ✅ done |
+| 10f | Validation results → docs/plan updates + issue comments; Azure teardown; push | ⬜ pending |
+| 10g | Landing page → dead-simple non-technical explainer with demo data + real test evidence; docs get progressive "how it works" (simple → detailed); repo CLAUDE.md rule: check/update these on every change | 🔄 agent (last item) |
 
 ## Research findings
 
@@ -219,6 +234,10 @@ quota values need a PoC on expression support — tiers-as-products is the fallb
   not rendering, import line shown as text) renamed to `.mdx`
   (azure-rate-limits, configuration, contributing).
 
-## Issue changes made
+## Issue changes made (session 2)
 
-_None yet._
+- **#86** [Epic] Model aliases, access control, and routing posture (new, from plan 25).
+- Milestone **v0.5 — GenAI gateway** created; #81–#86 assigned to it.
+- Direction comments added to **#9** (subscriptions attach to tier products; suspension
+  is offboarding-only) and **#64** (quota exhaustion = real-time 403, never
+  subscription state).
