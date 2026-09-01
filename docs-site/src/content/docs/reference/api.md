@@ -34,6 +34,7 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
+| `GET` | `/quota/tiers` | Any | The configured budget tiers `{ productId, displayName, monthlyTokenQuota, isUnlimited }` — the only values a quota may take |
 | `GET` | `/quota/allocations` | Admin | All current-period allocations, paged (`?page=&pageSize=`), ordered by user display name; includes `userDisplayName`/`userEmail` |
 | `GET` | `/quota/allocations/me` | Any | Own current allocation. Resolved and created on the first call of the month (`tokensUsed = 0`, no `resetDate`). `403` until `GET /users/me` has provisioned the caller. |
 | `GET` | `/quota/allocations/{userId}` | Admin | Specific user's current allocation. Read-only: `404` if the user has none for this period yet. |
@@ -47,13 +48,19 @@ unlimited — `tokensUsed`, `percentUsed`, `isHardStopped`):
 - `resolvedLevelType` — which level of the five-level precedence chain produced the quota:
   `0` UserUnlimited, `1` UserOverride, `2` GroupUnlimited, `3` GroupMax, `4` SystemDefault.
   User-level settings (0, 1) always beat group-level ones (2, 3).
-- `tierProductId` — the APIM tier product (`standard` / `power` / `unlimited`) the numeric
-  quota mapped to: unlimited → `unlimited`; otherwise the smallest tier whose configured cap
-  (`Gateway:Tiers`, see [Configuration](/foundry-gate/reference/configuration/)) is ≥ the quota.
-  **This is what the gateway enforces**, not `allocatedTokens`.
-- `isGatewayCapped` — `true` when the quota exceeds every finite tier cap. The developer is
-  placed on the largest finite tier and the gateway returns `403` at *that tier's* cap, below
-  their nominal quota. Raise the tier caps in infra or grant unlimited to clear it.
+- `tierProductId` — the APIM tier product (`standard` / `power` / `unlimited`) this budget
+  *is*. **The rule: a finite monthly token quota must equal a configured tier's cap
+  (`Gateway:Tiers`, see [Configuration](/foundry-gate/reference/configuration/)), or be
+  unlimited.** Every write path that accepts a quota (`PUT /users/{id}/quota`, group
+  create/update, request approval) rejects anything else with `400` listing the allowed
+  values; `GET /quota/tiers` is the list to offer. The tier is what the gateway enforces,
+  so under this rule `allocatedTokens` and the enforced cap are the same number.
+- `isGatewayCapped` — `true` only for a legacy or hand-edited value that matches no tier
+  cap. Reads never fail on such a row: it is enforced at the next tier up (or the largest
+  finite tier) and flagged so an admin can correct it to a tier. To offer a new budget size,
+  add a tier in both places: `quotaTiers` in `infra/main.bicep` (creates the APIM product and
+  its policy) and `Gateway:Tiers` in the Api configuration (a predeployment test keeps them in
+  step).
 
 `POST /quota/reset` re-resolves every **active** user's allocation for the current UTC month
 in one transaction: rows that do not exist are created with `tokensUsed = 0`; rows that do

@@ -82,19 +82,21 @@ public sealed class QuotaResolutionService(
         }
 
         // "Previous tier" for users with no row this period = the tier on their most recent earlier
-        // allocation. Picked in memory: one projected query beats a per-user round-trip, and a
-        // GroupBy-with-ordered-First is not something every provider translates.
+        // allocation — one windowed query (ROW_NUMBER per user) returning at most one row per user,
+        // never the whole allocation history. Inferring from history at all goes away once #118 records
+        // the product a subscription is actually on.
         var needPrior = ids.Where(id => !existingByUser.ContainsKey(id)).ToList();
         var priorTierByUser = needPrior.Count == 0
             ? new Dictionary<int, string>()
-            : (await dbContext.QuotaAllocations.AsNoTracking()
+            : await dbContext.QuotaAllocations.AsNoTracking()
                 .Where(a => needPrior.Contains(a.UserId) && (a.PeriodYear < period.Year || (a.PeriodYear == period.Year && a.PeriodMonth < period.Month)))
-                .Select(a => new { a.UserId, a.PeriodYear, a.PeriodMonth, a.TierProductId })
-                .ToListAsync(cancellationToken))
                 .GroupBy(a => a.UserId)
-                .ToDictionary(
-                    g => g.Key,
-                    g => g.OrderByDescending(a => a.PeriodYear).ThenByDescending(a => a.PeriodMonth).First().TierProductId);
+                .Select(g => g
+                    .OrderByDescending(a => a.PeriodYear)
+                    .ThenByDescending(a => a.PeriodMonth)
+                    .Select(a => new { a.UserId, a.TierProductId })
+                    .First())
+                .ToDictionaryAsync(x => x.UserId, x => x.TierProductId, cancellationToken);
 
         var results = new List<QuotaResolution>(ids.Count);
         foreach (var id in ids)
@@ -175,7 +177,7 @@ public sealed class QuotaResolutionService(
         if (tier.IsGatewayCapped)
         {
             logger.LogWarning(
-                "User {UserId} resolved to {AllocatedTokens} tokens ({Level}) for {Period}, above every finite tier cap; the gateway will enforce tier {TierProductId}'s cap instead.",
+                "User {UserId} resolved to {AllocatedTokens} tokens ({Level}) for {Period}, which matches no configured tier cap; the gateway will enforce tier {TierProductId}'s cap instead. Correct the value to a tier.",
                 user.UserId,
                 quota,
                 level,

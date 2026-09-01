@@ -34,16 +34,16 @@ namespace FoundryGate.Domain.Quota.Contracts;
 /// </param>
 /// <param name="ResolvedLevelType">Which level of the five-level precedence chain produced <paramref name="AllocatedTokens"/> — so the UI can say "from your group Platform Engineering" rather than just a number.</param>
 /// <param name="TierProductId">
-/// The APIM tier product (<see cref="Constants.GatewayTiers"/>) the numeric quota mapped to — the
-/// smallest tier whose cap covers it. <b>This is what the gateway enforces</b>, not
-/// <paramref name="AllocatedTokens"/>: APIM's <c>token-quota</c> is a per-product literal, so a
-/// developer on the Standard tier is cut off at that tier's cap, whatever their numeric quota says.
+/// The APIM tier product (<see cref="Constants.GatewayTiers"/>) this budget is. A monthly budget
+/// <em>is</em> a tier: every quota the control plane accepts equals a configured tier cap or is
+/// unlimited (see <see cref="QuotaTierResponse"/>), so normally <paramref name="AllocatedTokens"/> and
+/// this tier's cap are the same number. <b>The tier is what the gateway enforces</b> — APIM's
+/// <c>token-quota</c> is a per-product literal.
 /// </param>
 /// <param name="IsGatewayCapped">
-/// True when <paramref name="AllocatedTokens"/> exceeds every finite tier's cap, so the developer
-/// landed on the largest finite tier and the gateway will 403 at <em>that tier's</em> cap, below
-/// their numeric quota. Surfaced so admins can see the allocation is not fully honoured and either
-/// raise the tier caps (infra) or grant unlimited.
+/// True when <paramref name="AllocatedTokens"/> did not match any configured tier cap (a legacy or
+/// hand-edited value) and is therefore enforced at the next tier up — or the largest finite tier —
+/// rather than at the number shown. Surfaced so admins can correct the value to a tier.
 /// </param>
 /// <param name="ResetDate">When this period's allocation row was last (re)computed by a monthly/manual reset; null for a row created on demand (first <c>/me</c> of the month).</param>
 public record QuotaAllocationResponse(
@@ -63,6 +63,22 @@ public record QuotaAllocationResponse(
     string TierProductId,
     bool IsGatewayCapped,
     DateTimeOffset? ResetDate);
+
+/// <summary>
+/// One configured budget tier — GET /quota/tiers (any authenticated user). The values an admin (or
+/// an approval) may set as a monthly token quota are exactly these: a finite quota must equal a
+/// tier's <paramref name="MonthlyTokenQuota"/>, or be unlimited. The UI offers these as the choices
+/// rather than a free-form number.
+/// </summary>
+/// <param name="ProductId">APIM product id (<see cref="Constants.GatewayTiers"/>), e.g. <c>standard</c>.</param>
+/// <param name="DisplayName">Human-readable tier name, e.g. <c>Standard</c>.</param>
+/// <param name="MonthlyTokenQuota">The tier's cap; <see langword="null"/> for the unlimited tier (same convention as <see cref="QuotaAllocationResponse.AllocatedTokens"/>).</param>
+/// <param name="IsUnlimited">True for the tier with no gateway-enforced monthly budget.</param>
+public record QuotaTierResponse(
+    string ProductId,
+    string DisplayName,
+    long? MonthlyTokenQuota,
+    bool IsUnlimited);
 
 /// <summary>
 /// Result of POST /quota/reset (spec &#167;6, admin-triggered manual reset). Idempotent: every

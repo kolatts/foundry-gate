@@ -15,7 +15,9 @@ developer their own key, their own monthly budget, or their own usage meter — 
 one shared pool, and one person can drain it for everyone. FoundryGate fixes that.
 Each developer automatically gets a personal key and a monthly AI budget; every
 request is counted; when the budget runs out, requests stop instantly; and asking
-for more is one click to request, one click to approve.
+for more is one click to request, one click to approve. Budgets come in a few set
+sizes — a standard one, a bigger one for heavy users, and unlimited — so "more"
+means moving up a size, not haggling over a number.
 
 The rest of this page explains the same idea in more technical terms. For the
 next level of detail, see the [system overview](/foundry-gate/architecture/overview/).
@@ -39,7 +41,7 @@ That works fine when you have three engineers sharing a dev environment. It brea
 
 <CardGrid>
   <Card title="Per-developer token budgets" icon="bars">
-    Azure AI Foundry has no concept of "alex@company.com gets 1 million tokens in June." FoundryGate assigns each developer their own monthly quota — enforced at the APIM subscription level, not as a soft warning.
+    Azure AI Foundry has no concept of "alex@company.com gets 5 million tokens in June." FoundryGate assigns each developer a monthly budget tier — Standard, Power or Unlimited — enforced at the APIM subscription level, not as a soft warning.
   </Card>
   <Card title="Individual APIM subscription keys" icon="key">
     Instead of a shared key or RBAC access, every developer gets their own APIM subscription key. Usage is attributed per person. Keys can be rotated or revoked per person without affecting anyone else.
@@ -187,7 +189,7 @@ FoundryGate sets up the gateway (Azure API Management) and the AI model deployme
 
 **Key provisioning**: When a developer first signs in, FoundryGate calls the APIM Management API to create an APIM subscription under the developer's budget tier (Standard, Power or Unlimited). The key is issued to the developer. Foundry never knows about individual developers — APIM does.
 
-**Quota enforcement**: The gateway itself enforces each developer's budget in real time. APIM's `llm-token-limit` policy, keyed on the developer's subscription, carries their monthly token quota (requests return `403` the moment it's spent — no polling lag) and a per-minute token cap (bursts get `429 + Retry-After`, which coding CLIs back off on automatically). Budgets reset with the UTC calendar month on their own. A reconciliation Function keeps the dashboard's usage and cost figures authoritative from the gateway's request logs.
+**Quota enforcement**: The gateway itself enforces each developer's budget in real time. A budget *is* one of the configured tiers — the tier product's policy carries the monthly token quota, which is why quotas come in set sizes rather than arbitrary numbers. APIM's `llm-token-limit` policy, keyed on the developer's subscription, carries their monthly token quota (requests return `403` the moment it's spent — no polling lag) and a per-minute token cap (bursts get `429 + Retry-After`, which coding CLIs back off on automatically). Budgets reset with the UTC calendar month on their own. A reconciliation Function keeps the dashboard's usage and cost figures authoritative from the gateway's request logs.
 
 <Aside type="caution">
 **Two separate layers.** FoundryGate's per-developer budgets and caps ride on top of Microsoft Foundry's own deployment-level rate pools (requests per minute, uncached-input tokens per minute, output tokens per minute for Claude), which are shared across all callers. FoundryGate *mitigates* saturation — per-developer caps keep any one person from exhausting the pool, and multi-deployment backend pools reroute around 429s — but it cannot manufacture capacity beyond the platform's ceilings. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/) for the current numbers and [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) for how the mitigation works.

@@ -3,6 +3,7 @@ using System.Text.Json;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Common;
@@ -19,8 +20,8 @@ namespace FoundryGate.Tests.Predeployment.Api.Services.Quota;
 
 /// <summary>
 /// The <c>/quota</c> orchestration (#33) over the real resolution service, accessor, audit writer and a
-/// movable clock: <c>/me</c> auto-creation, the admin reads, and the idempotent reset's exact
-/// preserve/clear/audit semantics.
+/// movable clock: <c>/me</c> auto-creation (active users only), the admin reads, the tier list, and the
+/// idempotent reset's exact preserve/clear/audit semantics — including losing a race to a concurrent writer.
 /// </summary>
 public class QuotaAllocationServiceTests : InMemoryDatabaseTest
 {
@@ -30,13 +31,26 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
     private readonly MutableTimeProvider _clock = new(Now);
     private readonly RecordingGatewayTierSync _tierSync = new();
 
+    // -- ListTiers --
+
+    [Fact]
+    public void ListTiers_returns_finite_tiers_ascending_then_unlimited_with_display_names()
+    {
+        var tiers = CreateService("any").ListTiers();
+
+        Assert.Equal([GatewayTiers.Standard, GatewayTiers.Power, GatewayTiers.Unlimited], tiers.Select(t => t.ProductId));
+        Assert.Equal(["Standard", "Power", "Unlimited"], tiers.Select(t => t.DisplayName));
+        Assert.Equal([TestGatewayTiers.StandardCap, TestGatewayTiers.PowerCap, null], tiers.Select(t => t.MonthlyTokenQuota));
+        Assert.Equal([false, false, true], tiers.Select(t => t.IsUnlimited));
+    }
+
     // -- GetMyAllocationAsync --
 
     [Fact]
     public async Task GetMyAllocationAsync_creates_and_saves_the_callers_allocation_on_first_call_then_returns_the_same_row()
     {
         await SeedReferenceDataAsync();
-        var me = await SeedUserAsync("Ada Lovelace", u => u.MonthlyTokenQuota = 2_000_000);
+        var me = await SeedUserAsync("Ada Lovelace", u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
         var service = CreateService(me.EntraObjectId);
 
         var first = await service.GetMyAllocationAsync(CancellationToken.None);
@@ -49,11 +63,11 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         Assert.Equal(me.Email, first.UserEmail);
         Assert.Equal((Period.Year, Period.Month), (first.PeriodYear, first.PeriodMonth));
         Assert.False(first.IsUnlimited);
-        Assert.Equal(2_000_000, first.AllocatedTokens);
+        Assert.Equal(TestGatewayTiers.PowerCap, first.AllocatedTokens);
         Assert.Equal(0, first.TokensUsed);
         Assert.Equal(0d, first.PercentUsed);
         Assert.Equal(QuotaLevelType.UserOverride, first.ResolvedLevelType);
-        Assert.Equal(GatewayTiers.Standard, first.TierProductId);
+        Assert.Equal(GatewayTiers.Power, first.TierProductId);
         Assert.False(first.IsGatewayCapped);
         Assert.Null(first.ResetDate); // on-demand rows are not "reset" rows
         Assert.Equal(1, await Context.QuotaAllocations.AsNoTracking().CountAsync(a => a.UserId == me.UserId)); // persisted, once
@@ -64,7 +78,7 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
     public async Task GetMyAllocationAsync_follows_the_clock_into_a_new_period()
     {
         await SeedReferenceDataAsync();
-        var me = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = 100);
+        var me = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
         var service = CreateService(me.EntraObjectId);
 
         var september = await service.GetMyAllocationAsync(CancellationToken.None);
@@ -98,6 +112,25 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
             CreateService("no-such-oid").GetMyAllocationAsync(CancellationToken.None));
 
         Assert.Contains("GET /users/me", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetMyAllocationAsync_throws_UnauthorizedAccessException_for_a_deactivated_user_and_creates_nothing()
+    {
+        await SeedReferenceDataAsync();
+        var me = await SeedUserAsync("Gone", u =>
+        {
+            u.IsActive = false;
+            u.ApimSubscriptionId = "sub-gone";
+        });
+
+        var exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            CreateService(me.EntraObjectId).GetMyAllocationAsync(CancellationToken.None));
+
+        Assert.Contains("deactivated", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"POST /users/{me.UserId}/activate", exception.Message, StringComparison.Ordinal);
+        Assert.False(await Context.QuotaAllocations.AsNoTracking().AnyAsync(a => a.UserId == me.UserId));
+        Assert.Empty(_tierSync.Calls); // and no tier sync onto a product either
     }
 
     // -- GetUserAllocationAsync --
@@ -191,10 +224,10 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         var admin = await SeedUserAsync("Admin", u => u.IsUnlimited = true);
-        var fresh = await SeedUserAsync("Fresh", u => u.MonthlyTokenQuota = 100);
-        var midMonth = await SeedUserAsync("MidMonth", u => u.MonthlyTokenQuota = 200);
+        var fresh = await SeedUserAsync("Fresh", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var midMonth = await SeedUserAsync("MidMonth", u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
         var inactive = await SeedUserAsync("Gone", u => u.IsActive = false);
-        await SeedAllocationAsync(midMonth, Period, allocated: 50, tokensUsed: 777, isHardStopped: true);
+        await SeedAllocationAsync(midMonth, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 777, isHardStopped: true);
         var service = CreateService(admin.EntraObjectId);
 
         var result = await service.ResetAsync(CancellationToken.None);
@@ -210,11 +243,11 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
 
         var freshRow = rows.Single(r => r.UserId == fresh.UserId);
         Assert.Equal(0, freshRow.TokensUsed);
-        Assert.Equal(100, freshRow.AllocatedTokens);
+        Assert.Equal(TestGatewayTiers.StandardCap, freshRow.AllocatedTokens);
 
         var midMonthRow = rows.Single(r => r.UserId == midMonth.UserId);
         Assert.Equal(777, midMonthRow.TokensUsed); // preserved: the gateway window, not the reset, zeroes usage
-        Assert.Equal(200, midMonthRow.AllocatedTokens); // re-resolved
+        Assert.Equal(TestGatewayTiers.PowerCap, midMonthRow.AllocatedTokens); // re-resolved
 
         var audit = Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaAllocationReset).ToListAsync());
         Assert.Equal(admin.UserId, audit.ActorUserId);
@@ -224,7 +257,6 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         Assert.Equal(3, details.RootElement.GetProperty("usersResetCount").GetInt32());
         Assert.Equal(Period.Year, details.RootElement.GetProperty("periodYear").GetInt32());
         Assert.Equal(Period.Month, details.RootElement.GetProperty("periodMonth").GetInt32());
-        Assert.Equal(2, details.RootElement.GetProperty("createdCount").GetInt32());
     }
 
     [Fact]
@@ -232,7 +264,7 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         var admin = await SeedUserAsync("Admin");
-        var dev = await SeedUserAsync("Dev", u => u.MonthlyTokenQuota = 100);
+        var dev = await SeedUserAsync("Dev", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
         var service = CreateService(admin.EntraObjectId);
 
         var first = await service.ResetAsync(CancellationToken.None);
@@ -251,6 +283,39 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         Assert.Equal(4_242, devRow.TokensUsed);
         Assert.Equal(Now.AddHours(1), devRow.ResetDate); // stamped by the latest run
         Assert.Equal(2, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.QuotaAllocationReset)); // one per run
+    }
+
+    [Fact]
+    public async Task ResetAsync_that_loses_a_race_to_a_concurrent_writer_adopts_the_winning_rows_and_still_commits_once()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var racer = await SeedUserAsync("Racer", u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
+        var calm = await SeedUserAsync("Calm", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+
+        // Between our resolution and our save, "someone else" (a developer's first /me, another admin's
+        // reset) inserts Racer's row for this period with usage already reconciled onto it.
+        var raceInserter = new RacingResolutionService(
+            new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance),
+            Context.Database.GetConnectionString()!,
+            racer.UserId,
+            Period);
+        var service = CreateService(admin.EntraObjectId, raceInserter);
+
+        var result = await service.ResetAsync(CancellationToken.None);
+
+        Assert.Equal(3, result.UsersResetCount);
+        var rows = await Context.QuotaAllocations.AsNoTracking().Where(a => a.PeriodYear == Period.Year && a.PeriodMonth == Period.Month).ToListAsync();
+        Assert.Equal(3, rows.Count); // no duplicate for Racer, no bare 500
+        var racerRow = rows.Single(r => r.UserId == racer.UserId);
+        Assert.Equal(raceInserter.InsertedAllocationId, racerRow.QuotaAllocationId); // the winner's row was adopted…
+        Assert.Equal(999, racerRow.TokensUsed); // …with its usage intact…
+        Assert.Equal(TestGatewayTiers.PowerCap, racerRow.AllocatedTokens); // …and our resolution applied
+        Assert.Equal(GatewayTiers.Power, racerRow.TierProductId);
+        Assert.False(racerRow.IsHardStopped);
+        Assert.Equal(Now, racerRow.ResetDate);
+        Assert.Equal(Now, rows.Single(r => r.UserId == calm.UserId).ResetDate);
+        Assert.Equal(1, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.QuotaAllocationReset)); // still exactly one
     }
 
     [Fact]
@@ -286,17 +351,18 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
     // -- Helpers --
 
     /// <summary>Real accessor + real audit + real resolution over this test's context, as DI would wire them per request.</summary>
-    private QuotaAllocationService CreateService(string oid)
+    private QuotaAllocationService CreateService(string oid, IQuotaResolutionService? resolution = null)
     {
         var identity = new ClaimsIdentity([new Claim(ClaimConstants.Oid, oid)], "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
         var auditWriter = new AuditWriter(Context, _clock);
-        var resolution = new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance);
+        resolution ??= new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance);
 
         return new QuotaAllocationService(
             Context,
             resolution,
+            TestGatewayTiers.Mapper(),
             accessor,
             new AuditService(Context, auditWriter, accessor),
             _clock,
@@ -333,5 +399,42 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         Context.QuotaAllocations.Add(allocation);
         await Context.SaveChangesAsync();
         Context.Entry(allocation).State = EntityState.Detached;
+    }
+
+    /// <summary>
+    /// Wraps the real resolution service and, right after <c>ResolveManyAsync</c> has Added its rows,
+    /// inserts one of them through a <em>second</em> connection to the same shared-cache SQLite database —
+    /// exactly the window a concurrent reset or <c>/me</c> would hit. Hand-rolled (no mocking library).
+    /// </summary>
+    private sealed class RacingResolutionService(IQuotaResolutionService inner, string connectionString, int racerUserId, BillingPeriod racePeriod) : IQuotaResolutionService
+    {
+        public int InsertedAllocationId { get; private set; }
+
+        public Task<QuotaResolution> ResolveAsync(int userId, BillingPeriod period, CancellationToken cancellationToken) =>
+            inner.ResolveAsync(userId, period, cancellationToken);
+
+        public async Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(IReadOnlyCollection<int> userIds, BillingPeriod period, CancellationToken cancellationToken)
+        {
+            var results = await inner.ResolveManyAsync(userIds, period, cancellationToken);
+
+            var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connectionString).Options;
+            await using var other = new AppDbContext(options);
+            var winner = new QuotaAllocation
+            {
+                UserId = racerUserId,
+                PeriodYear = racePeriod.Year,
+                PeriodMonth = racePeriod.Month,
+                AllocatedTokens = 1,
+                TokensUsed = 999,
+                IsHardStopped = true,
+                ResolvedLevelType = QuotaLevelType.SystemDefault,
+                TierProductId = GatewayTiers.Standard,
+            };
+            other.QuotaAllocations.Add(winner);
+            await other.SaveChangesAsync(cancellationToken);
+            InsertedAllocationId = winner.QuotaAllocationId;
+
+            return results;
+        }
     }
 }

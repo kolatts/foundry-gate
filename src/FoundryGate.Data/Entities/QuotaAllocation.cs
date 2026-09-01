@@ -50,20 +50,20 @@ public class QuotaAllocation
     public QuotaLevelType ResolvedLevelType { get; set; }
 
     /// <summary>
-    /// The APIM tier product (<c>FoundryGate.Domain.Constants.GatewayTiers</c>) the resolved quota
-    /// mapped to — the smallest tier whose configured cap covers <see cref="AllocatedTokens"/>, or the
-    /// unlimited tier. This, not the numeric quota, is what the gateway enforces: <c>token-quota</c>
-    /// is a per-product literal (#82), so the developer's subscription is issued against this product.
+    /// The APIM tier product (<c>FoundryGate.Domain.Constants.GatewayTiers</c>) this budget is. A
+    /// monthly budget <em>is</em> a tier (D-013): every quota the control plane accepts equals a
+    /// configured tier cap or is unlimited, so <see cref="AllocatedTokens"/> and this tier's cap normally
+    /// agree. The tier, not the number, is what the gateway enforces — <c>token-quota</c> is a
+    /// per-product literal (#82) — so the developer's subscription is issued against this product.
     /// </summary>
     [Required]
     [StringLength(64)]
     public string TierProductId { get; set; } = string.Empty;
 
     /// <summary>
-    /// True when <see cref="AllocatedTokens"/> exceeds every finite tier's cap: the developer landed
-    /// on the largest finite tier and the gateway will 403 at that tier's cap, below their numeric
-    /// quota. A real, user-visible semantic — surfaced so admins know the allocation is not fully
-    /// honoured until the tier caps are raised (infra) or the user is made unlimited.
+    /// True when <see cref="AllocatedTokens"/> did not match any configured tier cap (a legacy or
+    /// hand-edited value) and is therefore enforced at the next tier up — or the largest finite tier —
+    /// rather than at the number stored. Surfaced so admins can correct the value to a tier.
     /// </summary>
     public bool IsGatewayCapped { get; set; }
 

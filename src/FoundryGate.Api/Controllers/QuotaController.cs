@@ -14,6 +14,12 @@ namespace FoundryGate.Api.Controllers;
 /// </summary>
 public sealed class QuotaController(IQuotaAllocationService quotaAllocations) : ApiControllerBase
 {
+    /// <summary>The configured budget tiers — the only values a monthly token quota may take. Any authenticated user.</summary>
+    [HttpGet("tiers")]
+    [ProducesResponseType<IReadOnlyList<QuotaTierResponse>>(StatusCodes.Status200OK)]
+    public IReadOnlyList<QuotaTierResponse> ListTiers() =>
+        quotaAllocations.ListTiers();
+
     /// <summary>Admin: every allocation for the current UTC calendar month, paged, ordered by user display name.</summary>
     [HttpGet("allocations")]
     [Authorize(Policy = PolicyNames.AdminOnly)]

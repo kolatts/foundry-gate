@@ -20,6 +20,7 @@ namespace FoundryGate.Api.Services.Quota;
 public sealed class QuotaAllocationService(
     AppDbContext dbContext,
     IQuotaResolutionService quotaResolution,
+    GatewayTierMapper tierMapper,
     ICurrentUserAccessor currentUser,
     IAuditService audit,
     TimeProvider timeProvider,
@@ -47,6 +48,14 @@ public sealed class QuotaAllocationService(
         a.ResetDate);
 
     /// <inheritdoc />
+    public IReadOnlyList<QuotaTierResponse> ListTiers() =>
+        [.. tierMapper.Tiers.Select(t => new QuotaTierResponse(
+            t.ProductId,
+            string.IsNullOrWhiteSpace(t.DisplayName) ? t.ProductId : t.DisplayName,
+            t.IsUnlimited ? null : t.MonthlyTokenQuota,
+            t.IsUnlimited))];
+
+    /// <inheritdoc />
     public async Task<PagedResult<QuotaAllocationResponse>> ListCurrentPeriodAsync(PagedRequest paging, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(paging);
@@ -70,6 +79,16 @@ public sealed class QuotaAllocationService(
     public async Task<QuotaAllocationResponse> GetMyAllocationAsync(CancellationToken cancellationToken)
     {
         var user = await currentUser.GetRequiredUserAsync(cancellationToken);
+
+        // Same class of answer as "no User row" (403, not 404): the caller is known but not entitled.
+        // A deactivated developer with a still-valid token must not mint an allocation — nor, once
+        // #118 lands, a tier sync onto a product.
+        if (!user.IsActive)
+        {
+            throw new UnauthorizedAccessException(
+                $"User {user.UserId} is deactivated and has no quota allocation. An admin can re-activate the account via POST /users/{user.UserId}/activate.");
+        }
+
         var period = BillingPeriod.Current(timeProvider);
 
         var row = await FindRowAsync(user.UserId, period, cancellationToken);
@@ -137,11 +156,11 @@ public sealed class QuotaAllocationService(
             .ToListAsync(cancellationToken);
 
         var resolutions = await quotaResolution.ResolveManyAsync(activeUserIds, period, cancellationToken);
+        var touched = resolutions.Select(r => r.Allocation).ToList();
 
-        foreach (var resolution in resolutions)
+        foreach (var allocation in touched)
         {
-            resolution.Allocation.IsHardStopped = false;
-            resolution.Allocation.ResetDate = now;
+            Stamp(allocation, now);
         }
 
         // One row per run, no single target (CONVENTIONS.md: empty target when there is none).
@@ -155,21 +174,89 @@ public sealed class QuotaAllocationService(
                 usersResetCount = resolutions.Count,
                 periodYear = period.Year,
                 periodMonth = period.Month,
-                createdCount = resolutions.Count(r => r.IsNew),
                 tierSyncCount = resolutions.Count(r => r.TierSyncRequested),
             },
             cancellationToken);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (resolutions.Any(r => r.IsNew))
+        {
+            // A concurrent reset (or a developer's first /me of the month) inserted some of the rows we
+            // were about to Add. Adopt the winners — re-apply our resolution to their rows — and save
+            // again; a failed SaveChanges leaves every entry (including the audit row) still pending, so
+            // the second save is the same atomic unit. Anything other than a lost race is rethrown.
+            var adopted = await AdoptConcurrentlyCreatedRowsAsync(touched, period, now, cancellationToken);
+            if (adopted == 0)
+            {
+                throw;
+            }
+
+            logger.LogInformation(exception, "Quota reset for {Period} raced a concurrent writer on {AdoptedCount} allocation(s); adopted the existing rows.", period, adopted);
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
 
         logger.LogInformation(
-            "Quota reset for {Period}: {UsersResetCount} active users ({CreatedCount} new allocations, {TierSyncCount} tier syncs).",
+            "Quota reset for {Period}: {UsersResetCount} active users, {TierSyncCount} tier syncs.",
             period,
             resolutions.Count,
-            resolutions.Count(r => r.IsNew),
             resolutions.Count(r => r.TierSyncRequested));
 
         return new QuotaResetResult(resolutions.Count, period.Year, period.Month, now);
+    }
+
+    private static void Stamp(QuotaAllocation allocation, DateTimeOffset now)
+    {
+        allocation.IsHardStopped = false;
+        allocation.ResetDate = now;
+    }
+
+    /// <summary>
+    /// For every allocation in <paramref name="touched"/> that is still <see cref="EntityState.Added"/>
+    /// but whose (user, period) row now exists in the database: detaches ours, copies the resolution
+    /// outputs onto the winner (which keeps its <c>TokensUsed</c>, exactly as a re-resolve would), stamps
+    /// it, and swaps it into <paramref name="touched"/>. Returns how many rows were adopted.
+    /// </summary>
+    private async Task<int> AdoptConcurrentlyCreatedRowsAsync(List<QuotaAllocation> touched, BillingPeriod period, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        var pendingIds = touched
+            .Where(a => dbContext.Entry(a).State == EntityState.Added)
+            .Select(a => a.UserId)
+            .ToList();
+        if (pendingIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var winners = await dbContext.QuotaAllocations.AsNoTracking()
+            .Where(a => pendingIds.Contains(a.UserId) && a.PeriodYear == period.Year && a.PeriodMonth == period.Month)
+            .ToDictionaryAsync(a => a.UserId, cancellationToken);
+
+        var adopted = 0;
+        for (var i = 0; i < touched.Count; i++)
+        {
+            var ours = touched[i];
+            if (dbContext.Entry(ours).State != EntityState.Added || !winners.TryGetValue(ours.UserId, out var winner))
+            {
+                continue;
+            }
+
+            dbContext.Entry(ours).State = EntityState.Detached;
+
+            winner.AllocatedTokens = ours.AllocatedTokens;
+            winner.ResolvedLevelType = ours.ResolvedLevelType;
+            winner.TierProductId = ours.TierProductId;
+            winner.IsGatewayCapped = ours.IsGatewayCapped;
+            Stamp(winner, now);
+            dbContext.QuotaAllocations.Update(winner);
+
+            touched[i] = winner;
+            adopted++;
+        }
+
+        return adopted;
     }
 
     private IQueryable<QuotaAllocation> ForPeriod(BillingPeriod period) =>

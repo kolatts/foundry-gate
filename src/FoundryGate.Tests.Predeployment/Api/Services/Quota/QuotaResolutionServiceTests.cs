@@ -12,8 +12,9 @@ namespace FoundryGate.Tests.Predeployment.Api.Services.Quota;
 
 /// <summary>
 /// The five-level precedence chain (#32), the upsert contract (preserve <c>TokensUsed</c>/<c>IsHardStopped</c>,
-/// never save), the tier mapping on the way out, and the <see cref="IGatewayTierSync"/> seam's
-/// invocation rule — on a real SQLite <c>AppDbContext</c> with the real reference-data seed.
+/// never save), the tier mapping on the way out (a budget is a tier — D-013), and the
+/// <see cref="IGatewayTierSync"/> seam's invocation rule — on a real SQLite <c>AppDbContext</c> with the
+/// real reference-data seed.
 /// </summary>
 public class QuotaResolutionServiceTests : InMemoryDatabaseTest
 {
@@ -30,33 +31,34 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         var user = await SeedUserAsync(u =>
         {
             u.IsUnlimited = true;
-            u.MonthlyTokenQuota = 1_000_000;
+            u.MonthlyTokenQuota = TestGatewayTiers.StandardCap;
         });
-        await AddToGroupAsync(user, quota: 2_000_000);
+        await AddToGroupAsync(user, quota: TestGatewayTiers.PowerCap);
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
-        Assert.Equal(QuotaLevelType.UserUnlimited, result.LevelType);
-        Assert.Null(result.AllocatedTokens);
-        Assert.Equal(GatewayTiers.Unlimited, result.TierProductId);
-        Assert.False(result.IsGatewayCapped);
+        Assert.Equal(QuotaLevelType.UserUnlimited, result.Allocation.ResolvedLevelType);
+        Assert.Null(result.Allocation.AllocatedTokens);
+        Assert.Equal(GatewayTiers.Unlimited, result.Allocation.TierProductId);
+        Assert.False(result.Allocation.IsGatewayCapped);
     }
 
     [Fact]
     public async Task Level2_user_override_beats_an_unlimited_group_user_level_settings_win_over_group_level()
     {
-        // Pinned on purpose: a finite number pinned on the user by an admin means that number, even
-        // when one of their groups would grant unlimited.
+        // Pinned on purpose: a finite tier pinned on the user by an admin means that tier, even when
+        // one of their groups would grant unlimited.
         await SeedReferenceDataAsync();
-        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = 3_000_000);
+        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
         await AddToGroupAsync(user, isUnlimited: true);
-        await AddToGroupAsync(user, quota: 50_000_000);
+        await AddToGroupAsync(user, quota: TestGatewayTiers.PowerCap);
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
-        Assert.Equal(QuotaLevelType.UserOverride, result.LevelType);
-        Assert.Equal(3_000_000, result.AllocatedTokens);
-        Assert.Equal(GatewayTiers.Standard, result.TierProductId);
+        Assert.Equal(QuotaLevelType.UserOverride, result.Allocation.ResolvedLevelType);
+        Assert.Equal(TestGatewayTiers.StandardCap, result.Allocation.AllocatedTokens);
+        Assert.Equal(GatewayTiers.Standard, result.Allocation.TierProductId);
+        Assert.False(result.Allocation.IsGatewayCapped);
     }
 
     [Fact]
@@ -64,14 +66,14 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         var user = await SeedUserAsync();
-        await AddToGroupAsync(user, quota: 7_000_000);
+        await AddToGroupAsync(user, quota: TestGatewayTiers.PowerCap);
         await AddToGroupAsync(user, isUnlimited: true);
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
-        Assert.Equal(QuotaLevelType.GroupUnlimited, result.LevelType);
-        Assert.Null(result.AllocatedTokens);
-        Assert.Equal(GatewayTiers.Unlimited, result.TierProductId);
+        Assert.Equal(QuotaLevelType.GroupUnlimited, result.Allocation.ResolvedLevelType);
+        Assert.Null(result.Allocation.AllocatedTokens);
+        Assert.Equal(GatewayTiers.Unlimited, result.Allocation.TierProductId);
     }
 
     [Fact]
@@ -79,30 +81,31 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         var user = await SeedUserAsync();
-        await AddToGroupAsync(user, quota: 2_000_000);
-        await AddToGroupAsync(user, quota: 7_000_000);
+        await AddToGroupAsync(user, quota: TestGatewayTiers.StandardCap);
+        await AddToGroupAsync(user, quota: TestGatewayTiers.PowerCap);
         await AddToGroupAsync(user, quota: null); // a group with no quota policy contributes nothing
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
-        Assert.Equal(QuotaLevelType.GroupMax, result.LevelType);
-        Assert.Equal(7_000_000, result.AllocatedTokens);
-        Assert.Equal(GatewayTiers.Power, result.TierProductId);
-        Assert.False(result.IsGatewayCapped);
+        Assert.Equal(QuotaLevelType.GroupMax, result.Allocation.ResolvedLevelType);
+        Assert.Equal(TestGatewayTiers.PowerCap, result.Allocation.AllocatedTokens);
+        Assert.Equal(GatewayTiers.Power, result.Allocation.TierProductId);
+        Assert.False(result.Allocation.IsGatewayCapped);
     }
 
     [Fact]
     public async Task Level5_system_default_applies_when_neither_user_nor_groups_say_anything()
     {
-        await SeedReferenceDataAsync(); // DefaultMonthlyTokenQuota = "1000000"
+        await SeedReferenceDataAsync(); // DefaultMonthlyTokenQuota = "5000000" = the Standard tier cap
         var user = await SeedUserAsync();
         await AddToGroupAsync(user, quota: null);
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
-        Assert.Equal(QuotaLevelType.SystemDefault, result.LevelType);
-        Assert.Equal(1_000_000, result.AllocatedTokens);
-        Assert.Equal(GatewayTiers.Standard, result.TierProductId);
+        Assert.Equal(QuotaLevelType.SystemDefault, result.Allocation.ResolvedLevelType);
+        Assert.Equal(TestGatewayTiers.StandardCap, result.Allocation.AllocatedTokens);
+        Assert.Equal(GatewayTiers.Standard, result.Allocation.TierProductId);
+        Assert.False(result.Allocation.IsGatewayCapped);
     }
 
     [Fact]
@@ -140,12 +143,13 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     public async Task System_default_tolerates_surrounding_whitespace()
     {
         await SeedReferenceDataAsync();
-        await SetSystemDefaultAsync("  250000 ");
+        await SetSystemDefaultAsync("  20000000 ");
         var user = await SeedUserAsync();
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
-        Assert.Equal(250_000, result.AllocatedTokens);
+        Assert.Equal(TestGatewayTiers.PowerCap, result.Allocation.AllocatedTokens);
+        Assert.Equal(GatewayTiers.Power, result.Allocation.TierProductId);
     }
 
     [Fact]
@@ -161,10 +165,11 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
 
     [Theory]
     [InlineData(TestGatewayTiers.StandardCap, GatewayTiers.Standard, false)]
-    [InlineData(TestGatewayTiers.StandardCap + 1, GatewayTiers.Power, false)]
     [InlineData(TestGatewayTiers.PowerCap, GatewayTiers.Power, false)]
+    [InlineData(1_000_000, GatewayTiers.Standard, true)] // legacy non-tier value: enforced at the next tier up, flagged
+    [InlineData(TestGatewayTiers.StandardCap + 1, GatewayTiers.Power, true)]
     [InlineData(TestGatewayTiers.PowerCap + 1, GatewayTiers.Power, true)]
-    public async Task Resolved_quota_is_mapped_to_a_tier_and_flagged_when_above_every_finite_cap(long quota, string expectedTier, bool expectedCapped)
+    public async Task Resolved_quota_is_mapped_to_its_tier_and_a_non_tier_value_is_flagged_never_thrown(long quota, string expectedTier, bool expectedCapped)
     {
         await SeedReferenceDataAsync();
         var user = await SeedUserAsync(u => u.MonthlyTokenQuota = quota);
@@ -173,7 +178,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
 
         Assert.Equal(expectedTier, result.Allocation.TierProductId);
         Assert.Equal(expectedCapped, result.Allocation.IsGatewayCapped);
-        Assert.Equal(quota, result.Allocation.AllocatedTokens); // the numeric quota is still recorded
+        Assert.Equal(quota, result.Allocation.AllocatedTokens); // the stored number is still recorded as-is
     }
 
     // -- Upsert contract --
@@ -182,7 +187,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     public async Task New_allocation_is_added_with_TokensUsed_zero_and_no_ResetDate_and_is_not_saved()
     {
         await SeedReferenceDataAsync();
-        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = 100);
+        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
@@ -203,11 +208,11 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     public async Task Existing_allocation_is_updated_in_place_preserving_TokensUsed_IsHardStopped_and_ResetDate()
     {
         await SeedReferenceDataAsync();
-        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = 1_000_000);
+        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
         var resetDate = new DateTimeOffset(2026, 9, 1, 0, 1, 0, TimeSpan.Zero);
-        var existing = await SeedAllocationAsync(user, Period, allocated: 1_000_000, tokensUsed: 123_456, isHardStopped: true, tier: GatewayTiers.Standard, resetDate: resetDate);
+        var existing = await SeedAllocationAsync(user, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 123_456, isHardStopped: true, tier: GatewayTiers.Standard, resetDate: resetDate);
 
-        user.MonthlyTokenQuota = 9_000_000; // admin raised the quota mid-month
+        user.MonthlyTokenQuota = TestGatewayTiers.PowerCap; // admin moved the user up a tier mid-month
         await Context.SaveChangesAsync();
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
@@ -216,7 +221,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         Assert.False(result.IsNew);
         Assert.Equal(existing.QuotaAllocationId, result.Allocation.QuotaAllocationId);
         var saved = await Context.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == user.UserId);
-        Assert.Equal(9_000_000, saved.AllocatedTokens);
+        Assert.Equal(TestGatewayTiers.PowerCap, saved.AllocatedTokens);
         Assert.Equal(QuotaLevelType.UserOverride, saved.ResolvedLevelType);
         Assert.Equal(GatewayTiers.Power, saved.TierProductId);
         Assert.Equal(123_456, saved.TokensUsed); // untouched
@@ -229,7 +234,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     public async Task Resolving_twice_in_one_unit_of_work_reuses_the_unsaved_row_instead_of_adding_a_duplicate()
     {
         await SeedReferenceDataAsync();
-        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = 100);
+        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
         var service = CreateService();
 
         var first = await service.ResolveAsync(user.UserId, Period, CancellationToken.None);
@@ -248,7 +253,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     public async Task Tier_sync_is_not_invoked_for_a_user_without_an_APIM_subscription()
     {
         await SeedReferenceDataAsync();
-        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = 100);
+        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
@@ -262,14 +267,14 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         await SeedReferenceDataAsync();
         var user = await SeedUserAsync(u =>
         {
-            u.MonthlyTokenQuota = 100;
+            u.MonthlyTokenQuota = TestGatewayTiers.StandardCap;
             u.ApimSubscriptionId = "sub-1";
         });
 
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
         Assert.True(result.TierSyncRequested);
-        Assert.True(result.TierChanged);
+        Assert.Null(result.PreviousTierProductId);
         Assert.Equal([(user.UserId, GatewayTiers.Standard)], _tierSync.Calls);
     }
 
@@ -279,7 +284,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         await SeedReferenceDataAsync();
         var user = await SeedUserAsync(u =>
         {
-            u.MonthlyTokenQuota = 100;
+            u.MonthlyTokenQuota = TestGatewayTiers.StandardCap;
             u.ApimSubscriptionId = "sub-1";
         });
         await SeedAllocationAsync(user, Period, allocated: 50, tokensUsed: 0, isHardStopped: false, tier: GatewayTiers.Standard);
@@ -287,7 +292,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
         Assert.Equal(GatewayTiers.Standard, result.PreviousTierProductId);
-        Assert.False(result.TierChanged);
+        Assert.Equal(GatewayTiers.Standard, result.Allocation.TierProductId);
         Assert.False(result.TierSyncRequested);
         Assert.Empty(_tierSync.Calls);
     }
@@ -298,7 +303,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         await SeedReferenceDataAsync();
         var user = await SeedUserAsync(u =>
         {
-            u.MonthlyTokenQuota = TestGatewayTiers.StandardCap + 1;
+            u.MonthlyTokenQuota = TestGatewayTiers.PowerCap;
             u.ApimSubscriptionId = "sub-1";
         });
         await SeedAllocationAsync(user, Period, allocated: 50, tokensUsed: 0, isHardStopped: false, tier: GatewayTiers.Standard);
@@ -306,7 +311,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
 
         Assert.Equal(GatewayTiers.Standard, result.PreviousTierProductId);
-        Assert.Equal(GatewayTiers.Power, result.TierProductId);
+        Assert.Equal(GatewayTiers.Power, result.Allocation.TierProductId);
         Assert.True(result.TierSyncRequested);
         Assert.Equal([(user.UserId, GatewayTiers.Power)], _tierSync.Calls);
     }
@@ -317,7 +322,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         await SeedReferenceDataAsync();
         var user = await SeedUserAsync(u =>
         {
-            u.MonthlyTokenQuota = 100;
+            u.MonthlyTokenQuota = TestGatewayTiers.StandardCap;
             u.ApimSubscriptionId = "sub-1";
         });
         await SeedAllocationAsync(user, new BillingPeriod(2026, 7), allocated: 100, tokensUsed: 0, isHardStopped: false, tier: GatewayTiers.Power);
@@ -337,7 +342,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     public async Task ResolveManyAsync_resolves_every_known_user_in_order_skipping_unknown_ids_and_reusing_existing_rows()
     {
         await SeedReferenceDataAsync();
-        var alice = await SeedUserAsync(u => u.MonthlyTokenQuota = 100);
+        var alice = await SeedUserAsync(u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
         var bob = await SeedUserAsync(u =>
         {
             u.MonthlyTokenQuota = TestGatewayTiers.PowerCap;
@@ -345,6 +350,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         });
         var carol = await SeedUserAsync(u => u.IsUnlimited = true);
         await AddToGroupAsync(alice, isUnlimited: true); // ignored: alice has a user override
+        await SeedAllocationAsync(bob, new BillingPeriod(2026, 7), allocated: 100, tokensUsed: 0, isHardStopped: false, tier: GatewayTiers.Power);
         await SeedAllocationAsync(bob, new BillingPeriod(2026, 8), allocated: 100, tokensUsed: 0, isHardStopped: false, tier: GatewayTiers.Standard);
         var carolExisting = await SeedAllocationAsync(carol, Period, allocated: 1, tokensUsed: 42, isHardStopped: true, tier: GatewayTiers.Standard);
 
@@ -356,19 +362,19 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         var carolResult = results[0];
         Assert.False(carolResult.IsNew);
         Assert.Equal(carolExisting.QuotaAllocationId, carolResult.Allocation.QuotaAllocationId);
-        Assert.Equal(QuotaLevelType.UserUnlimited, carolResult.LevelType);
+        Assert.Equal(QuotaLevelType.UserUnlimited, carolResult.Allocation.ResolvedLevelType);
         Assert.Equal(42, carolResult.Allocation.TokensUsed);
         Assert.True(carolResult.Allocation.IsHardStopped);
 
         var aliceResult = results[1];
         Assert.True(aliceResult.IsNew);
-        Assert.Equal(QuotaLevelType.UserOverride, aliceResult.LevelType);
+        Assert.Equal(QuotaLevelType.UserOverride, aliceResult.Allocation.ResolvedLevelType);
         Assert.False(aliceResult.TierSyncRequested); // no subscription
 
         var bobResult = results[2];
         Assert.True(bobResult.IsNew);
-        Assert.Equal(GatewayTiers.Standard, bobResult.PreviousTierProductId); // from August
-        Assert.Equal(GatewayTiers.Power, bobResult.TierProductId);
+        Assert.Equal(GatewayTiers.Standard, bobResult.PreviousTierProductId); // August (most recent), not July's Power
+        Assert.Equal(GatewayTiers.Power, bobResult.Allocation.TierProductId);
         Assert.True(bobResult.TierSyncRequested);
         Assert.Equal([(bob.UserId, GatewayTiers.Power)], _tierSync.Calls);
 

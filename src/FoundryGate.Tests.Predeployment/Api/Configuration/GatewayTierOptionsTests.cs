@@ -80,6 +80,40 @@ public class GatewayTierOptionsTests
         Assert.Contains(Validate(options), r => r.ErrorMessage!.Contains("at least one finite tier", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(-5_000_000L)]
+    [InlineData(ValidationConstants.MaxMonthlyTokenQuota + 1)]
+    public void Tier_cap_out_of_range_is_rejected_at_the_item_level(long cap)
+    {
+        // ValidateRecursively() does not walk list items, so GatewayTier's own [Range] never runs at
+        // startup; Validate() must check each item itself or a negative cap starts as a finite tier no
+        // quota ever matches (probed in the #127 review).
+        var options = TestGatewayTiers.Options();
+        options.Tiers[0].MonthlyTokenQuota = cap;
+
+        Assert.Contains(Validate(options), r => r.ErrorMessage!.Contains("Tiers[0].MonthlyTokenQuota", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Blank_product_id_is_rejected_at_the_item_level()
+    {
+        var options = TestGatewayTiers.Options();
+        options.Tiers[1].ProductId = "  ";
+
+        Assert.Contains(Validate(options), r => r.ErrorMessage!.Contains("Tiers[1].ProductId is required", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidateRecursively_on_AppSettings_surfaces_a_negative_tier_cap_the_startup_path()
+    {
+        var appSettings = AppSettingsValidationTests.ValidAppSettings();
+        appSettings.Gateway.Tiers[0].MonthlyTokenQuota = -5_000_000;
+
+        var exception = Assert.Throws<Imagile.Framework.Configuration.Exceptions.ConfigurationValidationException>(appSettings.ValidateRecursively);
+
+        Assert.Contains("MonthlyTokenQuota", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ValidateRecursively_on_AppSettings_surfaces_Gateway_Tiers_errors()
     {

@@ -11,6 +11,12 @@ namespace FoundryGate.Api.Services.Quota;
 public interface IQuotaAllocationService
 {
     /// <summary>
+    /// The configured budget tiers (finite tiers by ascending cap, then unlimited) — the only values a
+    /// monthly token quota may take (D-013). Any authenticated user; the UI offers these as the choices.
+    /// </summary>
+    IReadOnlyList<QuotaTierResponse> ListTiers();
+
+    /// <summary>
     /// Admin: every allocation for the current period, ordered by user display name then <c>UserId</c>,
     /// with the owning user's name/email projected in. Rows exist only for users who have been
     /// resolved this period (first <c>/me</c> of the month or a reset) — this lists allocations, not users.
@@ -23,7 +29,7 @@ public interface IQuotaAllocationService
     /// visit of the month always has a gauge to show. Not audited: the row is derived state, not an
     /// admin action.
     /// </summary>
-    /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row yet (→ 403; call <c>GET /users/me</c> first).</exception>
+    /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row yet (→ 403; call <c>GET /users/me</c> first), or their account is deactivated (→ 403; no allocation is issued to an inactive user).</exception>
     Task<QuotaAllocationResponse> GetMyAllocationAsync(CancellationToken cancellationToken);
 
     /// <summary>Admin: one user's current-period allocation. Read-only — does not create a missing row.</summary>

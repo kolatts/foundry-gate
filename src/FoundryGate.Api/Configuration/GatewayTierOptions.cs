@@ -5,9 +5,9 @@ namespace FoundryGate.Api.Configuration;
 
 /// <summary>
 /// The gateway's quota tier products and their monthly token caps, bound from <c>Gateway:Tiers</c>.
-/// Quota resolution (issue #32) maps every numeric allocation onto the smallest tier whose cap covers
-/// it, because APIM's <c>token-quota</c> is a per-product literal (#82): the tier product a
-/// developer's subscription sits on is what the gateway actually enforces.
+/// A developer's monthly budget <em>is</em> one of these tiers (D-013): every numeric quota the control
+/// plane accepts must equal a configured cap or be unlimited, because APIM's <c>token-quota</c> is a
+/// per-product literal (#82) and the tier product a subscription sits on is what the gateway enforces.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -20,10 +20,12 @@ namespace FoundryGate.Api.Configuration;
 /// duplicate tiers.
 /// </para>
 /// <para>
-/// Validation (fail-fast at startup via <c>ValidateRecursively()</c>): at least one tier; every
-/// product id is one of <see cref="GatewayTiers.All"/> (the ids the bicep actually creates); no
-/// duplicate ids; exactly one unlimited tier (<see cref="GatewayTier.MonthlyTokenQuota"/> = 0); and at
-/// least one finite tier for finite quotas to land on.
+/// Validation (fail-fast at startup via <c>ValidateRecursively()</c>, which does <em>not</em> recurse
+/// into list items — so <see cref="Validate"/> checks each <see cref="GatewayTier"/> itself): at least
+/// one tier; every product id is one of <see cref="GatewayTiers.All"/> (the ids the bicep actually
+/// creates); no duplicate ids; every cap is within <c>[0, ValidationConstants.MaxMonthlyTokenQuota]</c>;
+/// exactly one unlimited tier (<see cref="GatewayTier.MonthlyTokenQuota"/> = 0); and at least one finite
+/// tier for finite quotas to land on.
 /// </para>
 /// </remarks>
 public class GatewayTierOptions : IValidatableObject
@@ -41,6 +43,26 @@ public class GatewayTierOptions : IValidatableObject
                 $"{nameof(Tiers)} must contain at least one tier (Gateway:Tiers); the shipped appsettings.json carries the infra/main.bicep defaults.",
                 [nameof(Tiers)]);
             yield break;
+        }
+
+        // Item-level checks live here because ValidateRecursively() stops at the list: a tier with a
+        // negative cap would otherwise start fine as a finite tier no quota ever matches.
+        for (var i = 0; i < Tiers.Count; i++)
+        {
+            var tier = Tiers[i];
+            var member = $"{nameof(Tiers)}[{i}]";
+
+            if (string.IsNullOrWhiteSpace(tier.ProductId))
+            {
+                yield return new ValidationResult($"{member}.{nameof(GatewayTier.ProductId)} is required.", [member]);
+            }
+
+            if (tier.MonthlyTokenQuota < 0 || tier.MonthlyTokenQuota > ValidationConstants.MaxMonthlyTokenQuota)
+            {
+                yield return new ValidationResult(
+                    $"{member}.{nameof(GatewayTier.MonthlyTokenQuota)} = {tier.MonthlyTokenQuota} must be between 0 (unlimited) and {ValidationConstants.MaxMonthlyTokenQuota}.",
+                    [member]);
+            }
         }
 
         var unknown = Tiers
@@ -83,7 +105,7 @@ public class GatewayTierOptions : IValidatableObject
     }
 }
 
-/// <summary>One quota tier: an APIM product id and the monthly cap its <c>llm-token-limit</c> policy enforces.</summary>
+/// <summary>One quota tier: an APIM product id, its display name, and the monthly cap its <c>llm-token-limit</c> policy enforces.</summary>
 public class GatewayTier
 {
     /// <summary>APIM product id — one of <see cref="GatewayTiers.All"/> (the <c>name</c> of a bicep <c>quotaTiers</c> entry).</summary>
@@ -91,12 +113,16 @@ public class GatewayTier
     [StringLength(64)]
     public string ProductId { get; set; } = string.Empty;
 
+    /// <summary>Human-readable name for the UI (bicep's <c>displayName</c>); falls back to <see cref="ProductId"/> when empty.</summary>
+    [StringLength(100)]
+    public string DisplayName { get; set; } = string.Empty;
+
     /// <summary>
     /// Tokens per calendar month the tier's policy enforces; <c>0</c> means the tier carries no
     /// <c>token-quota</c> at all (unlimited — TPM smoothing only), matching bicep's
     /// <c>monthlyTokenQuota: 0</c> convention.
     /// </summary>
-    [Range(0, long.MaxValue)]
+    [Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
     public long MonthlyTokenQuota { get; set; }
 
     /// <summary>True when this is the unlimited tier (<see cref="MonthlyTokenQuota"/> = 0).</summary>

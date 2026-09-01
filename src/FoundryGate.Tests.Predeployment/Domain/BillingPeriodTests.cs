@@ -30,22 +30,6 @@ public class BillingPeriodTests
     }
 
     [Fact]
-    public void Start_is_midnight_UTC_on_the_first()
-    {
-        Assert.Equal(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero), new BillingPeriod(2026, 9).Start);
-    }
-
-    [Theory]
-    [InlineData(2026, 8, 2026, 9, true)]
-    [InlineData(2025, 12, 2026, 1, true)]
-    [InlineData(2026, 9, 2026, 9, false)]
-    [InlineData(2026, 10, 2026, 9, false)]
-    public void IsBefore_orders_by_year_then_month(int year, int month, int otherYear, int otherMonth, bool expected)
-    {
-        Assert.Equal(expected, new BillingPeriod(year, month).IsBefore(new BillingPeriod(otherYear, otherMonth)));
-    }
-
-    [Fact]
     public void ToString_is_yyyy_MM()
     {
         Assert.Equal("2026-09", new BillingPeriod(2026, 9).ToString());

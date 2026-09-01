@@ -15,6 +15,10 @@ public class TestDataSeederTests : InMemoryDatabaseTest
         Assert.Contains(users, u => u.IsUnlimited && u.MonthlyTokenQuota is null);
         Assert.Contains(users, u => !u.IsUnlimited && u.MonthlyTokenQuota is not null);
 
+        // A budget is always a tier (D-013): every seeded quota is a shipped tier cap or unlimited.
+        Assert.All(users, u => Assert.Contains(u.MonthlyTokenQuota, new long?[] { Support.TestGatewayTiers.StandardCap, Support.TestGatewayTiers.PowerCap, null }));
+        Assert.All(Context.Groups.ToList(), g => Assert.Contains(g.MonthlyTokenQuota, new long?[] { Support.TestGatewayTiers.StandardCap, Support.TestGatewayTiers.PowerCap, null }));
+        Assert.All(Context.QuotaAllocations.ToList(), a => Assert.False(a.IsGatewayCapped));
         Assert.Equal(8, Context.QuotaAllocations.Count());
         Assert.Single(Context.QuotaIncreaseRequests);
         Assert.True(Context.GroupMembers.Any());

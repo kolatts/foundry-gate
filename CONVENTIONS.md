@@ -122,6 +122,13 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   New action/target kinds are constants in Domain's `AuditActions` / `AuditTargetTypes`,
   never inline strings. `details` is JSON-serialized (camelCase, cycles ignored) — pass
   the fields you mean rather than a tracked entity, and never a key or token.
+- **Quota values are tiers (D-013).** A monthly token quota is either unlimited (`null`) or
+  exactly one configured tier cap (`Gateway:Tiers`; `GET /quota/tiers` lists them). Every write
+  path that accepts a quota — `PUT /users/{id}/quota`, group create/update, request approval —
+  calls `GatewayTierMapper.EnsureValidQuota(quota, nameof(request.MonthlyTokenQuota))` (singleton
+  in `Services/Quota`) *before* persisting: a non-tier value is an `ArgumentException` (400)
+  whose message lists the allowed values. Resolution (`GatewayTierMapper.Map`) never throws for a
+  legacy value — it maps to the next tier up and sets `IsGatewayCapped` so reads keep working.
 - **Paging**: bind `[FromQuery] PagedRequest paging` (alongside any `[FromQuery]` filter
   record) and finish the query with `.OrderBy(...).Select(projection).ToPagedAsync(paging, ct)`
   (`FoundryGate.Data.Extensions`) → `PagedResult<T>`. Order deterministically first;

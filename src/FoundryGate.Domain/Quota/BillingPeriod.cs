@@ -25,16 +25,6 @@ public readonly record struct BillingPeriod(int Year, int Month)
         return FromInstant(timeProvider.GetUtcNow());
     }
 
-    /// <summary>Midnight UTC on the first day of this period — what the gateway resets its counters at.</summary>
-    public DateTimeOffset Start => new(Year, Month, 1, 0, 0, 0, TimeSpan.Zero);
-
-    /// <summary>
-    /// <see langword="true"/> when this period is strictly earlier than <paramref name="other"/>.
-    /// Used to find "the most recent allocation before this one" without a <see cref="DateTimeOffset"/> column.
-    /// </summary>
-    public bool IsBefore(BillingPeriod other) =>
-        Year < other.Year || (Year == other.Year && Month < other.Month);
-
     /// <inheritdoc />
     public override string ToString() => $"{Year:D4}-{Month:D2}";
 }

@@ -18,9 +18,9 @@ public static class TestGatewayTiers
     {
         Tiers =
         [
-            new GatewayTier { ProductId = GatewayTiers.Standard, MonthlyTokenQuota = StandardCap },
-            new GatewayTier { ProductId = GatewayTiers.Power, MonthlyTokenQuota = PowerCap },
-            new GatewayTier { ProductId = GatewayTiers.Unlimited, MonthlyTokenQuota = 0 },
+            new GatewayTier { ProductId = GatewayTiers.Standard, DisplayName = "Standard", MonthlyTokenQuota = StandardCap },
+            new GatewayTier { ProductId = GatewayTiers.Power, DisplayName = "Power", MonthlyTokenQuota = PowerCap },
+            new GatewayTier { ProductId = GatewayTiers.Unlimited, DisplayName = "Unlimited", MonthlyTokenQuota = 0 },
         ],
     };
 

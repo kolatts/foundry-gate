@@ -15,16 +15,27 @@ namespace FoundryGate.Data.Seeding;
 /// </summary>
 public static class TestDataSeeder
 {
+    /// <summary>
+    /// The Standard tier cap as shipped in <c>appsettings.json</c> / <c>infra/main.bicep</c>. A budget
+    /// is always a tier (D-013), so demo quotas draw from these caps or unlimited only — Data cannot
+    /// see the Api's <c>Gateway:Tiers</c> options, hence the literals (TestDataSeederTests pins them).
+    /// </summary>
+    private const long StandardTierCap = 5_000_000;
+
+    /// <summary>The Power tier cap as shipped.</summary>
+    private const long PowerTierCap = 20_000_000;
+
+    /// <summary>Per-developer budgets in landing-page order (docs-site/src/pages/index.astro "Developers · September").</summary>
     private static readonly long?[] QuotaTiers =
     [
-        500_000,
-        1_000_000,
-        1_000_000,
-        2_000_000,
-        2_000_000,
+        PowerTierCap,
+        StandardTierCap,
+        PowerTierCap,
+        StandardTierCap,
+        PowerTierCap,
         null, // unlimited tier (index 5) — paired with User.IsUnlimited = true below
-        1_000_000,
-        2_000_000
+        StandardTierCap,
+        PowerTierCap
     ];
 
     /// <summary>
@@ -83,7 +94,7 @@ public static class TestDataSeeder
         {
             Name = "Platform Engineering",
             Description = "Demo group seeded for local/dev environments.",
-            MonthlyTokenQuota = 2_000_000
+            MonthlyTokenQuota = PowerTierCap
         };
         context.Groups.Add(demoGroup);
         await context.SaveChangesAsync(cancellationToken);
@@ -119,8 +130,8 @@ public static class TestDataSeeder
             };
 
             // Every demo user carries a per-user setting (MonthlyTokenQuota or IsUnlimited), so the
-            // resolution level is always user-level here; the demo quotas (≤ 2M) all fit the Standard
-            // tier's 5M cap as shipped in infra/main.bicep, so nothing is gateway-capped.
+            // resolution level is always user-level here, and every quota IS a tier cap, so nothing
+            // is gateway-capped.
             allocations.Add(new QuotaAllocation
             {
                 UserId = user.UserId,
@@ -129,7 +140,12 @@ public static class TestDataSeeder
                 AllocatedTokens = allocated,
                 TokensUsed = allocated is null ? 42_000 : (long)(allocated.Value * usedFraction),
                 ResolvedLevelType = allocated is null ? QuotaLevelType.UserUnlimited : QuotaLevelType.UserOverride,
-                TierProductId = allocated is null ? GatewayTiers.Unlimited : GatewayTiers.Standard,
+                TierProductId = allocated switch
+                {
+                    null => GatewayTiers.Unlimited,
+                    PowerTierCap => GatewayTiers.Power,
+                    _ => GatewayTiers.Standard,
+                },
                 ResetDate = new DateTimeOffset(now.Year, now.Month, 1, 0, 0, 0, TimeSpan.Zero)
             });
         }
@@ -145,7 +161,7 @@ public static class TestDataSeeder
             PeriodYear = now.Year,
             PeriodMonth = now.Month,
             CurrentQuota = requester.MonthlyTokenQuota,
-            RequestedQuota = (requester.MonthlyTokenQuota ?? 1_000_000) * 2,
+            RequestedQuota = PowerTierCap, // the next tier up — requests ask for a tier, not a number
             Justification = "Running a batch evaluation this sprint that needs more headroom than the standard tier.",
             StatusType = QuotaRequestStatusType.Pending
         });
