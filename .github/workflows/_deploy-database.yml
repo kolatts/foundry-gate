@@ -1,0 +1,163 @@
+name: Deploy Database (Reusable)
+
+# Reusable workflow_call: deploys the FoundryGate.Database dacpac to a target environment's Azure
+# SQL Server, then syncs reference data. Modeled on imagile-app's .github/workflows/_deploy-database.yml
+# (runner IP whitelist -> firewall propagation wait -> TCP probe -> dacpac deploy -> seed), minus
+# the metabase/tenant shard split (a FoundryGate fork IS the tenant, CONVENTIONS.md).
+#
+# Expects two artifacts to already exist in the calling workflow run (produced by a build-dacpac
+# job and a CLI publish job — neither exists yet as of #77/#78/#79; the full-stack orchestration
+# lands with #67's CI/CD epic, e.g. deploy-all.yml):
+#   - "dacpac": contains FoundryGate.Database.dacpac (dotnet build src/FoundryGate.Database -o artifacts)
+#   - "foundrygate-cli": contains a framework-dependent publish of FoundryGate.Cli
+#     (dotnet publish src/FoundryGate.Cli --no-self-contained -o cli)
+#
+# Standalone-valid today: this file's shape (inputs, jobs, steps) does not depend on anything else
+# in #67 to be syntactically/semantically complete, only to actually run successfully end-to-end.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name (dev, production, ...) — provides the deployment gate and scopes environment secrets."
+        required: true
+        type: string
+      sql-server-name:
+        description: "Azure SQL logical server name (without the .database.windows.net suffix)."
+        required: true
+        type: string
+      sql-database-name:
+        description: "Target database name to deploy the dacpac to."
+        required: true
+        type: string
+      sql-resource-group:
+        description: "Resource group containing the SQL Server, used for connectivity diagnostics."
+        required: true
+        type: string
+      run-seed-test:
+        description: "Whether to also seed Bogus demo data after reference data. Never set true for a production environment."
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+jobs:
+  deploy:
+    name: Database - Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Download dacpac artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dacpac
+          path: ./artifacts
+
+      - name: Download CLI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: foundrygate-cli
+          path: ./cli
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # STUB: `foundrygate ip setup` doesn't whitelist anything real yet — it needs an Azure SQL
+      # Server resource that doesn't exist until the Bicep infra modules (#43/#44) deploy. This
+      # step is kept continue-on-error so the rest of the deploy pipeline shape is exercised today
+      # instead of hard-blocking on infra that isn't built yet. Remove continue-on-error once
+      # https://github.com/kolatts/foundry-gate/issues/96 implements the command for real.
+      - name: Whitelist runner IP address
+        continue-on-error: true
+        run: |
+          dotnet ./cli/FoundryGate.Cli.dll \
+            ip setup \
+            --env ${{ inputs.environment }} \
+            --yes
+
+      - name: Wait for firewall rule propagation
+        run: |
+          echo "Waiting 60 seconds for the firewall rule to propagate..."
+          sleep 60
+
+      - name: Verify network connectivity to SQL Server
+        run: |
+          SERVER_FQDN=$(az sql server show \
+            --name ${{ inputs.sql-server-name }} \
+            --resource-group ${{ inputs.sql-resource-group }} \
+            --query fullyQualifiedDomainName -o tsv)
+
+          echo "Server: $SERVER_FQDN"
+
+          if timeout 10 bash -c "cat < /dev/null > /dev/tcp/${SERVER_FQDN}/1433" 2>/dev/null; then
+            echo "Network connectivity OK - port 1433 is reachable"
+          else
+            echo "Cannot reach SQL Server on port 1433 yet - firewall rule may not have propagated."
+            echo "Waiting an additional 30 seconds..."
+            sleep 30
+          fi
+
+      - name: Deploy dacpac
+        run: |
+          SERVER_FQDN=$(az sql server show \
+            --name ${{ inputs.sql-server-name }} \
+            --resource-group ${{ inputs.sql-resource-group }} \
+            --query fullyQualifiedDomainName -o tsv)
+
+          # Authentication=Active Directory Default lets DacServices/SqlClient pick up the OIDC
+          # token azure/login@v2 already established for this runner (CONVENTIONS.md: no SQL
+          # passwords in the cloud).
+          CONNECTION_STRING="Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True"
+
+          dotnet ./cli/FoundryGate.Cli.dll \
+            db deploy \
+            ./artifacts/FoundryGate.Database.dacpac \
+            "${CONNECTION_STRING}" \
+            --drop-objects
+
+      - name: Seed reference data
+        run: |
+          SERVER_FQDN=$(az sql server show \
+            --name ${{ inputs.sql-server-name }} \
+            --resource-group ${{ inputs.sql-resource-group }} \
+            --query fullyQualifiedDomainName -o tsv)
+
+          CONNECTION_STRING="Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True"
+
+          dotnet ./cli/FoundryGate.Cli.dll \
+            db seed-reference \
+            "${CONNECTION_STRING}"
+
+      # Never runs for production: run-seed-test must be explicitly opted into by the caller
+      # (e.g. deploy-all.yml passing true only for the dev environment), and this repo's callers
+      # must never pass true for a production environment input.
+      - name: Seed test data
+        if: inputs.run-seed-test
+        run: |
+          SERVER_FQDN=$(az sql server show \
+            --name ${{ inputs.sql-server-name }} \
+            --resource-group ${{ inputs.sql-resource-group }} \
+            --query fullyQualifiedDomainName -o tsv)
+
+          CONNECTION_STRING="Server=${SERVER_FQDN};Database=${{ inputs.sql-database-name }};Authentication=Active Directory Default;Encrypt=True"
+
+          dotnet ./cli/FoundryGate.Cli.dll \
+            db seed-test \
+            "${CONNECTION_STRING}"
