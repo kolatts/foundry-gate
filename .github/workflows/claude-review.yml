@@ -1,0 +1,116 @@
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Gated on CLAUDE_AUTOMATION_ENABLED so the workflow is inert until the
+    # repo has CLAUDE_CODE_OAUTH_TOKEN + the imagile-bot app installed.
+    # Skip forks and third-party bots; allow imagile-bot's claude/issue-* PRs.
+    if: |
+      vars.CLAUDE_AUTOMATION_ENABLED == 'true' &&
+      github.event.pull_request.head.repo.fork == false &&
+      (
+        !endsWith(github.event.pull_request.user.login, '[bot]') ||
+        github.event.pull_request.user.login == 'claude[bot]' ||
+        (
+          github.event.pull_request.user.login == 'imagile-bot[bot]' &&
+          startsWith(github.event.pull_request.head.ref, 'claude/issue-')
+        )
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect review workflow changes
+        id: review-workflow
+        shell: bash
+        run: |
+          if git diff --quiet \
+            '${{ github.event.pull_request.base.sha }}' \
+            '${{ github.event.pull_request.head.sha }}' \
+            -- .github/workflows/claude-review.yml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Claude Code Review
+        uses: anthropics/claude-code-action@v1.0.93
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Claude's app token gives ordinary PRs a distinct reviewer identity.
+          # Workflow-token fallback when this workflow itself changes (the Claude
+          # app validates it against the default-branch version).
+          github_token: ${{ steps.review-workflow.outputs.changed == 'true' && github.token || '' }}
+          allowed_bots: 'imagile-bot'
+          track_progress: true
+          classify_inline_comments: 'true'
+          include_fix_links: 'true'
+          plugin_marketplaces: |
+            https://github.com/kolatts/claude-marketplace.git
+          plugins: |
+            sunny
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+            PR AUTHOR: ${{ github.event.pull_request.user.login }}
+            REVIEW ACTOR: ${{ steps.review-workflow.outputs.changed == 'true' && 'github-actions[bot]' || 'claude[bot]' }}
+
+            **Before doing anything else, read and clean up stale Claude feedback:**
+            1. Fetch all previous Claude comments on this PR and read them to retain context:
+               gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments --jq '.[] | select(.user.login == "claude[bot]") | {id: .id, body: .body}'
+            2. Note any issues raised in those comments — carry that context into your review.
+            3. Delete each previous Claude comment by ID:
+               gh api repos/${{ github.repository }}/issues/comments/<id> -X DELETE
+            4. Dismiss any previous Claude formal review on this PR.
+            5. Resolve outdated inline review threads from previous Claude reviews.
+
+            **Now review the pull request:**
+
+            Review this PR for the @kolatts/foundry-gate repository — an AI budget
+            gateway for Azure AI Foundry (.NET 10 solution in src/, Bicep in infra/,
+            Astro docs site in docs-site/).
+
+            READ FIRST: CLAUDE.md and CONVENTIONS.md at the repo root — every change is
+            judged against them (CONVENTIONS.md wins over spec/issue bodies). Also
+            fable-refactor-log.md when the PR touches infra/ or policies (validated
+            platform findings live there).
+
+            Focus on:
+            1. Correctness and CONVENTIONS.md compliance (EF Core patterns, int PKs +
+               {Entity}Unique Guids, TimeProvider — no naked UtcNow, no repository
+               pattern, CancellationToken threading, TreatWarningsAsErrors intact)
+            2. Security (secrets in code/config, injection, auth gaps, credential
+               handling; infra: keys in ARM history, managed identity over keys)
+            3. Bugs and edge cases; schema mistakes the dacpac pipeline would bake in
+            4. Gateway ground truths (real-time 403/429 enforcement — nothing may
+               reimply suspension-on-quota-exhaustion; token-quota is literal-only;
+               Anthropic deployments are create-once)
+            5. Docs invariants when docs-site/ changes (plain-language landing page,
+               progressive ladder, only wire-verified CLI instructions)
+
+            Leave inline comments on specific lines and a top-level summary.
+            Skip nitpicks; prioritize substantive feedback.
+
+            **When done, submit a formal GitHub review using one of:**
+            - `gh pr review ${{ github.event.pull_request.number }} --approve --body "..."`
+            - `gh pr review ${{ github.event.pull_request.number }} --request-changes --body "..."`
+
+            Do not leave a PR without a formal APPROVE or REQUEST_CHANGES state.
+          claude_args: |
+            --model sonnet --allowedTools "mcp__github__pull_request_review_write,mcp__github__add_comment_to_pending_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr review:*),Bash(gh api repos/*/issues/*/comments:*),Bash(gh api repos/*/issues/comments/*:*),Bash(gh api repos/*/pulls/*/reviews:*),Bash(gh api repos/*/pulls/*/comments:*)"
