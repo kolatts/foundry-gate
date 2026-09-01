@@ -39,7 +39,7 @@ Two details on the diagram are ground truths worth stating plainly:
 
 ## Entra ID sync — how access follows your org chart
 
-FoundryGate uses the Microsoft Graph API (app-only credentials stored in Key Vault) to keep developer access in sync with your Entra directory. This is how access governance works without any manual admin work after initial setup.
+FoundryGate uses the Microsoft Graph API to keep developer access in sync with your Entra directory. It calls Graph as its own managed identity, granted read-only Graph application roles — there is no client secret to store or rotate. This is how access governance works without any manual admin work after initial setup.
 
 ### First login — automatic provisioning
 

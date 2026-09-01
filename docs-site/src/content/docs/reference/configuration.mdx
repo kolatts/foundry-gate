@@ -51,9 +51,9 @@ and referenced from appsettings as `@KeyVault(SecretName)`.
 | `Gateway__FoundryAccountNames__{i}` | env var | Foundry account names in pool order (index 0 = primary) — the API manages OpenAI model deployments in exactly these accounts. The whole `Gateway` section may be absent locally (no gateway to manage; `/foundry/*` then answers `503`); account names without a subscription/resource group fail startup |
 | `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | env var | Workspace GUID (what the Log Analytics query API calls the workspace id) / ARM resource id |
 | `Gateway__KeyEncryptionKeyUri` | env var | Versionless Key Vault key URI for wrapping APIM subscription keys at rest |
-| `Azure__KeyVaultUri` | Config / env var | Key Vault URI for key wrapping (APIM key encryption) |
-| `Graph__ClientId` | Config / env var | App registration client ID for Graph SDK (may differ from AzureAd__ClientId) |
-| `Graph__ClientSecret` | Key Vault secret | Client secret for Graph app-only credentials |
+| `Entra__Enabled` | env var | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` (see the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)). While `false`, the sync endpoints return `400`. |
+| `Entra__ServicePrincipalObjectId` | env var | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application. |
+| `Entra__GraphBaseUrl` | env var | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it). |
 
 ---
 
