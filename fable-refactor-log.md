@@ -313,6 +313,68 @@ demo data and docs use 5M / 20M / unlimited only.
 literally true for every developer, and it costs nothing structurally — a budget picker
 instead of a number box.
 
+### D-014: `FoundryGate.Core` for services more than one host needs (#119)
+**Date:** 2026-09-02 (Functions wave: #38/#39/#84/#119)
+**Problem:** `plans/10-background-services.md` has the Functions host calling
+`IQuotaResolutionService`, but CONVENTIONS said "services live in Api — NO separate Services
+project" and `FoundryGate.Functions` references Data + Domain only. #119 listed three ways out.
+**Options considered:**
+1. *Functions calls the Api* over HTTP with an app-only token — one implementation of the rules,
+   but it makes a background job depend on the Api being up, needs an app-only path through
+   `ICurrentUserAccessor` (which 403s a principal with no `User` row), and turns one transaction
+   into a network hop.
+2. *Move resolution into Data* — Data becomes the place services live, a bigger dent in the
+   conventions than the problem deserves, and it drags `GatewayOptions` binding into the entity
+   assembly.
+3. *Functions references Api* — pulls ASP.NET Core into an isolated worker.
+4. *A new class library for shared services* (the orchestrator's ruling).
+**Decision:** Option 4. `src/FoundryGate.Core` references Data + Domain and carries no ASP.NET
+Core dependency, which is precisely what makes it usable from the isolated worker. It holds
+`GatewayOptions`/`GatewayTier`, `IQuotaResolutionService`, `GatewayTierMapper`, `IGatewayTierSync`
++ `NullGatewayTierSync`, and a new `IQuotaResetService` that both hosts run — the Api's
+`POST /quota/reset` and the scheduled Function are now the same code with a different audit action
+(`quota.reset` naming the admin, `quota.monthly-reset` with no actor). `ApimGatewayTierSync` stays
+in the Api (it composes the APIM key service); the Functions host registers the null one, which is
+safe because a reset re-resolves unchanged inputs and so can never produce a tier change (asserted
+by `QuotaResetServiceTests`). CONVENTIONS §Solution structure amended: Api-only services stay in
+the Api; anything a second host needs lives in Core with the same conventions and an
+`Add<Area>Core()` extension.
+**Why:** It is the only option where "what a reset does" has exactly one definition, without
+either host learning about the other. The cost is one project.
+**Caught on the way (worth knowing before moving the next options class):**
+`Imagile.Framework.Configuration`'s `ValidateRecursively()` recurses only into property types
+declared in the *root object's own assembly*. Moving `GatewayOptions` to Core therefore removed it
+from startup validation silently — a fork could have started with no `Gateway:Tiers` at all and
+only found out at the first quota resolution. Fixed by making each host's `AppSettings` an
+`IValidatableObject` that yields `CoreOptionsValidation.ValidateGateway(...)`, which reproduces the
+same errors and the same `Gateway.Member` paths. Recorded in CONVENTIONS so the next Core-owned
+section does not rediscover it.
+
+### D-015: The monthly reset honours `ResetDayOfMonth` by waking daily (#165)
+**Date:** 2026-09-02
+**Problem:** `SystemConfiguration[ResetDayOfMonth]` was seeded, listed by `GET /config` and
+validated on write (#161), and read by nothing at all — the exact dead-key failure mode #161's
+409 branch exists to prevent for the other two keys.
+**Decision:** Option 1 of #165 — honour it. `MonthlyQuotaResetFunction`'s cron is `0 1 0 * * *`
+(daily at 00:01 UTC) and `MonthlyResetJob` proceeds only when today is the configured day,
+defaulting to the 1st and falling back to it (with a Warning) for a value a calendar cannot honour.
+**Why:** Deriving the cron from the key is impossible — a `TimerTrigger` expression is fixed at
+deployment, so a config change would need a redeploy to take effect, which is the same dead key
+with extra steps. A daily tick costs one `SystemConfiguration` read on the ~29 days it does
+nothing, and it is safe because the reset is idempotent: the worst a bug in the gate can do is
+re-resolve allocations that were already correct. The gateway's own `token-quota` window is still
+a UTC calendar month regardless — this setting moves FoundryGate's mirror, not the gateway's
+counter, and the docs say so.
+
+### D-016: The usage sync writes no audit row for a pass that saw nothing
+**Date:** 2026-09-02 (#39/#84)
+**Decision:** `UsageSyncJob` writes its single `usage.synced` row only when the pass saw traffic
+or changed an allocation. A pass that reconciled nothing logs at Debug and saves nothing.
+**Why:** The job runs every 15 minutes — 96 rows a day, ~35k a year, of "nothing happened" in the
+table the admin audit viewer pages through. That buries every real admin action behind noise, for
+a heartbeat Application Insights already provides. The rule stays "exactly one audit row per run
+that did something", which is what the audit trail is actually for.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the
