@@ -140,8 +140,9 @@ public static class WebTestData
     public static SystemConfigEntryResponse ConfigEntry(
         string key = SystemConfigurationKeys.DefaultMonthlyTokenQuota,
         string value = "5000000",
-        int? updatedByUserId = null) =>
-        new(key, value, DateTimeOffset.UnixEpoch, updatedByUserId);
+        int? updatedByUserId = null,
+        string? updatedByDisplayName = null) =>
+        new(key, value, DateTimeOffset.UnixEpoch, updatedByUserId, updatedByDisplayName);
 
     public static AuditLogEntryResponse AuditEntry(
         int id = 1,

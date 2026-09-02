@@ -255,12 +255,16 @@ else
     }
 
     /// <summary>
-    /// Which admin last changed a row. Today the API only carries their user id; when
-    /// <c>SystemConfigEntryResponse</c> gains <c>UpdatedByDisplayName</c> (#161/#172) this is the
-    /// one place that changes.
+    /// Which admin last changed a row. <c>GET /config</c> joins the editor's display name so this
+    /// needs no second round trip per row; the user id is the fallback for a row written before the
+    /// name was denormalized.
     /// </summary>
-    private static string ChangedBy(SystemConfigEntryResponse entry) =>
-        entry.UpdatedByUserId is { } userId ? $"by user #{userId}" : "seeded — never edited";
+    private static string ChangedBy(SystemConfigEntryResponse entry) => entry switch
+    {
+        { UpdatedByDisplayName: { Length: > 0 } name } => $"by {name}",
+        { UpdatedByUserId: { } userId } => $"by user #{userId}",
+        _ => "seeded — never edited",
+    };
 
     /// <summary>
     /// Keys the API refuses to update with a <c>409</c> (or whose row nothing reads any more), so

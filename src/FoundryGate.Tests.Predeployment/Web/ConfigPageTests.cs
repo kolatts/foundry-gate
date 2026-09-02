@@ -19,7 +19,7 @@ public class ConfigPageTests : WebTestContext
     {
         Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
         [
-            WebTestData.ConfigEntry(SystemConfigurationKeys.DefaultMonthlyTokenQuota, "5000000", updatedByUserId: 3),
+            WebTestData.ConfigEntry(SystemConfigurationKeys.DefaultMonthlyTokenQuota, "5000000", updatedByUserId: 3, updatedByDisplayName: "Ada Admin"),
             WebTestData.ConfigEntry(SystemConfigurationKeys.ResetDayOfMonth, "1"),
         ]);
 
@@ -27,8 +27,19 @@ public class ConfigPageTests : WebTestContext
 
         var table = page.Find("[data-testid='config-table']").TextContent;
         Assert.Contains(SystemConfigurationKeys.DefaultMonthlyTokenQuota, table, StringComparison.Ordinal);
-        Assert.Contains("by user #3", table, StringComparison.Ordinal);
+        Assert.Contains("by Ada Admin", table, StringComparison.Ordinal);
         Assert.Contains("seeded — never edited", table, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Falls_back_to_the_user_id_when_a_row_carries_no_editor_name()
+    {
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+            [WebTestData.ConfigEntry(SystemConfigurationKeys.DefaultMonthlyTokenQuota, "5000000", updatedByUserId: 3)]);
+
+        var page = RenderPage<Config>();
+
+        Assert.Contains("by user #3", page.Find("[data-testid='config-table']").TextContent, StringComparison.Ordinal);
     }
 
     [Fact]
