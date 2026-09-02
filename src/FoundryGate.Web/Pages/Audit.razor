@@ -1,6 +1,239 @@
 @page "/audit"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@using FoundryGate.Domain.Audit.Contracts
+@using FoundryGate.Domain.Common
+@inject IFoundryGateApiClient ApiClient
+@inject ISnackbar Snackbar
+@inject TimeProvider TimeProvider
+
+@* The audit trail (#55). Server-paged and server-filtered: the log is append-only and unbounded,
+   so nothing here ever holds more than one page. The action and target-type choices come from the
+   Domain constants the writers use, not from a list retyped in the UI. *@
 
 <PageTitle>Audit Log — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Audit Log" />
+<MudText Typo="Typo.h4" HtmlTag="h1" GutterBottom="true">Audit log</MudText>
+
+<MudCard Elevation="2" Class="mb-4">
+    <MudCardContent>
+        <MudGrid>
+            <MudItem xs="12" md="3">
+                <MudSelect T="string"
+                           Label="Action"
+                           Value="@_action"
+                           ValueChanged="@(value => ApplyFilterAsync(() => _action = value))"
+                           Clearable="true"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           data-testid="audit-filter-action">
+                    @foreach (var action in Actions)
+                    {
+                        <MudSelectItem T="string" Value="@action">@action</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" md="3">
+                <MudSelect T="string"
+                           Label="Target type"
+                           Value="@_targetType"
+                           ValueChanged="@(value => ApplyFilterAsync(() => _targetType = value))"
+                           Clearable="true"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           data-testid="audit-filter-target-type">
+                    @foreach (var targetType in TargetTypes)
+                    {
+                        <MudSelectItem T="string" Value="@targetType">@targetType</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" md="4">
+                <MudDateRangePicker Label="Occurred between"
+                                    DateRange="@_dateRange"
+                                    DateRangeChanged="@(range => ApplyFilterAsync(() => _dateRange = range))"
+                                    Clearable="true"
+                                    Variant="Variant.Outlined"
+                                    Margin="Margin.Dense"
+                                    data-testid="audit-filter-dates" />
+            </MudItem>
+
+            <MudItem xs="12" md="2">
+                <MudNumericField T="int?"
+                                 Label="Actor user id"
+                                 Value="@_actorUserId"
+                                 ValueChanged="@(value => ApplyFilterAsync(() => _actorUserId = value))"
+                                 Min="1"
+                                 Clearable="true"
+                                 Variant="Variant.Outlined"
+                                 Margin="Margin.Dense"
+                                 data-testid="audit-filter-actor" />
+            </MudItem>
+        </MudGrid>
+
+        @if (HasFilters)
+        {
+            <MudButton Variant="Variant.Text"
+                       StartIcon="@Icons.Material.Filled.FilterAltOff"
+                       Class="mt-2"
+                       OnClick="ClearFiltersAsync"
+                       data-testid="audit-filter-clear">
+                Clear filters
+            </MudButton>
+        }
+    </MudCardContent>
+</MudCard>
+
+<MudDataGrid @ref="_grid"
+             T="AuditLogEntryResponse"
+             ServerData="LoadAsync"
+             Dense="true"
+             Hover="true"
+             Elevation="2"
+             RowsPerPage="@PageSize"
+             data-testid="audit-grid">
+    <Columns>
+        <HierarchyColumn T="AuditLogEntryResponse" />
+        <TemplateColumn Title="Occurred" Sortable="false">
+            <CellTemplate Context="cell">@cell.Item.OccurredDate.ToLocalTime().ToString("d MMM yyyy HH:mm:ss")</CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="Action" Sortable="false">
+            <CellTemplate Context="cell">
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Primary">@cell.Item.Action</MudChip>
+            </CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="Actor" Sortable="false">
+            <CellTemplate Context="cell">
+                @(cell.Item.ActorDisplayName ?? (cell.Item.ActorUserId is { } id ? $"user #{id}" : "system"))
+            </CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="Target" Sortable="false">
+            <CellTemplate Context="cell">
+                @if (cell.Item.TargetType is null)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary">—</MudText>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="fg-mono-raw">@cell.Item.TargetType @cell.Item.TargetId</MudText>
+                }
+            </CellTemplate>
+        </TemplateColumn>
+    </Columns>
+    <ChildRowContent Context="row">
+        <MudTd colspan="5">
+            <AuditDetails Details="@row.Item.Details" />
+        </MudTd>
+    </ChildRowContent>
+    <NoRecordsContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary pa-4" data-testid="audit-empty">
+            @(_loadFailed ? _errorMessage : "No audit entries match these filters.")
+        </MudText>
+    </NoRecordsContent>
+    <PagerContent>
+        <MudDataGridPager T="AuditLogEntryResponse" />
+    </PagerContent>
+</MudDataGrid>
+
+@code {
+    private const int PageSize = 25;
+
+    /// <summary>The known <c>AuditLog.Action</c> values, straight off the Domain constants.</summary>
+    public static readonly IReadOnlyList<string> Actions = ConstantSet.StringConstants(typeof(AuditActions));
+
+    /// <summary>The known <c>AuditLog.TargetType</c> values, straight off the Domain constants.</summary>
+    public static readonly IReadOnlyList<string> TargetTypes = ConstantSet.StringConstants(typeof(AuditTargetTypes));
+
+    private MudDataGrid<AuditLogEntryResponse>? _grid;
+    private string? _action;
+    private string? _targetType;
+    private int? _actorUserId;
+    private DateRange? _dateRange;
+    private bool _loadFailed;
+    private string _errorMessage = string.Empty;
+
+    private bool HasFilters => _action is not null || _targetType is not null || _actorUserId is not null || _dateRange is not null;
+
+    /// <summary>
+    /// One page of the audit trail. Every filter is applied by the API (<c>GET /audit</c>) rather
+    /// than in the browser — the log is unbounded, so client-side filtering would be filtering the
+    /// wrong 25 rows.
+    /// </summary>
+    private async Task<GridData<AuditLogEntryResponse>> LoadAsync(GridState<AuditLogEntryResponse> state, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        var query = new AuditLogQuery(
+            ActorUserId: _actorUserId,
+            Action: _action,
+            TargetType: _targetType,
+            TargetId: null,
+            FromDate: _dateRange?.Start is { } start ? ToInstant(start.Date) : null,
+            // Inclusive of the whole end day: an admin who picks "3 Sep" means everything that
+            // happened on the 3rd, not everything before midnight that morning.
+            ToDate: _dateRange?.End is { } end ? ToInstant(end.Date.AddDays(1).AddTicks(-1)) : null);
+
+        var paging = new PagedRequest(state.Page + 1, state.PageSize);
+        var result = await ApiClient.GetAuditLogAsync(query, paging, cancellationToken);
+
+        if (result.IsSuccess && result.Value is not null)
+        {
+            _loadFailed = false;
+            return new GridData<AuditLogEntryResponse>
+            {
+                Items = result.Value.Items,
+                TotalItems = result.Value.TotalCount,
+            };
+        }
+
+        _loadFailed = true;
+        _errorMessage = result.Message ?? "Couldn't load the audit log.";
+        Snackbar.Add(_errorMessage, Severity.Error);
+        return new GridData<AuditLogEntryResponse> { Items = [], TotalItems = 0 };
+    }
+
+    /// <summary>
+    /// A date the picker produced, as the instant it names in the admin's own time zone. The
+    /// picker hands back wall-clock dates and the grid renders <c>OccurredDate.ToLocalTime()</c>,
+    /// so reading those dates as UTC would offset the filter window from the timestamps on screen
+    /// by the reader's UTC offset — every admin outside UTC would see the wrong day's entries.
+    /// The zone comes from the injected <see cref="TimeProvider"/> rather than
+    /// <see cref="TimeZoneInfo.Local"/> so a test can pin it.
+    /// </summary>
+    private DateTimeOffset ToInstant(DateTime localWallClock) =>
+        new(DateTime.SpecifyKind(localWallClock, DateTimeKind.Unspecified), TimeProvider.LocalTimeZone.GetUtcOffset(localWallClock));
+
+    private async Task ApplyFilterAsync(Action mutate)
+    {
+        mutate();
+        await ReloadAsync();
+    }
+
+    private async Task ClearFiltersAsync()
+    {
+        _action = null;
+        _targetType = null;
+        _actorUserId = null;
+        _dateRange = null;
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (_grid is null)
+        {
+            return;
+        }
+
+        // Back to the first page before reloading. ReloadServerData() keeps the current page, so
+        // narrowing a filter while on page 20 asks the API for page 20 of the narrowed set and
+        // renders "no entries match" for a filter that has plenty.
+        if (_grid.CurrentPage != 0)
+        {
+            _grid.NavigateTo(Page.First);
+        }
+
+        await _grid.ReloadServerData();
+    }
+}

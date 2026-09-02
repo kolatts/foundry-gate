@@ -1,6 +1,253 @@
 @page "/dashboard"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@using FoundryGate.Domain.Dashboard.Contracts
+@implements IDisposable
+@inject IFoundryGateApiClient ApiClient
+@inject ISnackbar Snackbar
+@inject DashboardStateService DashboardState
+
+@* The admin landing page (#54). Every number here is a reconciliation figure from the Log
+   Analytics sync, not a live view of gateway enforcement — the caption says so, because an admin
+   who reads it as live will misdiagnose the first 403 they get asked about. *@
 
 <PageTitle>Dashboard — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Admin Dashboard" />
+<div class="d-flex align-center justify-space-between mb-4">
+    <MudText Typo="Typo.h4" HtmlTag="h1">Dashboard</MudText>
+    <MudButton Variant="Variant.Text"
+               Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Refresh"
+               Disabled="@_refreshing"
+               OnClick="@(() => LoadAsync(showErrors: true))"
+               data-testid="dashboard-refresh">
+        Refresh
+    </MudButton>
+</div>
+
+@if (_loading)
+{
+    <MudGrid data-testid="dashboard-loading">
+        @for (var i = 0; i < 4; i++)
+        {
+            <MudItem xs="6" md="3">
+                <MudSkeleton Height="120px" Width="100%" SkeletonType="SkeletonType.Rectangle" />
+            </MudItem>
+        }
+    </MudGrid>
+}
+else if (_summary is null)
+{
+    <MudAlert Severity="Severity.Error" Icon="@Icons.Material.Filled.CloudOff" data-testid="dashboard-error">@_errorMessage</MudAlert>
+}
+else
+{
+    <MudGrid>
+        <MudItem xs="6" md="3">
+            <MudCard Elevation="2" data-testid="stat-total-users">
+                <MudCardContent>
+                    <MudText Typo="Typo.subtitle2" Class="fg-label">Total users</MudText>
+                    <MudText Typo="Typo.h4" Class="fg-mono">@_summary.TotalUserCount.ToString("N0")</MudText>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <MudItem xs="6" md="3">
+            <MudCard Elevation="2" data-testid="stat-active-users">
+                <MudCardContent>
+                    <MudText Typo="Typo.subtitle2" Class="fg-label">Active</MudText>
+                    <MudText Typo="Typo.h4" Class="fg-mono">@_summary.ActiveUserCount.ToString("N0")</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                        @_summary.UnlimitedUserCount.ToString("N0") unlimited
+                    </MudText>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <MudItem xs="6" md="3">
+            <MudCard Elevation="2" data-testid="stat-pending-requests">
+                <MudCardContent>
+                    <MudText Typo="Typo.subtitle2" Class="fg-label">Pending requests</MudText>
+                    <MudBadge Content="@_summary.PendingQuotaIncreaseRequestCount"
+                              Color="Color.Warning"
+                              Overlap="false"
+                              Visible="@(_summary.PendingQuotaIncreaseRequestCount > 0)"
+                              data-testid="stat-pending-badge">
+                        <MudLink Href="requests?status=Pending" Underline="Underline.Hover" data-testid="stat-pending-link">
+                            <MudText Typo="Typo.h4" Class="fg-mono">@_summary.PendingQuotaIncreaseRequestCount.ToString("N0")</MudText>
+                        </MudLink>
+                    </MudBadge>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                        @(_summary.PendingQuotaIncreaseRequestCount > 0 ? "Waiting for a reviewer" : "Nothing waiting")
+                    </MudText>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <MudItem xs="6" md="3">
+            <MudCard Elevation="2" data-testid="stat-tokens-used">
+                <MudCardContent>
+                    <MudText Typo="Typo.subtitle2" Class="fg-label">Tokens this period</MudText>
+                    <MudText Typo="Typo.h4" Class="fg-mono">@_summary.TotalTokensUsedThisPeriod.ToString("N0")</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Reconciled from gateway logs</MudText>
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+
+        <MudItem xs="12">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <MudText Typo="Typo.subtitle2" Class="fg-label mb-2">Top consumers this period</MudText>
+
+                    @if (_summary.TopConsumers.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" data-testid="top-consumers-empty">
+                            No usage has been reconciled for this period yet.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudDataGrid T="TopConsumerResponse"
+                                     Items="@_summary.TopConsumers"
+                                     Dense="true"
+                                     Hover="true"
+                                     Elevation="0"
+                                     data-testid="top-consumers-grid">
+                            <Columns>
+                                <PropertyColumn Property="@(c => c.DisplayName)" Title="Developer" />
+                                <TemplateColumn Title="Used" CellClass="fg-mono">
+                                    <CellTemplate Context="cell">@QuotaDisplay.FormatTokens(cell.Item.TokensUsed)</CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn Title="Budget" CellClass="fg-mono">
+                                    <CellTemplate Context="cell">@QuotaDisplay.FormatTokens(cell.Item.AllocatedTokens)</CellTemplate>
+                                </TemplateColumn>
+                                <TemplateColumn Title="Share of budget">
+                                    <CellTemplate Context="cell">
+                                        @if (cell.Item.PercentUsed is null)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Success" Icon="@Icons.Material.Filled.AllInclusive">
+                                                Unlimited
+                                            </MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudProgressLinear Color="@QuotaDisplay.GaugeColor(cell.Item.PercentUsed)"
+                                                               Value="@QuotaDisplay.GaugeValue(cell.Item.PercentUsed)"
+                                                               Rounded="true"
+                                                               Size="Size.Small"
+                                                               Class="my-1" />
+                                            <MudText Typo="Typo.caption" Class="fg-mono">@($"{QuotaDisplay.GaugeValue(cell.Item.PercentUsed):0.#}%")</MudText>
+                                        }
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            </Columns>
+                        </MudDataGrid>
+                    }
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private DashboardSummaryResponse? _summary;
+    private bool _loading = true;
+    private bool _refreshing;
+    private string _errorMessage = string.Empty;
+    private PeriodicTimer? _timer;
+
+    // Created in the field initializer rather than in the refresh loop's setup: the first load is
+    // awaited before the loop starts, and a dispose during that window used to find nulls, cancel
+    // nothing, and then let the loop be created anyway — leaving a timer polling an admin-only
+    // endpoint for the life of the tab. This token also cancels the in-flight GET so a reply that
+    // lands after disposal cannot write into DashboardState.
+    private readonly CancellationTokenSource _pageLifetime = new();
+    private bool _disposed;
+
+    /// <summary>
+    /// How often the page re-reads <c>GET /dashboard</c>. A parameter rather than a constant purely
+    /// so the component test can drive the loop in milliseconds instead of waiting a minute; nothing
+    /// in the app passes it.
+    /// </summary>
+    [Parameter]
+    public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromSeconds(60);
+
+    protected override Task OnInitializedAsync()
+    {
+        // The loop is armed before the first load is awaited, so a dispose during that first
+        // request still cancels everything there is to cancel.
+        StartRefreshLoop();
+        return LoadAsync(showErrors: false);
+    }
+
+    private void StartRefreshLoop()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _timer = new PeriodicTimer(RefreshInterval);
+        _ = RefreshLoopAsync(_timer, _pageLifetime.Token);
+    }
+
+    private async Task RefreshLoopAsync(PeriodicTimer timer, CancellationToken ct)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                // A background refresh never nags: a transient failure keeps the last good numbers
+                // on screen rather than replacing them with an error the admin didn't ask for.
+                await InvokeAsync(async () =>
+                {
+                    await LoadAsync(showErrors: false);
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposed while waiting — the page is gone; nothing to report.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The timer was disposed between the tick and the await; same story.
+        }
+    }
+
+    private async Task LoadAsync(bool showErrors)
+    {
+        _refreshing = true;
+        var result = await ApiClient.GetDashboardAsync(_pageLifetime.Token);
+        _refreshing = false;
+        _loading = false;
+
+        if (_pageLifetime.IsCancellationRequested)
+        {
+            // The page went away mid-request. Publishing a pending count from here would push a
+            // number into DashboardState — and so into the nav badge — for a page nobody is on.
+            return;
+        }
+
+        if (result.IsSuccess && result.Value is not null)
+        {
+            _summary = result.Value;
+            DashboardState.SetPendingRequestCount(_summary.PendingQuotaIncreaseRequestCount);
+            return;
+        }
+
+        _errorMessage = result.Message ?? "Couldn't load the dashboard.";
+        if (showErrors)
+        {
+            Snackbar.Add(_errorMessage, Severity.Error);
+        }
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _pageLifetime.Cancel();
+        _timer?.Dispose();
+        _pageLifetime.Dispose();
+    }
+}

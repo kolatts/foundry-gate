@@ -18,7 +18,7 @@ namespace FoundryGate.Web.Services;
 /// and "API is down" without crashing. No method here does any UI-facing formatting or
 /// caching; that belongs to the feature epics that consume this client.
 /// </summary>
-public interface IFoundryGateApiClient
+public partial interface IFoundryGateApiClient
 {
     // Users — spec §4.1
     Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(PagedRequest paging, CancellationToken ct = default);
