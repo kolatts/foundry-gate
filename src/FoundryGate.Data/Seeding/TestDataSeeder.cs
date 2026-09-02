@@ -152,19 +152,25 @@ public static class TestDataSeeder
 
         context.QuotaAllocations.AddRange(allocations);
 
-        // One pending increase request, mirroring the landing page's "Asked for more" row.
-        var requester = users[5 % users.Count];
-        context.QuotaIncreaseRequests.Add(new QuotaIncreaseRequest
+        // One pending increase request, mirroring the landing page's "Asked for more" row — which is a
+        // Standard-tier developer asking for the next tier up. Deliberately not the unlimited user:
+        // POST /requests refuses a caller who is already unlimited (nothing larger to ask for) and
+        // refuses anything that is not an increase (#34), so demo data must not depict either.
+        var requester = users.Find(u => u.MonthlyTokenQuota == StandardTierCap);
+        if (requester is not null)
         {
-            UserId = requester.UserId,
-            RequestedByUserId = requester.UserId,
-            PeriodYear = now.Year,
-            PeriodMonth = now.Month,
-            CurrentQuota = requester.MonthlyTokenQuota,
-            RequestedQuota = PowerTierCap, // the next tier up — requests ask for a tier, not a number
-            Justification = "Running a batch evaluation this sprint that needs more headroom than the standard tier.",
-            StatusType = QuotaRequestStatusType.Pending
-        });
+            context.QuotaIncreaseRequests.Add(new QuotaIncreaseRequest
+            {
+                UserId = requester.UserId,
+                RequestedByUserId = requester.UserId,
+                PeriodYear = now.Year,
+                PeriodMonth = now.Month,
+                CurrentQuota = requester.MonthlyTokenQuota,
+                RequestedQuota = PowerTierCap, // the next tier up — requests ask for a tier, not a number
+                Justification = "Running a batch evaluation this sprint that needs more headroom than the standard tier.",
+                StatusType = QuotaRequestStatusType.Pending
+            });
+        }
 
         await context.SaveChangesAsync(cancellationToken);
     }
