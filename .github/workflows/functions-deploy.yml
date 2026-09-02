@@ -1,0 +1,36 @@
+name: Functions Deploy
+
+# Targeted Functions pipeline for FoundryGate.Functions (#72) — never triggers on infra/**.
+#   workflow_dispatch (environment) -> publish + deploy
+#
+# There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, the single
+# ordered chain (schema before code, api before functions). This file is the "redeploy just the
+# Functions" button. PR build/test is ci.yml's job.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  functions:
+    name: Functions
+    uses: ./.github/workflows/_deploy-functions.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}

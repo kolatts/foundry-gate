@@ -116,6 +116,23 @@ public sealed class QuotaResolutionService(
         return results;
     }
 
+    /// <inheritdoc />
+    public async Task<QuotaPreview> PreviewAsync(int userId, CancellationToken cancellationToken)
+    {
+        // AsNoTracking throughout, and deliberately none of ResolveCoreAsync's write half: this is the
+        // chain's answer only — no allocation row, no tier mapping, no gateway sync.
+        var user = await dbContext.Users.AsNoTracking().SingleOrDefaultAsync(u => u.UserId == userId, cancellationToken)
+            ?? throw new KeyNotFoundException($"User {userId} was not found.");
+
+        var groupPolicies = await dbContext.GroupMembers.AsNoTracking()
+            .Where(gm => gm.UserId == userId)
+            .Select(gm => new GroupPolicy(gm.Group.IsUnlimited, gm.Group.MonthlyTokenQuota))
+            .ToListAsync(cancellationToken);
+
+        var (level, quota) = await ResolveLevelAsync(user, groupPolicies, cancellationToken);
+        return new QuotaPreview(level, quota);
+    }
+
     private async Task<QuotaAllocation?> FindExistingAsync(int userId, BillingPeriod period, CancellationToken cancellationToken)
     {
         // Change tracker first: a row Add()ed earlier in this unit of work is not in the database yet,

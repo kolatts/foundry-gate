@@ -5,6 +5,7 @@ using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Api.Services.Users;
 
@@ -28,6 +29,7 @@ public static class ApiServiceCollectionExtensions
         services.AddIdentityServices();
         services.AddAuditServices();
         services.AddQuotaServices();
+        services.AddRequestsServices();
         services.AddFoundryServices();
         services.AddEntraServices();
         services.AddSecurityServices();

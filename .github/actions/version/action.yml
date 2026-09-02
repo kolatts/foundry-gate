@@ -1,0 +1,51 @@
+name: Version (GitVersion, trunk-based)
+description: >-
+  Computes the build version with GitVersion 6 using the repo's GitVersion.yml (trunk-based —
+  the v6 successor of v5 "Mainline" mode, CONVENTIONS.md §CI/CD) and derives the container image
+  tag `{semVer}-{shortSha}` (docker-tag safe). The calling job MUST check out with
+  `fetch-depth: 0` — GitVersion needs the full history to count commits since the last tag.
+
+outputs:
+  semver:
+    description: "e.g. 0.3.7 on main, 0.3.7-claude-foo.2 on a branch"
+    value: ${{ steps.gitversion.outputs.semVer }}
+  major-minor-patch:
+    description: "e.g. 0.3.7 — numeric, valid for AssemblyVersion/FileVersion"
+    value: ${{ steps.gitversion.outputs.majorMinorPatch }}
+  short-sha:
+    description: "7-character commit sha"
+    value: ${{ steps.gitversion.outputs.shortSha }}
+  image-tag:
+    description: "{semVer}-{shortSha} with every character outside [A-Za-z0-9_.-] replaced by '-'"
+    value: ${{ steps.tag.outputs.image-tag }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install GitVersion
+      uses: gittools/actions/gitversion/setup@v4.7.0
+      with:
+        versionSpec: "6.x"
+
+    - name: Determine version
+      id: gitversion
+      uses: gittools/actions/gitversion/execute@v4.7.0
+      with:
+        configFilePath: GitVersion.yml
+
+    - name: Derive image tag
+      id: tag
+      shell: bash
+      env:
+        SEMVER: ${{ steps.gitversion.outputs.semVer }}
+        SHORT_SHA: ${{ steps.gitversion.outputs.shortSha }}
+      run: |
+        tag="$(printf '%s-%s' "$SEMVER" "$SHORT_SHA" | tr -c 'A-Za-z0-9_.-' '-')"
+        echo "image-tag=${tag}" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Version"
+          echo ""
+          echo "| SemVer | MajorMinorPatch | Image tag |"
+          echo "|---|---|---|"
+          echo "| \`${SEMVER}\` | \`${{ steps.gitversion.outputs.majorMinorPatch }}\` | \`${tag}\` |"
+        } >> "$GITHUB_STEP_SUMMARY"

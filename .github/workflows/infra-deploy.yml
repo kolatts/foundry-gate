@@ -1,0 +1,72 @@
+name: Infra Deploy
+
+# Thin trigger wrapper around _deploy-infra.yml (#69):
+#   pull_request touching infra/**  -> validate + what-if against the read-only `dev-plan`
+#                                      Environment, posted as a PR comment
+#   workflow_dispatch               -> deploy the chosen environment (production stops at the
+#                                      `production` Environment's required reviewer)
+#
+# There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, which starts
+# with exactly this infra deploy and then carries on through database/api/functions/ui. This
+# file is the "redeploy just the infrastructure" button.
+#
+# Code deploys never trigger from here and this never triggers on src/** — infra and code
+# pipelines are deliberately separate (plans/22-cicd-pipelines.md).
+
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/infra-deploy.yml"
+      - ".github/workflows/_deploy-infra.yml"
+      - ".github/scripts/infra/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+      create-model-deployments:
+        description: "Day-0 ONLY for a brand-new environment: pass createModelDeployments=true (Anthropic deployments are create-once)."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# PR what-ifs cancel each other per PR; a dispatch takes the per-environment lock shared with
+# deploy-all.yml and the other wrappers, so two runs never mutate one environment at once.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('infra-what-if-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', inputs.environment) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  what-if:
+    name: What-if (PR)
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/_deploy-infra.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: dev
+      plan-environment: dev-plan
+      mode: what-if
+      post-what-if-comment: true
+
+  deploy:
+    name: Deploy ${{ inputs.environment }}
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/_deploy-infra.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: ${{ inputs.environment }}
+      mode: deploy
+      create-model-deployments: ${{ inputs.create-model-deployments }}

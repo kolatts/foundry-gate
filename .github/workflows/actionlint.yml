@@ -1,0 +1,49 @@
+name: Actionlint
+
+# Lints every workflow on PRs that touch .github/** (#140). Deliberately a separate,
+# non-required workflow: ci.yml carries the protected required check `build-test` and is not
+# modified here.
+#
+# actionlint also runs shellcheck over every `run:` block, which is most of the value — the
+# deploy workflows are mostly bash. Composite actions are not workflow files and actionlint
+# does not read them, so they get a YAML parse instead; their logic is covered by
+# resolve-api-image.test.sh and by the PR-track jobs that actually run them.
+
+on:
+  pull_request:
+    paths:
+      - ".github/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: actionlint-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: Lint workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.7"
+        run: |
+          set -euo pipefail
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -color
+
+      - name: Parse composite actions
+        run: |
+          set -euo pipefail
+          find .github/actions -name action.yml -print0 |
+            xargs -0 -I{} python3 -c "import sys, yaml; yaml.safe_load(open(sys.argv[1])); print('ok', sys.argv[1])" {}
+
+      - name: Test resolve-api-image.sh
+        run: bash .github/scripts/infra/resolve-api-image.test.sh

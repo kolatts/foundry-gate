@@ -1,4 +1,5 @@
 using FoundryGate.Data.Entities;
+using FoundryGate.Domain.Quota;
 
 namespace FoundryGate.Api.Services.Quota;
 
@@ -16,3 +17,13 @@ public sealed record QuotaResolution(
     bool IsNew,
     string? PreviousTierProductId,
     bool TierSyncRequested);
+
+/// <summary>
+/// What the five-level chain <em>says</em> a user's budget is, with nothing written down: no
+/// <see cref="QuotaAllocation"/> upsert, no <see cref="IGatewayTierSync"/> call, nothing added to the
+/// change tracker. The answer to "what is this developer's quota right now?" for callers that need it
+/// to decide whether to act at all — see <see cref="IQuotaResolutionService.PreviewAsync"/>.
+/// </summary>
+/// <param name="Level">The level that produced <paramref name="Quota"/>.</param>
+/// <param name="Quota">The resolved monthly token quota; <see langword="null"/> means unlimited.</param>
+public readonly record struct QuotaPreview(QuotaLevelType Level, long? Quota);

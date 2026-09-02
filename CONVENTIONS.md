@@ -253,7 +253,11 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
 - **Unlike imagile-app, infra deploys automatically**: merge to main runs Bicep
   what-if (posted to PR pre-merge per #69) then deploys — no manual dispatch as the
   normal path. Full chain on merge: infra → dacpac db deploy (runner IP whitelist →
-  firewall wait → deploy → seed) → api/functions/ui → postdeployment tests → summary.
+  firewall wait → deploy → seed → grant identities → remove runner firewall rule) →
+  api/functions/ui → postdeployment tests → summary. The grant step creates the API and
+  Functions contained SQL users `WITH SID` from the identities' client ids (deployment
+  outputs) — `FROM EXTERNAL PROVIDER` would need Directory Readers on a SQL server
+  identity the Bicep does not declare, so it is opt-in only.
 - SQL deploy niceties to copy verbatim: CLI-driven runner IP whitelist, 60s firewall
   propagation wait, TCP 1433 probe, Entra-admin-group membership verification with
   retries.

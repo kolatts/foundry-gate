@@ -152,8 +152,14 @@ public static class TestDataSeeder
 
         context.QuotaAllocations.AddRange(allocations);
 
-        // One pending increase request, mirroring the landing page's "Asked for more" row.
-        var requester = users[5 % users.Count];
+        // One pending increase request, mirroring the landing page's "Asked for more" row — which is a
+        // Standard-tier developer asking for the next tier up. Deliberately not the unlimited user:
+        // POST /requests refuses a caller who is already unlimited (nothing larger to ask for) and
+        // refuses anything that is not an increase (#34), so demo data must not depict either.
+        // First(), not Find()+null check: no Standard-tier developer in the roster means QuotaTiers and
+        // the landing page have drifted apart, and a loud InvalidOperationException on the local seed is
+        // a better read than demo data that is quietly one row short.
+        var requester = users.First(u => u.MonthlyTokenQuota == StandardTierCap);
         context.QuotaIncreaseRequests.Add(new QuotaIncreaseRequest
         {
             UserId = requester.UserId,
