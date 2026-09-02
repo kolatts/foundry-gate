@@ -9,32 +9,163 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/users` | Admin | List all users, paged. Query: `?search=&page=&pageSize=` |
-| `GET` | `/users/me` | Any | Own profile + current quota. Auto-provisions on first call. |
-| `GET` | `/users/{id}` | Admin | User detail including group memberships and allocation |
-| `PUT` | `/users/{id}/quota` | Admin | Set `MonthlyTokenQuota` or `IsUnlimited` |
-| `POST` | `/users/{id}/activate` | Admin | Re-activate user — runs full provision pipeline |
-| `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription |
-| `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount, skippedGroupAssignmentCount }` |
+| `GET` | `/users` | Admin | List users, paged, ordered by display name. Query: `?search=&isActive=&page=&pageSize=` |
+| `GET` | `/users/me` | Any | Own profile, current quota, masked key and CLI connection details. Auto-provisions on first call. |
+| `GET` | `/users/{id}` | Admin | User detail: the list row plus group memberships, current-period allocation and masked key |
+| `PUT` | `/users/{id}/quota` | Admin | Set `monthlyTokenQuota` or `isUnlimited`; re-resolves the period and moves the APIM subscription to the new tier product |
+| `POST` | `/users/{id}/activate` | Admin | Re-activate user — runs the full provision pipeline |
+| `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription, hard-stops the allocation, rejects pending requests |
+| `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount, skippedGroupAssignmentCount, failedCount }` |
 
-`POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned are set `isActive = false` — never deleted, never auto-reactivated if they later return. One `users.synced` audit row is written per run.
+### `GET /users/me` — first login provisions everything
+
+A developer's first call creates their whole footprint in **one transaction**: the `User` row (from
+the token's Entra claims, enriched from Microsoft Graph when `Entra:Enabled`), their allocation for
+the current month, and their APIM subscription under the tier that allocation resolved to. If the
+gateway refuses the subscription, nothing is written — no half-provisioned user, no `502` with a row
+left behind. Later calls are idempotent and, in the common case, **read-only**: display name and
+email are written back only when the token actually disagrees with the stored values. `lastSyncedDate`
+is *not* touched — it means "an Entra sync last saw this user", and a profile load is not a sync; the
+honest "this account is in use" column is tracked in
+[#167](https://github.com/kolatts/foundry-gate/issues/167).
+
+The response carries `quota` (the same shape as `/quota/allocations/me`), `apiKey` (masked to the
+last four characters — the plaintext only ever comes from `/keys/*`), and `cliConfig`:
+`gatewayBaseUrl` (the gateway origin, empty on a host with no gateway configured),
+`anthropicBasePath` (`/anthropic`), `openAiBasePath` (`/openai/v1`), and `modelAliases` — currently
+always empty, because the alias map lives only in the gateway's Bicep
+([#153](https://github.com/kolatts/foundry-gate/issues/153)); use
+[CLI setup](/foundry-gate/getting-started/cli-setup/) for model names until it lands.
+
+Errors: `403` when the caller's account is deactivated, `409` when two first logins for the same
+identity race (retry — [#154](https://github.com/kolatts/foundry-gate/issues/154) will absorb it),
+`502` when the gateway or Graph failed, `503` when APIM key management is not configured on the host.
+
+### Deactivate and activate are the lifecycle pipelines
+
+`POST /users/{id}/deactivate` is the full offboarding sequence, committed atomically: **delete** the
+APIM subscription (there is no suspended state), clear the stored key, `isActive = false`, hard-stop
+the current allocation, and reject every Pending quota-increase request of theirs with the note
+"User deactivated" and no reviewer. `POST /users/{id}/activate` runs the provision pipeline in
+reverse: `isActive = true`, quota re-resolved, and a fresh APIM subscription minted — adopting an
+orphan named `foundrygate-{userId}` if a previous deprovision left one behind, rather than creating a
+duplicate. The new key is **not** returned to the admin; the developer reveals their own with
+`POST /keys/me/reveal`. Re-activation also clears the `isHardStopped` flag its own deactivation set,
+so the developer's gauge is live again immediately rather than at the next monthly reset. Both are
+`409` when the user is already in the target state and `404` for an unknown user.
+
+**Where a gateway failure leaves you.** Activation is all-or-nothing: a `502` rolls the whole thing
+back and the user stays deactivated. Deactivation cannot be, because an APIM `DELETE` has no undo — so
+it deletes the subscription **first**, outside the transaction that then records the deactivation. A
+`502` therefore means the deletion did not happen and nothing changed; a failure *after* it (rare, and
+logged at Error) leaves the key revoked and audited but the user still marked active. Re-running
+`POST /users/{id}/deactivate` finishes the job — revocation tolerates a subscription that is already
+gone.
+
+To take a key away without deactivating anyone, use `DELETE /keys/{userId}` instead — that leaves the
+user active, their quota untouched, and their requests pending.
+
+`PUT /users/{id}/quota` accepts only a configured tier cap or `isUnlimited` (see
+[Quota](#quota) below); `isUnlimited: true` clears any numeric override. Because a budget *is* a
+gateway tier, a change here re-scopes the developer's APIM subscription to the new tier product, and a
+gateway that refuses the move is a `502` that leaves the database showing the old budget rather than
+claiming a tier nobody enforces.
+
+:::caution[Unverified: does a re-scope preserve the key?]
+FoundryGate assumes re-scoping a subscription to another product leaves its keys alone, so a tier
+change needs no CLI reconfiguration. That assumption is proven against the in-memory APIM the test
+suite uses — **not** against real Azure API Management. It is on the live checklist in
+[#132](https://github.com/kolatts/foundry-gate/issues/132). If a real re-scope turns out to rotate the
+key, a tier change becomes a key event: FoundryGate would have to create the subscription on the new
+product, delete the old one, and hand the developer a new key (audited `key.rotated`).
+:::
+
+`POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned run the **same deprovision pipeline as `POST /users/{id}/deactivate`** — APIM subscription deleted, `isActive = false`, allocation hard-stopped, pending requests rejected — so a departed employee never keeps a working gateway key. Rows are never deleted and never auto-reactivated if the person later returns; an admin must re-activate them. Each departure is its own unit of work: one that the gateway refuses is counted in `failedCount`, logged, and skipped — the rest of the run still lands and the next run retries it, so a single bad ARM call can never undo deletions that already succeeded. Adds and updates then commit together with one `users.synced` audit row attributed to the caller; each departure writes system-attributed `user.deactivated` / `key.revoked` rows of its own.
 
 **Group-assigned access suspends departure detection.** Only *user* assignees are read today; an app-role assignment granted to a *group* is not expanded to its members yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Because a user assigned through such a group is invisible to the sync, "not in the user list" cannot mean "departed" — so when the directory reports one or more group assignments the run still adds and updates users but deactivates nobody, returns `deactivatedCount: 0` with `skippedGroupAssignmentCount > 0`, names the groups in a warning log and in the audit row (`departureDetectionSuspended: true`). Assign developers individually to the application if you need departure detection before #121 lands.
 
-Errors: `400` when `Entra:Enabled` is false on the host, `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role).
+Errors: `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role), `503` when `Entra:Enabled` is false on the host (the message names the setting and the Graph roles to grant — the request is fine, the host is not configured for the feature).
 
 ## Groups
 
+A group is a budget policy for a set of people: levels 3-4 of the [quota resolution chain](#quota) read
+group membership, so every write on this surface can move a developer's allocation and the APIM tier
+product their key is scoped to. Every route is admin-only.
+
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/groups` | Admin | List all groups with member count |
-| `POST` | `/groups` | Admin | Create group |
-| `GET` | `/groups/{id}` | Admin | Group detail + member list |
-| `PUT` | `/groups/{id}` | Admin | Update name, description, quota |
-| `DELETE` | `/groups/{id}` | Admin | Delete group (does not delete members) |
-| `POST` | `/groups/{id}/members` | Admin | Add user to group |
-| `DELETE` | `/groups/{id}/members/{userId}` | Admin | Remove user from group |
-| `POST` | `/groups/{id}/sync-entra` | Admin | Sync members from linked Entra group |
+| `GET` | `/groups` | Admin | Groups ordered by name, paged (`?page=&pageSize=`), each with `memberCount`. `?search=` matches name and description, case-insensitively |
+| `POST` | `/groups` | Admin | Create a group. `201` with a `Location` header pointing at `GET /groups/{id}` |
+| `GET` | `/groups/{id}` | Admin | `{ group, members }` — the group plus its full roster, ordered by display name |
+| `PUT` | `/groups/{id}` | Admin | Update `name`, `description`, `isUnlimited`, `monthlyTokenQuota`. Returns the updated group |
+| `DELETE` | `/groups/{id}` | Admin | Delete the group and its memberships (`204`). Needs `?force=true` if it still has members |
+| `GET` | `/groups/{id}/members` | Admin | The roster, paged, ordered by display name |
+| `POST` | `/groups/{id}/members` | Admin | Add a user by `{ "userId": n }`. Returns the new membership |
+| `DELETE` | `/groups/{id}/members/{userId}` | Admin | Remove a membership (`204`) |
+| `POST` | `/groups/{id}/sync-entra` | Admin | Reconcile one group against its linked Entra group |
+| `POST` | `/groups/sync-entra` | Admin | Reconcile every Entra-linked group; one summary each |
+
+**Quota values are tiers.** `monthlyTokenQuota` on create and update must be `null` (unlimited) or
+exactly one configured tier cap, or the request is `400` listing the allowed values — the same rule
+`PUT /users/{id}/quota` follows. `GET /quota/tiers` is the list to offer.
+
+**Names are unique.** A duplicate is `409` — case-insensitively, and enforced by the unique index
+`IX_Groups_Name` so two concurrent creates cannot both win. **`entraGroupId` is unique too** (among the
+groups that have one): one Entra group backs at most one FoundryGate group, or both would claim its
+members and hand them the larger of the two quotas. A second link is `409`.
+
+**An Entra-linked group's roster is read-only through this API.** `POST /groups/{id}/members` and
+`DELETE /groups/{id}/members/{userId}` return `409` when the group has an `entraGroupId`: the edit
+would be applied and then silently undone by the next `sync-entra`, which is a worse answer than
+refusing. Change the membership in the directory group and sync. The group's *policy* — name,
+description, quota — stays editable; the directory owns who is in the group, not what the group is
+worth.
+
+`isEntraSynced` in the response is derived from `entraGroupId` being set; it is not a separate stored
+flag that could disagree with the link.
+
+**Every quota-visible write re-resolves the members it affects**, in the same transaction as the
+mutation and its audit row: a quota change on `PUT /groups/{id}` re-resolves every current member;
+`DELETE /groups/{id}` re-resolves the former members *after* their memberships are removed (they fall
+back down the chain, usually to the system default); adding or removing one member re-resolves that
+one. Only **active** users are re-resolved — a deactivated developer has no key to enforce against, and
+`GET /quota/allocations/me` refuses to mint them an allocation either. Members whose tier actually
+changes have their APIM subscription moved to the new tier product; members whose tier is unchanged are
+not touched.
+
+**Deleting a group never deletes users**, and never clears their individual quota overrides — only the
+group's own contribution to their resolution goes away. `EntraGroupId` is set at creation and is not
+updatable: re-pointing a synced group at a different directory group would silently rewrite its whole
+roster on the next sync, so delete and recreate instead.
+
+Audit rows: `group.created`, `group.updated` (with before/after values), `group.deleted`,
+`group.member-added`, `group.member-removed`, `group.entra-synced` — all with `targetType: "Group"` and
+the group id as `targetId`.
+
+### Entra group sync
+
+`POST /groups/{id}/sync-entra` pulls the linked Entra group's membership (transitively, so nested
+groups flatten to their people) and reconciles it. Idempotent: a second run with an unchanged directory
+reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserCount }`.
+
+- Directory members missing from this group are added with **`addedByUserId: null`** — the system
+  actor. The directory chose the membership, not the calling admin, and the audit trail should not
+  claim otherwise; the UI can label such rows "from Entra".
+- Memberships whose user is no longer in the Entra group are deleted. The `User` row is untouched —
+  leaving a synced group is not leaving the company.
+- Directory members with **no FoundryGate `User` row** are skipped, never invented, and counted in
+  `skippedUnknownUserCount` (also logged at Warning). A non-zero count means those people have never
+  signed in and were not imported: run `POST /users/sync` first, then sync again.
+- Everyone whose membership changed is re-resolved, so a developer joining a Power group is on the
+  Power product by the time the response returns.
+
+`POST /groups/sync-entra` does the same for every group that has an `entraGroupId`, one unit of work
+each, in group-id order; groups with no link are skipped and do not appear in the result.
+
+Errors: `400` when the group has no `entraGroupId` (a real caller error — this group has nothing to
+sync against); `404` for an unknown group; `503` when `Entra:Enabled` is false on the host — the
+message names the setting and the Graph roles to grant. The 503 is deliberate: the request is
+well-formed and the caller can do nothing about it, so it is the operator's problem, not theirs.
 
 ## Quota
 
@@ -162,7 +293,7 @@ transitions whose body is not the resource, matching `POST /users/{id}/activate`
 | `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. `404` when no key |
 | `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. `404` no key; `409` if the APIM subscription vanished |
 | `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key (same semantics) |
-| `POST` | `/keys/{userId}/provision` | Admin | Provision a key for a user with none, under `?tier=standard\|power\|unlimited` (default `standard`). Returns plaintext once. `409` key exists or user deactivated; `400` unknown tier; reuses an orphaned APIM subscription with fresh keys |
+| `POST` | `/keys/{userId}/provision` | Admin | Provision a key for an active user with none, under the tier **their quota resolves to** (no `?tier=`: a budget *is* a tier, so set the quota to change the product). Returns plaintext once. `409` key exists or user deactivated; reuses an orphaned APIM subscription with fresh keys |
 | `DELETE` | `/keys/{userId}` | Admin | Revoke key only: APIM subscription deleted, stored key cleared, `key.revoked` audited. **User stays active** and can be re-provisioned; `204` even when no key existed. Deactivation is `POST /users/{id}/deactivate` |
 
 Callers of every `/keys/me` route must already have a FoundryGate user row (`GET /users/me` provisions one) — otherwise `403`. The plaintext key is stored encrypted (Key Vault RSA key wrapping; see [Configuration](/reference/configuration/)) and appears in exactly one response per mint or reveal. Reveal is not yet rate-limited (tracked in #136). Provisioning is race-safe: two concurrent `provision` calls for one user cannot both mint — the second gets `409`.

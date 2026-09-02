@@ -35,6 +35,18 @@ namespace FoundryGate.Api.Configuration;
 /// </remarks>
 public class GatewayOptions : IValidatableObject
 {
+    /// <summary>
+    /// Path segment of the gateway's Anthropic Messages front door, as
+    /// <c>infra/modules/ai-gateway.bicep</c> creates it (<c>anthropicApiPath</c>). A constant rather
+    /// than a setting because the bicep hard-codes it: making it configurable here would let the
+    /// control plane hand developers a path the data plane does not serve. If it ever becomes a
+    /// bicep parameter, it becomes a <c>Gateway__*</c> env var at the same time (#153).
+    /// </summary>
+    public const string AnthropicBasePath = "/anthropic";
+
+    /// <summary>Path segment of the gateway's OpenAI Responses front door (<c>infra/modules/ai-gateway.bicep</c>'s <c>openaiApiPath</c>). See <see cref="AnthropicBasePath"/>.</summary>
+    public const string OpenAiBasePath = "/openai/v1";
+
     /// <summary>Azure subscription id the gateway resource group lives in.</summary>
     public string? SubscriptionId { get; set; }
 
@@ -43,6 +55,16 @@ public class GatewayOptions : IValidatableObject
 
     /// <summary>APIM service name — the short name, not the ARM id (<c>Gateway__ApimName</c>). Required for subscription-key management (#36/#37).</summary>
     public string? ApimName { get; set; }
+
+    /// <summary>
+    /// The gateway's public origin (<c>https://apim-foundrygate-{env}.azure-api.net</c>, or a fork's
+    /// custom domain) — infra already sets it on the control plane as <c>Gateway__ApimGatewayUrl</c>
+    /// (<c>infra/modules/control-plane.bicep</c>, from the APIM module's <c>gatewayUrl</c> output). It is
+    /// what <c>GET /users/me</c> hands a developer as <c>cliConfig.gatewayBaseUrl</c> (#28), so it is an
+    /// address for humans and CLIs, not an ARM id: absent locally, where there is no gateway, in which
+    /// case <c>/users/me</c> returns an empty base URL rather than inventing one.
+    /// </summary>
+    public string? ApimGatewayUrl { get; set; }
 
     /// <summary>
     /// Versionless Key Vault key URI (<c>https://{vault}.vault.azure.net/keys/fg-apim-key-encryption</c>)
@@ -152,6 +174,16 @@ public class GatewayOptions : IValidatableObject
             yield return new ValidationResult(
                 $"{nameof(KeyEncryptionKeyUri)} must be an absolute https URI of a Key Vault key.",
                 [nameof(KeyEncryptionKeyUri)]);
+        }
+
+        // A malformed gateway URL is worth refusing to start over: every developer's CLI config would
+        // otherwise be built from it and fail at the first request, far from the cause.
+        if (!string.IsNullOrWhiteSpace(ApimGatewayUrl)
+            && (!Uri.TryCreate(ApimGatewayUrl, UriKind.Absolute, out var gatewayUri) || gatewayUri.Scheme != Uri.UriSchemeHttps))
+        {
+            yield return new ValidationResult(
+                $"{nameof(ApimGatewayUrl)} must be an absolute https URI of the gateway (e.g. https://apim-foundrygate-dev.azure-api.net).",
+                [nameof(ApimGatewayUrl)]);
         }
     }
 

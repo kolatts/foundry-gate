@@ -36,7 +36,7 @@ public interface IFoundryGateApiClient
     Task<ApiCallResult<UserSyncResult>> SyncUsersAsync(CancellationToken ct = default);
 
     // Groups — spec §4.2
-    Task<ApiCallResult<IReadOnlyList<GroupResponse>>> GetGroupsAsync(CancellationToken ct = default);
+    Task<ApiCallResult<PagedResult<GroupResponse>>> GetGroupsAsync(PagedRequest paging, string? search = null, CancellationToken ct = default);
 
     Task<ApiCallResult<GroupResponse>> CreateGroupAsync(CreateGroupRequest request, CancellationToken ct = default);
 
@@ -49,6 +49,10 @@ public interface IFoundryGateApiClient
     Task<ApiCallResult<bool>> AddGroupMemberAsync(int groupId, AddGroupMemberRequest request, CancellationToken ct = default);
 
     Task<ApiCallResult<bool>> RemoveGroupMemberAsync(int groupId, int userId, CancellationToken ct = default);
+
+    Task<ApiCallResult<PagedResult<GroupMemberResponse>>> GetGroupMembersAsync(int groupId, PagedRequest paging, CancellationToken ct = default);
+
+    Task<ApiCallResult<GroupSyncResult>> SyncGroupFromEntraAsync(int groupId, CancellationToken ct = default);
 
     Task<ApiCallResult<IReadOnlyList<GroupSyncResult>>> SyncGroupsFromEntraAsync(CancellationToken ct = default);
 

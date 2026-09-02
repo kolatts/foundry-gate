@@ -30,10 +30,7 @@ public sealed class QuotaResolutionService(
         var user = await dbContext.Users.SingleOrDefaultAsync(u => u.UserId == userId, cancellationToken)
             ?? throw new KeyNotFoundException($"User {userId} was not found.");
 
-        var groupPolicies = await dbContext.GroupMembers.AsNoTracking()
-            .Where(gm => gm.UserId == userId)
-            .Select(gm => new GroupPolicy(gm.Group.IsUnlimited, gm.Group.MonthlyTokenQuota))
-            .ToListAsync(cancellationToken);
+        var groupPolicies = (await LoadGroupPoliciesAsync([userId], cancellationToken)).GetValueOrDefault(userId) ?? [];
 
         var existing = await FindExistingAsync(userId, period, cancellationToken);
 
@@ -62,11 +59,7 @@ public sealed class QuotaResolutionService(
             .Where(u => ids.Contains(u.UserId))
             .ToDictionaryAsync(u => u.UserId, cancellationToken);
 
-        var policiesByUser = (await dbContext.GroupMembers.AsNoTracking()
-                .Where(gm => ids.Contains(gm.UserId))
-                .Select(gm => new { gm.UserId, gm.Group.IsUnlimited, gm.Group.MonthlyTokenQuota })
-                .ToListAsync(cancellationToken))
-            .ToLookup(p => p.UserId, p => new GroupPolicy(p.IsUnlimited, p.MonthlyTokenQuota));
+        var policiesByUser = await LoadGroupPoliciesAsync(ids, cancellationToken);
 
         var existingByUser = new Dictionary<int, QuotaAllocation>();
         foreach (var tracked in dbContext.QuotaAllocations.Local.Where(a => a.PeriodYear == period.Year && a.PeriodMonth == period.Month && ids.Contains(a.UserId)))
@@ -110,10 +103,103 @@ public sealed class QuotaResolutionService(
             existingByUser.TryGetValue(id, out var existing);
             var previousTier = existing?.TierProductId ?? priorTierByUser.GetValueOrDefault(id);
 
-            results.Add(await ResolveCoreAsync(user, period, [.. policiesByUser[id]], existing, previousTier, cancellationToken));
+            results.Add(await ResolveCoreAsync(user, period, policiesByUser.GetValueOrDefault(id) ?? [], existing, previousTier, cancellationToken));
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// The group-level inputs to levels 3-4 for <paramref name="userIds"/>, read <b>through the change
+    /// tracker</b>: the persisted <c>(UserId, GroupId)</c> memberships, overlaid with the ones this unit
+    /// of work has <c>Add</c>ed or <c>Remove</c>d but not yet saved, and joined to <see cref="Group"/>
+    /// rows loaded <em>tracked</em> so a group whose quota the caller just edited resolves to its new
+    /// value.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Same rule as <see cref="FindExistingAsync"/> and <c>CurrentUserAccessor.TryGetUserAsync</c>:
+    /// pending state first, database second. Without it, "change the group's quota / add a member /
+    /// delete the group, then re-resolve, then save once" — the whole of <c>GroupService</c> (#30/#31)
+    /// and <c>EntraGroupSyncService</c> (#41) — would resolve against the pre-mutation database and
+    /// write allocations for the state the admin just replaced. A projection query cannot see pending
+    /// changes at all, which is why the join to <c>Groups</c> is a tracked entity load rather than
+    /// <c>Select(gm =&gt; new { gm.Group.IsUnlimited, ... })</c>: EF's identity resolution hands back the
+    /// instance the caller mutated.
+    /// </para>
+    /// <para>
+    /// Not representable, and not needed by any caller: a membership added to a <see cref="Group"/> that
+    /// is itself unsaved (both ids are still 0). Every write path saves the group before it can have
+    /// members.
+    /// </para>
+    /// </remarks>
+    private async Task<Dictionary<int, List<GroupPolicy>>> LoadGroupPoliciesAsync(IReadOnlyCollection<int> userIds, CancellationToken cancellationToken)
+    {
+        var ids = userIds as List<int> ?? [.. userIds];
+
+        var pairs = new HashSet<(int UserId, int GroupId)>(
+            (await dbContext.GroupMembers.AsNoTracking()
+                .Where(gm => ids.Contains(gm.UserId))
+                .Select(gm => new { gm.UserId, gm.GroupId })
+                .ToListAsync(cancellationToken))
+            .Select(pair => (pair.UserId, pair.GroupId)));
+
+        var wanted = ids.ToHashSet();
+        foreach (var entry in dbContext.ChangeTracker.Entries<GroupMember>())
+        {
+            var membership = entry.Entity;
+            if (!wanted.Contains(membership.UserId))
+            {
+                continue;
+            }
+
+            switch (entry.State)
+            {
+                case EntityState.Added:
+                    _ = pairs.Add((membership.UserId, membership.GroupId));
+                    break;
+                case EntityState.Deleted:
+                    _ = pairs.Remove((membership.UserId, membership.GroupId));
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        // A group being deleted takes its memberships with it, whether or not the caller removed the
+        // GroupMember rows explicitly (the relationship cascades).
+        var deletedGroupIds = dbContext.ChangeTracker.Entries<Group>()
+            .Where(entry => entry.State == EntityState.Deleted)
+            .Select(entry => entry.Entity.GroupId)
+            .ToHashSet();
+        _ = pairs.RemoveWhere(pair => deletedGroupIds.Contains(pair.GroupId));
+
+        var groupIds = pairs.Select(pair => pair.GroupId).Distinct().ToList();
+        var policies = groupIds.Count == 0
+            ? []
+            : (await dbContext.Groups
+                .Where(g => groupIds.Contains(g.GroupId))
+                .ToListAsync(cancellationToken))
+                .ToDictionary(g => g.GroupId, g => new GroupPolicy(g.IsUnlimited, g.MonthlyTokenQuota));
+
+        var byUser = new Dictionary<int, List<GroupPolicy>>();
+        foreach (var (userId, groupId) in pairs)
+        {
+            if (!policies.TryGetValue(groupId, out var policy))
+            {
+                continue;
+            }
+
+            if (!byUser.TryGetValue(userId, out var list))
+            {
+                list = [];
+                byUser[userId] = list;
+            }
+
+            list.Add(policy);
+        }
+
+        return byUser;
     }
 
     /// <inheritdoc />
@@ -124,6 +210,9 @@ public sealed class QuotaResolutionService(
         var user = await dbContext.Users.AsNoTracking().SingleOrDefaultAsync(u => u.UserId == userId, cancellationToken)
             ?? throw new KeyNotFoundException($"User {userId} was not found.");
 
+        // Straight projection, not LoadGroupPoliciesAsync: preview is a read with nothing pending in the
+        // unit of work, and staying AsNoTracking is the point of it. A caller that ever previews *after*
+        // editing a group in the same request would need the tracker-aware loader instead (#163).
         var groupPolicies = await dbContext.GroupMembers.AsNoTracking()
             .Where(gm => gm.UserId == userId)
             .Select(gm => new GroupPolicy(gm.Group.IsUnlimited, gm.Group.MonthlyTokenQuota))

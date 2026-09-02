@@ -20,8 +20,10 @@ public interface IEntraUserSyncService
     /// <c>IsActive</c> is left alone — an admin-deactivated user who is still in Entra stays inactive,
     /// and a previously departed user who reappears is <em>not</em> auto-reactivated (plan #21:
     /// "only if the user returns to Entra <em>and an admin re-activates</em>").</item>
-    /// <item><b>In the table, not in Entra</b> → <c>IsActive = false</c>. Rows are never deleted (audit
-    /// history). Users already inactive are not counted again.</item>
+    /// <item><b>In the table, not in Entra</b> → the full deprovision pipeline
+    /// (<c>IUserLifecycleService.DeprovisionAsync(EntraDeparture, …)</c>): APIM subscription deleted,
+    /// <c>IsActive = false</c>, current allocation hard-stopped, pending increase requests rejected.
+    /// Rows are never deleted (audit history). Users already inactive are not counted or touched again.</item>
     /// </list>
     /// <b>Group-assigned access suspends departure detection.</b> Until #121 expands group-principal
     /// app-role assignments to their members, a user who is assigned through a group is invisible to
@@ -31,14 +33,14 @@ public interface IEntraUserSyncService
     /// <c>UserSyncResult.SkippedGroupAssignmentCount</c> tells the admin why nobody was deactivated.
     /// </summary>
     /// <remarks>
-    /// <b>Deprovision scope in this wave</b>: a departed user is only flagged inactive (plus the audit
-    /// row). The full deprovision pipeline for the Entra-departure trigger — APIM subscription
-    /// deletion, hard-stopping the current allocation, cancelling pending requests (plan #21,
-    /// deprovision trigger B) — lands with <c>IUserLifecycleService</c> in issue <b>#65</b>, which
-    /// replaces the flag-only branch here with <c>DeprovisionAsync(EntraDeparture, userId)</c>.
+    /// <b>Atomicity</b>: the whole run — adds, updates, every departure's deprovision, and the single
+    /// <c>users.synced</c> audit row — commits in one database transaction this method owns. A
+    /// departure's audit rows (<c>key.revoked</c>, <c>user.deactivated</c>) are system-attributed
+    /// (<c>ActorUserId = null</c>) because the pipeline runs on the directory's word, not the calling
+    /// admin's; the <c>users.synced</c> row is still attributed to whoever triggered the run.
     /// </remarks>
     /// <returns>Counts of users added, updated and deactivated by this run.</returns>
-    /// <exception cref="ArgumentException">Entra sync is disabled on this host (<c>Entra:Enabled</c> is false) → 400.</exception>
+    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Entra sync is disabled on this host (<c>Entra:Enabled</c> is false) → 503.</exception>
     /// <exception cref="Domain.Exceptions.ConflictException">The directory returned <em>no</em> assigned users while active users exist locally → 409; refusing to deactivate everyone on what is almost certainly a misconfiguration.</exception>
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (and is not among the assigned users being imported) → 403.</exception>
     Task<UserSyncResult> SyncUsersAsync(CancellationToken cancellationToken);

@@ -79,36 +79,43 @@ When a developer signs in through the Blazor UI for the first time, `GET /users/
 
 The developer never needs to contact an admin. Their key is ready the moment they first open the app.
 
-### Entra group sync — bulk provisioning and deprovisioning
+### Entra group sync — keeping a team's roster in step
 
-Admins can link a FoundryGate group to an Entra group ID. Running `POST /groups/{id}/sync-entra` (or triggering from the UI) calls:
+Admins link a FoundryGate group to an Entra group id. `POST /groups/{id}/sync-entra` (or `POST /groups/sync-entra` for every linked group) reconciles that group's **membership** — and, through it, the budget its members resolve to:
 
 <Pipeline
   label="Entra group sync"
   steps={[
     {
-      title: "Fetch current group members from Microsoft Graph",
-      code: "Graph GET /groups/{entraGroupId}/members",
+      title: "Read the Entra group's members",
+      detail: "Transitively, so a nested directory group flattens to the people inside it. Devices and service principals are ignored.",
+      code: "Graph GET /groups/{entraGroupId}/transitiveMembers?$select=id",
     },
     {
-      title: "Upsert members found in Entra",
-      detail: "For each member: if not in FoundryGate DB → INSERT User (no APIM key yet — key is issued on first login). If already exists → update display fields.",
+      title: "Match them to FoundryGate users by EntraObjectId",
+      detail: "Directory members with no user row are skipped, never invented, and counted as skippedUnknownUserCount. A non-zero count means those people have never signed in — run POST /users/sync first, then sync again.",
     },
     {
-      title: "Deprovision members no longer in the Entra group",
-      detail: "For each departed member: delete their APIM subscription, set User.IsActive = false, set QuotaAllocation.IsHardStopped = true.",
-      code: "APIM Management: DELETE /subscriptions/{sid}\nUser.IsActive = false\nQuotaAllocation.IsHardStopped = true",
+      title: "Add and remove memberships, then re-resolve",
+      detail: "Joiners get a GroupMember row with no admin attribution (the directory is the actor, not the admin who pressed the button); leavers lose theirs. Everyone whose membership moved is re-resolved for the current month, which moves their APIM subscription onto the tier product their new budget maps to.",
+      code: "GroupMember INSERT / DELETE\nQuotaAllocation re-resolved\nAPIM: subscription → tier product",
     },
   ]}
 />
 
+<Aside type="note">
+**Group sync moves budgets, not accounts.** It never creates, deactivates or deletes a `User`, and never revokes a key. Leaving a synced group simply drops that developer back down the five-level resolution chain below — usually to the system default. Losing the Entra *application assignment* is the separate, account-level event, handled by bulk user sync.
+</Aside>
+
 <Aside type="caution">
-**Departures are hard**: when a developer leaves the Entra group, their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional. Quota exhaustion never touches the subscription at all — it's a real-time `403` at the gateway that clears on reset or approval; Entra departure permanently revokes.
+**Departures are hard**: a developer who loses their Entra assignment to the FoundryGate application is deactivated, and their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional, and it is a different thing from running out of budget: quota exhaustion never touches the subscription at all — it's a real-time `403` at the gateway that clears on reset or approval, while Entra departure permanently revokes. Bulk user sync runs the same deletion — it is the same pipeline the admin button calls.
 </Aside>
 
 ### Bulk user sync
 
-`POST /users/sync` pages through all users assigned to the FoundryGate service principal via Graph and upserts them. New users get a record with the default quota; departed users are deactivated. Useful for an initial import of your entire org before any developer has logged in.
+`POST /users/sync` pages through all users assigned to the FoundryGate service principal via Graph and upserts them. New users get a record with the default quota; departed users run the same deprovision pipeline an admin deactivation does — subscription deleted, allocation hard-stopped, pending requests rejected — so the sync and the admin button can never drift apart. Useful for an initial import of your entire org before any developer has logged in.
+
+Each departure is its own unit of work, deliberately: a subscription deletion cannot be rolled back, so batching several into one transaction would mean a single failed ARM call erasing the record of deletions that had already happened. A departure the gateway refuses is counted (`failedCount`), logged, and retried on the next run — the rest of the batch still lands.
 
 ---
 

@@ -32,9 +32,13 @@ Files expected to be created or modified:
 - `src/FoundryGate.Api/Services/UserAdminService.cs`
 
 ## Verification
-- [ ] `dotnet build` passes
-- [ ] First call to `GET /users/me` with a new Entra token creates a User row
-- [ ] Subsequent calls return the existing user without creating duplicates
-- [ ] `GET /users` returns paginated results and respects search params
-- [ ] Deactivating a user blocks their subsequent API access
-- [ ] Audit log contains a row for each provisioning and status change event
+- [x] `dotnet build FoundryGate.sln -c Release` passes with zero warnings
+- [x] First call to `GET /users/me` with a new Entra token creates a User row, this month's allocation and an APIM subscription in one transaction (`UsersEndpointTests`, `UserLifecycleServiceTests`)
+- [x] Subsequent calls return the existing user without creating duplicates, and refresh display name/email from the token
+- [x] `GET /users` returns paginated results and respects `?search=` (name or email) and `?isActive=`
+- [x] `GET /users/{id}` returns group memberships, the current-period allocation (null when none) and the masked key; `404` for an unknown user
+- [x] `PUT /users/{id}/quota` accepts only a configured tier cap or unlimited (`400` listing the tiers otherwise) and re-scopes the APIM subscription to the resolved tier product
+- [x] Deactivating a user blocks their subsequent API access (`GET /users/me` → `403`) and deletes their gateway key
+- [x] Audit log contains a row for each provisioning (`user.provisioned`), activation (`user.activated`), deactivation (`user.deactivated`) and quota change (`user.quota-changed`), with before/after where applicable
+- [x] Auth matrix: anonymous `401`, non-admin `403` on every admin route, `/users/me` open to any authenticated caller
+- [ ] Live: first login against a real Entra tenant + APIM (manual checklist in #132)

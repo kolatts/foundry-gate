@@ -1,18 +1,22 @@
+using FoundryGate.Domain.Exceptions;
+
 namespace FoundryGate.Api.Services.Entra;
 
 /// <summary>
 /// The <see cref="IEntraDirectoryClient"/> registered when <c>Entra:Enabled</c> is <c>false</c>
 /// (the default — local dev, the integration-test host, a fork that hasn't granted Graph roles yet).
-/// Every method throws <see cref="ArgumentException"/>, which <c>GlobalExceptionHandler</c> maps to
-/// <c>400</c> with the message below as the ProblemDetails detail — so an admin who calls
-/// <c>POST /users/sync</c> on such a host reads exactly which setting to flip and which Graph roles
-/// to grant, rather than a bare 500.
+/// Every method throws <see cref="FeatureNotConfiguredException"/>, which <c>GlobalExceptionHandler</c>
+/// maps to <c>503</c> with the message below as the ProblemDetails detail — so an admin who calls
+/// <c>POST /users/sync</c> or <c>POST /groups/{id}/sync-entra</c> on such a host reads exactly which
+/// setting to flip and which Graph roles to grant, rather than a bare 500.
 /// </summary>
 /// <remarks>
-/// Why 400 and not 503/501: the exception handler maps exactly four exception types by design
-/// (CONVENTIONS.md), and this wave adds none. A dedicated "feature disabled" mapping can come
-/// later if more optional features need it; for now the request <em>is</em> invalid on this host,
-/// and the message tells the caller why.
+/// Why 503 and not 400: the request is not malformed and there is nothing the caller can change about
+/// it — directory sync is an optional, externally-addressed feature that this host has not been
+/// configured for, which is exactly what CONVENTIONS.md's <see cref="FeatureNotConfiguredException"/>
+/// rule covers (<c>FoundryDeploymentService</c> is the precedent). It also keeps "this host has no
+/// Graph" distinguishable from a real caller error such as "this group has no Entra link", which is a
+/// genuine <c>400</c>. This class predates that rule and returned <c>400</c> until #152.
 /// </remarks>
 public sealed class DisabledEntraDirectoryClient : IEntraDirectoryClient
 {
@@ -31,5 +35,5 @@ public sealed class DisabledEntraDirectoryClient : IEntraDirectoryClient
     /// <inheritdoc />
     public IAsyncEnumerable<string> ListGroupMemberIdsAsync(string groupObjectId, bool transitive, CancellationToken cancellationToken) => throw Disabled();
 
-    private static ArgumentException Disabled() => new(Message);
+    private static FeatureNotConfiguredException Disabled() => new(Message);
 }

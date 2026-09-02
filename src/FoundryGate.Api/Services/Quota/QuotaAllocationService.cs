@@ -99,9 +99,13 @@ public sealed class QuotaAllocationService(
 
         var resolution = await quotaResolution.ResolveAsync(user.UserId, period, cancellationToken);
 
+        // Past the commit point when resolution re-scoped the subscription at the gateway: the row that
+        // records the tier must not be abandoned because the client hung up (CONVENTIONS.md; #156 review).
+        var completionToken = resolution.TierSyncRequested ? CancellationToken.None : cancellationToken;
+
         try
         {
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await dbContext.SaveChangesAsync(completionToken);
         }
         catch (DbUpdateException exception) when (resolution.IsNew)
         {
@@ -121,6 +125,13 @@ public sealed class QuotaAllocationService(
 
         return ToResponse(await FindRowAsync(user.UserId, period, cancellationToken)
             ?? throw new InvalidOperationException($"Allocation for user {user.UserId} in {period} was saved but could not be read back."));
+    }
+
+    /// <inheritdoc />
+    public async Task<QuotaAllocationResponse?> FindUserAllocationAsync(int userId, CancellationToken cancellationToken)
+    {
+        var row = await FindRowAsync(userId, BillingPeriod.Current(timeProvider), cancellationToken);
+        return row is null ? null : ToResponse(row);
     }
 
     /// <inheritdoc />
@@ -158,6 +169,12 @@ public sealed class QuotaAllocationService(
         var resolutions = await quotaResolution.ResolveManyAsync(activeUserIds, period, cancellationToken);
         var touched = resolutions.Select(r => r.Allocation).ToList();
 
+        // Past the commit point once any subscription has been re-scoped at the gateway. A mid-loop ARM
+        // failure aborts before this line and saves nothing (the tier sync adds its audit row without
+        // saving, #156 review), so the reset is all-or-nothing exactly as this method's docs promise.
+        var tierSyncCount = resolutions.Count(r => r.TierSyncRequested);
+        var completionToken = tierSyncCount > 0 ? CancellationToken.None : cancellationToken;
+
         foreach (var allocation in touched)
         {
             Stamp(allocation, now);
@@ -174,13 +191,13 @@ public sealed class QuotaAllocationService(
                 usersResetCount = resolutions.Count,
                 periodYear = period.Year,
                 periodMonth = period.Month,
-                tierSyncCount = resolutions.Count(r => r.TierSyncRequested),
+                tierSyncCount,
             },
-            cancellationToken);
+            completionToken);
 
         try
         {
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await dbContext.SaveChangesAsync(completionToken);
         }
         catch (DbUpdateException exception) when (resolutions.Any(r => r.IsNew))
         {
@@ -188,21 +205,21 @@ public sealed class QuotaAllocationService(
             // were about to Add. Adopt the winners — re-apply our resolution to their rows — and save
             // again; a failed SaveChanges leaves every entry (including the audit row) still pending, so
             // the second save is the same atomic unit. Anything other than a lost race is rethrown.
-            var adopted = await AdoptConcurrentlyCreatedRowsAsync(touched, period, now, cancellationToken);
+            var adopted = await AdoptConcurrentlyCreatedRowsAsync(touched, period, now, completionToken);
             if (adopted == 0)
             {
                 throw;
             }
 
             logger.LogInformation(exception, "Quota reset for {Period} raced a concurrent writer on {AdoptedCount} allocation(s); adopted the existing rows.", period, adopted);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await dbContext.SaveChangesAsync(completionToken);
         }
 
         logger.LogInformation(
             "Quota reset for {Period}: {UsersResetCount} active users, {TierSyncCount} tier syncs.",
             period,
             resolutions.Count,
-            resolutions.Count(r => r.TierSyncRequested));
+            tierSyncCount);
 
         return new QuotaResetResult(resolutions.Count, period.Year, period.Month, now);
     }

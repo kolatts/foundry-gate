@@ -3,11 +3,14 @@ using FoundryGate.Api.Services.Config;
 using FoundryGate.Api.Services.Dashboard;
 using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Foundry;
+using FoundryGate.Api.Services.Groups;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
+using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Quota;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Api.Services.Users;
 
 namespace FoundryGate.Api.Services;
 
@@ -29,11 +32,14 @@ public static class ApiServiceCollectionExtensions
         services.AddIdentityServices();
         services.AddAuditServices();
         services.AddQuotaServices();
+        services.AddGroupsServices();
         services.AddRequestsServices();
         services.AddFoundryServices();
         services.AddEntraServices();
         services.AddSecurityServices();
         services.AddKeysServices();
+        services.AddLifecycleServices();
+        services.AddUsersServices();
         services.AddConfigServices();
         services.AddDashboardServices();
 
