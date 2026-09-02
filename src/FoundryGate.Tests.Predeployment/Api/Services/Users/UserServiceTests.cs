@@ -76,7 +76,7 @@ public class UserServiceTests : InMemoryDatabaseTest
         Assert.Equal("synced@contoso.test", profile.Email);
 
         // LastSyncedDate means "an Entra sync touched this row" and /me is not a sync, so it stays null
-        // — and with nothing to change, the profile read never writes at all (#156 review; #157 adds the
+        // — and with nothing to change, the profile read never writes at all (#156 review; #167 adds the
         // honest LastLoginDate column).
         var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == user.UserId);
         Assert.Null(saved.LastSyncedDate);

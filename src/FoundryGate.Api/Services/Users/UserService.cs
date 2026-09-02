@@ -256,7 +256,7 @@ public sealed class UserService(
     /// <remarks>
     /// <c>LastSyncedDate</c> is deliberately <b>not</b> stamped here: it means "when an Entra sync last
     /// touched this row", which is what <c>UserContracts</c> documents and what an admin reads it as. A
-    /// separate <c>LastLoginDate</c> is the honest column for "this account is in use" — tracked as #157.
+    /// separate <c>LastLoginDate</c> is the honest column for "this account is in use" — tracked as #167.
     /// </remarks>
     /// <returns><see langword="true"/> when a field changed and the row needs saving.</returns>
     private bool RefreshFromClaims(User user)

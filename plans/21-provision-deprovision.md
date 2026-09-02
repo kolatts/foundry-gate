@@ -61,6 +61,20 @@ enum: it runs step 1 and step 5 only, entirely inside `IApimKeyService.RevokeAsy
 idempotent (an already-inactive user is a no-op, not a 409) and audits as the system; trigger A is a
 409 on an already-inactive user and audits as the calling admin.
 
+**Ordering (amended by the #156 review).** Provision and deprovision are shaped differently on
+purpose, because their irreversible step points the other way. Provision holds one transaction across
+the APIM create — its residue is a harmless orphan the next provision adopts by name, so rolling the
+database back is right. Deprovision cannot: an APIM `DELETE` has no undo, so rolling back after it
+would leave a deleted key the database knows nothing about. **Step 1 therefore runs first and outside
+any transaction the orchestrator owns**; steps 2-5 then take a transaction of their own, on
+`CancellationToken.None`.
+
+| Fails at step | State left behind | Recovery |
+|---|---|---|
+| Step 1 (APIM delete) | Nothing changed — the subscription is still there and the user still active | `502`; retry |
+| Steps 2–5 (the DB half) | Subscription deleted, key fields cleared and `key.revoked` audited (step 1 committed on its own), but the user is still `IsActive = true` | Logged at Error naming the user; re-run `POST /users/{id}/deactivate`. `RevokeAsync` is idempotent on a subscription that is already gone, so the retry completes the remaining steps |
+| A departure inside `POST /users/sync` | Only that user is affected — each departure is its own unit of work | Counted in `UserSyncResult.FailedCount`, logged, retried by the next run |
+
 **Steps:**
 
 ```
@@ -172,7 +186,9 @@ Files created or modified:
 - [x] APIM unconfigured on the host is `503` (`FeatureNotConfiguredException`), distinct from a configured gateway failing
 - [x] Subsequent first-login calls are idempotent (no duplicate User, allocation, subscription or audit row)
 - [x] `POST /users/{id}/deactivate` deletes the APIM subscription, clears the key fields, hard-stops the allocation and rejects pending requests
-- [x] Entra bulk sync departure detection calls full deprovision (APIM subscription deleted), with system-attributed audit rows, inside the sync's own transaction
+- [x] Entra bulk sync departure detection calls full deprovision (APIM subscription deleted), with system-attributed audit rows, one unit of work per departed user so a single gateway failure cannot undo the others (`FailedCount`)
+- [x] Everything after an accepted external change runs on `CancellationToken.None` — a client that disconnects the instant APIM returns still gets a fully recorded, fully audited result (probed in `UserLifecycleServiceTests`)
+- [x] A quota change whose audit row cannot be written is not committed, and leaves no orphan `key.tier-changed` row (`MoveToProductAsync` adds its row without saving; the caller owns the save)
 - [x] `POST /users/{id}/activate` re-provisions a new APIM key and updates DB; already-active is `409`
 - [x] Orphan APIM subscription detected and reused on re-activation (not duplicated), re-scoped to the resolved tier with both keys regenerated
 - [x] Quota exhaustion never touches the subscription at all (#116/#81 superseded the "suspends" row above): it is a real-time gateway `403` that clears on the monthly window
