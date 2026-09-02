@@ -35,7 +35,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         var subscriptionName = ApimSubscriptionNames.ForUser(developer.UserId);
         var keysBefore = _apim.KeysOf(subscriptionName);
 
-        await sync.SyncAsync(developer, GatewayTiers.Power, CancellationToken.None);
+        await sync.SyncAsync(developer, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None);
         _ = await Context.SaveChangesAsync();
 
         Assert.Equal(GatewayTiers.Power, _apim.ProductOf(subscriptionName));
@@ -48,7 +48,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
     {
         var (sync, admin, developer) = await CreateAsync();
 
-        await sync.SyncAsync(developer, GatewayTiers.Power, CancellationToken.None);
+        await sync.SyncAsync(developer, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None);
 
         // Added, not saved (#156 review): this runs inside a caller's unit of work, so the row joins
         // the caller's change tracker and commits with everything else.
@@ -71,7 +71,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         var (_, _, developer) = await CreateAsync();
         var sync = Build(new SystemGatewayTierSyncActor());
 
-        await sync.SyncAsync(developer, GatewayTiers.Power, CancellationToken.None);
+        await sync.SyncAsync(developer, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None);
         _ = await Context.SaveChangesAsync();
 
         var row = Assert.Single(await RowsAsync(developer));
@@ -84,12 +84,37 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         var (sync, _, developer) = await CreateAsync();
         var subscriptionName = ApimSubscriptionNames.ForUser(developer.UserId);
 
-        await sync.SyncAsync(developer, "STANDARD", CancellationToken.None);
+        await sync.SyncAsync(developer, "STANDARD", GatewayTiers.Standard, CancellationToken.None);
 
         Assert.DoesNotContain(_apim.Calls, call => call.StartsWith($"UpdateScope:{subscriptionName}", StringComparison.Ordinal));
         Assert.DoesNotContain(
             Context.ChangeTracker.Entries<AuditLog>(),
             entry => entry.Entity.Action == AuditActions.KeyTierChanged);
+    }
+
+    [Fact]
+    public async Task A_subscription_already_on_the_target_that_the_database_does_not_know_about_is_still_audited()
+    {
+        // The idempotence hole the #211 review found. An earlier move reached APIM and its save did not
+        // land, so the gateway is on Power while the allocation still records Standard. Returning
+        // silently here is how that move becomes permanently unaudited: the caller writes the new tier
+        // onto the row with nothing anywhere explaining when the gateway changed.
+        var (_, admin, developer) = await CreateAsync();
+        var subscriptionName = ApimSubscriptionNames.ForUser(developer.UserId);
+        _apim.SetProduct(subscriptionName, GatewayTiers.Power);
+        var callsBefore = _apim.Calls.Count(call => call.StartsWith("UpdateScope:", StringComparison.Ordinal));
+
+        await Build(new FixedGatewayTierSyncActor(admin))
+            .SyncAsync(developer, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None);
+        _ = await Context.SaveChangesAsync();
+
+        // Nothing was moved — it was already there — but the move is now on the record.
+        Assert.Equal(callsBefore, _apim.Calls.Count(call => call.StartsWith("UpdateScope:", StringComparison.Ordinal)));
+        var row = Assert.Single(await RowsAsync(developer));
+        Assert.Equal(admin.UserId, row.ActorUserId);
+        Assert.Contains("\"alreadyInPlace\":true", row.Details, StringComparison.Ordinal);
+        Assert.Contains($"\"before\":\"{GatewayTiers.Standard}\"", row.Details, StringComparison.Ordinal);
+        Assert.Contains($"\"after\":\"{GatewayTiers.Power}\"", row.Details, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -99,7 +124,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         var unprovisioned = await SeedUserAsync("No Key");
         var callsBefore = _apim.Calls.Count;
 
-        await sync.SyncAsync(unprovisioned, GatewayTiers.Power, CancellationToken.None);
+        await sync.SyncAsync(unprovisioned, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None);
 
         Assert.Equal(callsBefore, _apim.Calls.Count);
     }
@@ -110,7 +135,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         var (sync, _, developer) = await CreateAsync();
         var callsBefore = _apim.Calls.Count;
 
-        _ = await Assert.ThrowsAnyAsync<ArgumentException>(() => sync.SyncAsync(developer, "gold", CancellationToken.None));
+        _ = await Assert.ThrowsAnyAsync<ArgumentException>(() => sync.SyncAsync(developer, "gold", GatewayTiers.Standard, CancellationToken.None));
 
         Assert.Equal(callsBefore, _apim.Calls.Count);
     }
@@ -122,7 +147,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         Assert.True(_apim.Remove(ApimSubscriptionNames.ForUser(developer.UserId)));
 
         var exception = await Assert.ThrowsAsync<ConflictException>(
-            () => sync.SyncAsync(developer, GatewayTiers.Power, CancellationToken.None));
+            () => sync.SyncAsync(developer, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None));
 
         Assert.IsType<ApimSubscriptionNotFoundException>(exception.InnerException);
         Assert.Empty(await RowsAsync(developer));
@@ -137,7 +162,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         _apim.ThrowOnUpdateScope = new RequestFailedException(429, "Too many requests.");
 
         var exception = await Assert.ThrowsAsync<UpstreamDependencyException>(
-            () => sync.SyncAsync(developer, GatewayTiers.Power, CancellationToken.None));
+            () => sync.SyncAsync(developer, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None));
 
         Assert.IsType<RequestFailedException>(exception.InnerException);
         Assert.Empty(await RowsAsync(developer));
@@ -153,7 +178,7 @@ public class ApimGatewayTierSyncTests : InMemoryDatabaseTest
         var actor = new FixedGatewayTierSyncActor(null) { Throws = new UnauthorizedAccessException("Call GET /users/me first.") };
 
         _ = await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => Build(actor).SyncAsync(developer, GatewayTiers.Power, CancellationToken.None));
+            () => Build(actor).SyncAsync(developer, GatewayTiers.Power, GatewayTiers.Standard, CancellationToken.None));
 
         Assert.Equal(GatewayTiers.Standard, _apim.ProductOf(subscriptionName));
     }

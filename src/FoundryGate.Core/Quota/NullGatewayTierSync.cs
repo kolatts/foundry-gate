@@ -15,7 +15,7 @@ namespace FoundryGate.Core.Quota;
 public sealed class NullGatewayTierSync(ILogger<NullGatewayTierSync> logger) : IGatewayTierSync
 {
     /// <inheritdoc />
-    public Task SyncAsync(User user, string tierProductId, CancellationToken cancellationToken)
+    public Task SyncAsync(User user, string tierProductId, string? previousTierProductId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentException.ThrowIfNullOrWhiteSpace(tierProductId);

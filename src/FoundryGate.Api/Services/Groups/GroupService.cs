@@ -431,7 +431,7 @@ public sealed class GroupService(
             return false;
         }
 
-        var resolutions = await quotaResolution.ResolveManyAsync(userIds, BillingPeriod.Current(timeProvider), cancellationToken);
+        var resolutions = await quotaResolution.ResolveManyAsync(userIds, BillingPeriod.Current(timeProvider), GatewayTierSyncMode.Immediate, cancellationToken);
 
         return resolutions.Any(resolution => resolution.TierSyncRequested);
     }

@@ -26,12 +26,16 @@ namespace FoundryGate.Core.Quota;
 /// is the <see cref="IGatewayTierSyncActor"/> seam.
 /// </para>
 /// <para>
-/// <b>Idempotent.</b> The subscription's current product is read first and nothing is written when it
-/// already matches, so being called for a tier the gateway is already enforcing (which happens
-/// whenever the "previous tier" has to be inferred from allocation history) costs one GET and changes
-/// nothing. A user with no subscription is skipped: resolution only calls this for a non-empty
-/// <see cref="User.ApimSubscriptionId"/>, and the guard makes the contract explicit rather than
-/// turning a race into a 404.
+/// <b>Idempotent, but never silently so.</b> The subscription's current product is read first and
+/// nothing is written at the gateway when it already matches, so being called for a tier APIM is
+/// already enforcing costs one GET. Whether that is a <em>no-op</em> depends on what the database
+/// thinks: when the caller's <c>previousTierProductId</c> also matches, the two agree and there is
+/// nothing to record; when it does not, an earlier move reached APIM and its save did not land, so the
+/// <c>key.tier-changed</c> row is written here (flagged <c>alreadyInPlace</c>) rather than lost. That
+/// second case is exactly what a per-user reset failure leaves behind, and returning silently is how
+/// it would become permanently unaudited (#211 review). A user with no subscription is skipped:
+/// resolution only calls this for a non-empty <see cref="User.ApimSubscriptionId"/>, and the guard
+/// makes the contract explicit rather than turning a race into a 404.
 /// </para>
 /// <para>
 /// <b>Audited, added not saved.</b> The <c>key.tier-changed</c> row joins the caller's change tracker
@@ -43,9 +47,12 @@ namespace FoundryGate.Core.Quota;
 /// </para>
 /// <para>
 /// <b>Failure is the caller's failure.</b> Resolution calls this <em>before</em> its own save, so an
-/// ARM failure propagates and the request (or the reset) fails rather than leaving the database
-/// claiming a tier the gateway is not enforcing. Registered only when
-/// <c>GatewayOptions.IsApimConfigured</c>; otherwise <see cref="NullGatewayTierSync"/> stays in place.
+/// ARM failure propagates rather than leaving the database claiming a tier the gateway is not
+/// enforcing. What the caller then does with it differs by caller and both are correct: a request
+/// fails outright, while the monthly reset discards that one developer's staged allocation, records
+/// the failure and carries on for everybody else (<see cref="QuotaResetService"/>). Registered only
+/// when <c>GatewayOptions.IsApimConfigured</c>; otherwise <see cref="NullGatewayTierSync"/> stays in
+/// place.
 /// </para>
 /// </remarks>
 public sealed class ApimGatewayTierSync(
@@ -55,7 +62,7 @@ public sealed class ApimGatewayTierSync(
     ILogger<ApimGatewayTierSync> logger) : IGatewayTierSync
 {
     /// <inheritdoc />
-    public async Task SyncAsync(User user, string tierProductId, CancellationToken cancellationToken)
+    public async Task SyncAsync(User user, string tierProductId, string? previousTierProductId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
         var productId = NormalizeTier(tierProductId);
@@ -77,6 +84,25 @@ public sealed class ApimGatewayTierSync(
 
         if (string.Equals(current.ProductId, productId, StringComparison.OrdinalIgnoreCase))
         {
+            if (string.Equals(previousTierProductId, productId, StringComparison.OrdinalIgnoreCase))
+            {
+                // The database and the gateway already agree: nothing moved, nothing to record.
+                return;
+            }
+
+            // The gateway is on the target product but the database still records a different tier (or
+            // none). Something moved this subscription and the row describing it never committed — the
+            // residual orphan CONVENTIONS.md's commit-point rule names, which for a reset is a move whose
+            // save failed. Returning silently here is how that move becomes permanently unaudited: the
+            // caller would go on to write the new tier onto the allocation with nothing explaining it.
+            logger.LogWarning(
+                "APIM subscription {SubscriptionName} for user {UserId} is already on product {After} while the database still records {Before}; recording the move that was never audited.",
+                subscriptionName,
+                user.UserId,
+                productId,
+                previousTierProductId ?? "(none)");
+
+            AddTierChangedRow(actorUser, user, subscriptionName, before: previousTierProductId, after: productId, alreadyInPlace: true);
             return;
         }
 
@@ -94,12 +120,7 @@ public sealed class ApimGatewayTierSync(
         }
 
         // ---- commit point: APIM has re-scoped the subscription. ----
-        var details = new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, before = current.ProductId, after = productId };
-        var targetId = user.UserId.ToString(CultureInfo.InvariantCulture);
-
-        _ = actorUser is null
-            ? audit.AddSystem(AuditActions.KeyTierChanged, AuditTargetTypes.ApiKey, targetId, details)
-            : audit.Add(actorUser, AuditActions.KeyTierChanged, AuditTargetTypes.ApiKey, targetId, details);
+        AddTierChangedRow(actorUser, user, subscriptionName, before: current.ProductId, after: productId, alreadyInPlace: false);
 
         logger.LogInformation(
             "Moved APIM subscription {SubscriptionName} for user {UserId} from product {Before} to {After}.",
@@ -107,6 +128,33 @@ public sealed class ApimGatewayTierSync(
             user.UserId,
             current.ProductId,
             productId);
+    }
+
+    /// <summary>
+    /// Adds the <c>key.tier-changed</c> row — attributed to the host's actor, or to the system when it
+    /// has none — <em>without saving</em>. It joins the caller's change tracker and commits with the
+    /// caller's own unit of work, which is what keeps "the gateway moved" and "the audit trail says so"
+    /// a single atomic fact (#156 review).
+    /// </summary>
+    /// <param name="actorUser">The acting user, or <see langword="null"/> for a system-attributed row.</param>
+    /// <param name="user">The developer whose subscription the row is about.</param>
+    /// <param name="subscriptionName">The APIM subscription name (<c>foundrygate-{UserId}</c>).</param>
+    /// <param name="before">The product the row records moving away from — the gateway's own, or the database's when nothing moved here.</param>
+    /// <param name="after">The tier product the subscription is on now.</param>
+    /// <param name="alreadyInPlace">
+    /// <see langword="true"/> when APIM was already on the target product and this row is recording a
+    /// move that happened earlier and was never committed, rather than one this call made. An operator
+    /// reconciling the trail needs to know which, because only the second has a matching gateway
+    /// timestamp.
+    /// </param>
+    private void AddTierChangedRow(User? actorUser, User user, string subscriptionName, string? before, string after, bool alreadyInPlace)
+    {
+        var details = new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, before, after, alreadyInPlace };
+        var targetId = user.UserId.ToString(CultureInfo.InvariantCulture);
+
+        _ = actorUser is null
+            ? audit.AddSystem(AuditActions.KeyTierChanged, AuditTargetTypes.ApiKey, targetId, details)
+            : audit.Add(actorUser, AuditActions.KeyTierChanged, AuditTargetTypes.ApiKey, targetId, details);
     }
 
     /// <summary>

@@ -53,8 +53,21 @@ public interface IQuotaResolutionService
     /// no-save contract as <see cref="ResolveAsync"/>. Unknown ids are skipped, not an error — the
     /// caller enumerated them a moment ago and a concurrent delete is not the reset's problem.
     /// </summary>
+    /// <param name="userIds">The users to resolve; duplicates and unknown ids are tolerated.</param>
+    /// <param name="period">The billing period to resolve for.</param>
+    /// <param name="gatewaySync">
+    /// Whether this pass moves subscriptions itself (<see cref="GatewayTierSyncMode.Immediate"/> — what
+    /// every request-time caller wants) or only reports the moves it would need
+    /// (<see cref="GatewayTierSyncMode.Deferred"/> — the monthly reset, which commits each move as it
+    /// makes it rather than losing users <c>1..N-1</c> to a rollback when user <c>N</c> fails).
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>One <see cref="QuotaResolution"/> per resolved user, in <paramref name="userIds"/> order.</returns>
-    Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(IReadOnlyCollection<int> userIds, BillingPeriod period, CancellationToken cancellationToken);
+    Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(
+        IReadOnlyCollection<int> userIds,
+        BillingPeriod period,
+        GatewayTierSyncMode gatewaySync,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Runs the same five-level chain and returns the answer <em>without writing anything</em> — no

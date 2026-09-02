@@ -94,6 +94,15 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         }
     }
 
+    /// <summary>Moves a subscription to another product behind the caller's back — simulates a move whose database record never committed.</summary>
+    public void SetProduct(string subscriptionName, string productId)
+    {
+        lock (_gate)
+        {
+            _subscriptions[subscriptionName].ProductId = productId;
+        }
+    }
+
     /// <summary>Removes a subscription behind the key service's back — simulates a portal deletion.</summary>
     public bool Remove(string subscriptionName)
     {

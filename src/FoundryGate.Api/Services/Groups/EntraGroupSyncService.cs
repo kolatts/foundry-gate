@@ -210,7 +210,7 @@ public sealed class EntraGroupSyncService(
         // below run on CancellationToken.None (see the type remarks).
         var resolutions = reresolved.Count == 0
             ? []
-            : await quotaResolution.ResolveManyAsync(reresolved, BillingPeriod.Current(timeProvider), cancellationToken);
+            : await quotaResolution.ResolveManyAsync(reresolved, BillingPeriod.Current(timeProvider), GatewayTierSyncMode.Immediate, cancellationToken);
         var gatewayMoved = resolutions.Any(resolution => resolution.TierSyncRequested);
         var commitToken = gatewayMoved ? CancellationToken.None : cancellationToken;
 

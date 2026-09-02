@@ -99,9 +99,11 @@ public sealed class MonthlyResetJob(
         var outcome = await quotaReset.ResetAsync(QuotaResetTrigger.Scheduled(), cancellationToken);
 
         logger.LogInformation(
-            "Monthly quota reset for {Period}: {UsersResetCount} active users. The gateway's own monthly window resets itself, so no APIM state was touched.",
+            "Monthly quota reset for {Period}: {UsersResetCount} active users, {TierChangeCount} tier change(s) moved at the gateway, {TierChangeFailureCount} refused.",
             outcome.Period,
-            outcome.UsersResetCount);
+            outcome.UsersResetCount,
+            outcome.TierSyncCount,
+            outcome.TierSyncFailureCount);
 
         if (today != configuredDay)
         {

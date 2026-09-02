@@ -42,11 +42,15 @@ public sealed class QuotaResolutionService(
             .Select(a => a.TierProductId)
             .FirstOrDefaultAsync(cancellationToken);
 
-        return await ResolveCoreAsync(user, period, groupPolicies, existing, previousTier, cancellationToken);
+        return await ResolveCoreAsync(user, period, groupPolicies, existing, previousTier, GatewayTierSyncMode.Immediate, cancellationToken);
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(IReadOnlyCollection<int> userIds, BillingPeriod period, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(
+        IReadOnlyCollection<int> userIds,
+        BillingPeriod period,
+        GatewayTierSyncMode gatewaySync,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(userIds);
 
@@ -104,7 +108,7 @@ public sealed class QuotaResolutionService(
             existingByUser.TryGetValue(id, out var existing);
             var previousTier = existing?.TierProductId ?? priorTierByUser.GetValueOrDefault(id);
 
-            results.Add(await ResolveCoreAsync(user, period, policiesByUser.GetValueOrDefault(id) ?? [], existing, previousTier, cancellationToken));
+            results.Add(await ResolveCoreAsync(user, period, policiesByUser.GetValueOrDefault(id) ?? [], existing, previousTier, gatewaySync, cancellationToken));
         }
 
         return results;
@@ -246,6 +250,7 @@ public sealed class QuotaResolutionService(
         IReadOnlyList<GroupPolicy> groupPolicies,
         QuotaAllocation? existing,
         string? previousTier,
+        GatewayTierSyncMode gatewaySync,
         CancellationToken cancellationToken)
     {
         var (level, quota) = await ResolveLevelAsync(user, groupPolicies, cancellationToken);
@@ -273,12 +278,15 @@ public sealed class QuotaResolutionService(
             dbContext.QuotaAllocations.Add(allocation);
         }
 
-        var syncRequested = false;
-        if (!string.IsNullOrEmpty(user.ApimSubscriptionId)
-            && !string.Equals(previousTier, tier.TierProductId, StringComparison.Ordinal))
+        var syncRequired = !string.IsNullOrEmpty(user.ApimSubscriptionId)
+            && !string.Equals(previousTier, tier.TierProductId, StringComparison.Ordinal);
+
+        // Deferred: the caller performs and commits each move itself, so this pass reaches no gateway
+        // and TierSyncRequested stays false — which keeps CommitToken.For honest for everyone reading it.
+        var syncRequested = syncRequired && gatewaySync == GatewayTierSyncMode.Immediate;
+        if (syncRequested)
         {
-            await tierSync.SyncAsync(user, tier.TierProductId, cancellationToken);
-            syncRequested = true;
+            await tierSync.SyncAsync(user, tier.TierProductId, previousTier, cancellationToken);
         }
 
         if (tier.IsGatewayCapped)
@@ -292,7 +300,7 @@ public sealed class QuotaResolutionService(
                 tier.TierProductId);
         }
 
-        return new QuotaResolution(allocation, isNew, previousTier, syncRequested);
+        return new QuotaResolution(allocation, isNew, previousTier, syncRequired, syncRequested);
     }
 
     private async Task<(QuotaLevelType Level, long? Quota)> ResolveLevelAsync(

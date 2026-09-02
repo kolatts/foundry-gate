@@ -1,16 +1,17 @@
 using System.Globalization;
 using Azure;
 using FoundryGate.Core.Quota;
+using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
-using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Keys;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Functions.Services.Quota;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FoundryGate.Tests.Predeployment.Functions.Services.Quota;
@@ -232,27 +233,124 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task A_gateway_that_refuses_the_move_fails_the_run_rather_than_reporting_a_budget_it_cannot_enforce()
+    public async Task A_gateway_that_refuses_one_developers_move_leaves_that_one_alone_and_finishes_the_run()
     {
-        // The trade #194 makes explicit: a reset now makes N ARM calls, and a partial failure aborts the
-        // run (the tier sync is called before the reset saves). The alternative — carry on — would leave
-        // the dashboard promising 20M while the gateway kept 403ing at 5M, with nothing rolled back.
+        // The trade #194 originally made — abort the whole run — meant one subscription deleted out of
+        // band in the APIM portal deterministically failed every developer's reset, on every retry,
+        // forever (#211 review). The refusal is now reported and skipped: the refused developer keeps the
+        // tier the gateway still enforces, so SQL and APIM never disagree, and everybody else resets.
         await SeedReferenceDataAsync();
-        var dev = await SeedUserAsync("Ada");
-        var subscriptionName = ApimSubscriptionNames.ForUser(dev.UserId);
-        var apim = new FakeApimManagementClient { ThrowOnUpdateScope = new RequestFailedException(429, "Too many requests.") };
-        _ = apim.Seed(subscriptionName, GatewayTiers.Standard);
-        dev.ApimSubscriptionId = apim.GetSubscriptionResourceId(subscriptionName);
-        await Context.SaveChangesAsync();
+        var refused = await SeedUserAsync("Refused");
+        var moved = await SeedUserAsync("Moved");
+        var apim = new FakeApimManagementClient();
+        foreach (var dev in new[] { refused, moved })
+        {
+            var name = ApimSubscriptionNames.ForUser(dev.UserId);
+            _ = apim.Seed(name, GatewayTiers.Standard);
+            dev.ApimSubscriptionId = apim.GetSubscriptionResourceId(name);
+            await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.StandardCap, GatewayTiers.Standard);
+        }
 
-        await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.StandardCap, GatewayTiers.Standard);
+        await Context.SaveChangesAsync();
         await SetConfigAsync(SystemConfigurationKeys.DefaultMonthlyTokenQuota, TestGatewayTiers.PowerCap.ToString(CultureInfo.InvariantCulture));
 
-        _ = await Assert.ThrowsAsync<UpstreamDependencyException>(
-            () => CreateJob(new FakeResetLock(), TierSync(apim)).RunAsync(CancellationToken.None));
+        // Only the first developer's subscription is missing from the gateway.
+        Assert.True(apim.Remove(ApimSubscriptionNames.ForUser(refused.UserId)));
+
+        var logs = new CapturingLoggerProvider();
+        var outcome = await CreateJob(new FakeResetLock(), TierSync(apim), logs.CreateLogger<QuotaResetService>()).RunAsync(CancellationToken.None);
+
+        Assert.True(outcome.Ran);
+        Assert.Equal(1, outcome.Reset!.Value.TierSyncCount);
+        Assert.Equal(1, outcome.Reset!.Value.TierSyncFailureCount);
+
+        // The developer whose move landed is committed, moved and audited...
+        Assert.Equal(GatewayTiers.Power, apim.ProductOf(ApimSubscriptionNames.ForUser(moved.UserId)));
+        await using var verification = CreateVerificationContext();
+        var period = outcome.Reset!.Value.Period;
+        var movedRow = await ResetRowAsync(verification, moved, period);
+        Assert.Equal(GatewayTiers.Power, movedRow.TierProductId);
+        Assert.Equal(TestGatewayTiers.PowerCap, movedRow.AllocatedTokens);
+        _ = await verification.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.KeyTierChanged);
+
+        // ...and the refused one gets no row for the new period at all. That is the honest outcome:
+        // writing one would claim a budget the gateway is not enforcing, and their previous period's row
+        // — which still matches the gateway — is untouched. Their next /me, or the next reset, retries.
+        Assert.Empty(await verification.QuotaAllocations.AsNoTracking()
+            .Where(a => a.UserId == refused.UserId && a.PeriodYear == period.Year && a.PeriodMonth == period.Month)
+            .ToListAsync());
+        var refusedPrevious = await ResetRowAsync(verification, refused, new BillingPeriod(2026, 9));
+        Assert.Equal(GatewayTiers.Standard, refusedPrevious.TierProductId);
+        Assert.Equal(TestGatewayTiers.StandardCap, refusedPrevious.AllocatedTokens);
+
+        // The run completed, said so, and named the developer an operator has to look at.
+        var audit = await verification.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.QuotaMonthlyReset);
+        Assert.Contains("\"tierChangeCount\":1", audit.Details, StringComparison.Ordinal);
+        Assert.Contains("\"tierChangeFailureCount\":1", audit.Details, StringComparison.Ordinal);
+        Assert.Contains(logs.Entries, entry => entry.Contains($"moving user {refused.UserId}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_move_that_fails_after_earlier_ones_landed_keeps_every_earlier_developer_committed_and_audited()
+    {
+        // The Major in the #211 review: the moves happened inside the loop and the single save ran after
+        // it, so a failure on developer N discarded the key.tier-changed rows of 1..N-1 whose
+        // subscriptions APIM had already re-scoped — SQL on the old tier, the gateway on the new one, and
+        // nothing recording it. Each move now commits as it lands.
+        await SeedReferenceDataAsync();
+        var devs = new List<User>();
+        for (var i = 0; i < 3; i++)
+        {
+            var dev = await SeedUserAsync($"Dev {i}");
+            devs.Add(dev);
+        }
+
+        var apim = new FakeApimManagementClient();
+        foreach (var dev in devs)
+        {
+            var name = ApimSubscriptionNames.ForUser(dev.UserId);
+            _ = apim.Seed(name, GatewayTiers.Standard);
+            dev.ApimSubscriptionId = apim.GetSubscriptionResourceId(name);
+            await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.StandardCap, GatewayTiers.Standard);
+        }
+
+        await Context.SaveChangesAsync();
+        await SetConfigAsync(SystemConfigurationKeys.DefaultMonthlyTokenQuota, TestGatewayTiers.PowerCap.ToString(CultureInfo.InvariantCulture));
+
+        // Users are processed in UserId order, so break the gateway once the first two have moved.
+        var moves = 0;
+        apim.AfterMutation = () =>
+        {
+            if (++moves == 2)
+            {
+                apim.ThrowOnUpdateScope = new RequestFailedException(429, "Too many requests.");
+            }
+        };
+
+        var outcome = await CreateJob(new FakeResetLock(), TierSync(apim)).RunAsync(CancellationToken.None);
+
+        Assert.Equal(2, outcome.Reset!.Value.TierSyncCount);
+        Assert.Equal(1, outcome.Reset!.Value.TierSyncFailureCount);
 
         await using var verification = CreateVerificationContext();
-        Assert.Empty(await verification.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaMonthlyReset).ToListAsync());
+        var tierChanged = await verification.AuditLogs.AsNoTracking()
+            .Where(a => a.Action == AuditActions.KeyTierChanged)
+            .ToListAsync();
+
+        // Two moves landed; both are committed and both left a row.
+        Assert.Equal(2, tierChanged.Count);
+        var period = outcome.Reset!.Value.Period;
+        foreach (var dev in devs.Take(2))
+        {
+            Assert.Equal(GatewayTiers.Power, apim.ProductOf(ApimSubscriptionNames.ForUser(dev.UserId)));
+            Assert.Equal(GatewayTiers.Power, (await ResetRowAsync(verification, dev, period)).TierProductId);
+        }
+
+        // The third never moved, so it has no row for the new period and the gateway is untouched.
+        Assert.Equal(GatewayTiers.Standard, apim.ProductOf(ApimSubscriptionNames.ForUser(devs[2].UserId)));
+        Assert.Empty(await verification.QuotaAllocations.AsNoTracking()
+            .Where(a => a.UserId == devs[2].UserId && a.PeriodYear == period.Year && a.PeriodMonth == period.Month)
+            .ToListAsync());
     }
 
     [Fact]
@@ -273,14 +371,23 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         Assert.Equal(0, outcome.Reset!.Value.TierSyncCount);
     }
 
+    /// <summary>The allocation the run wrote for <paramref name="user"/> — by period, because the seeded previous month's row is still there.</summary>
+    private static Task<QuotaAllocation> ResetRowAsync(AppDbContext verification, User user, BillingPeriod period) =>
+        verification.QuotaAllocations.AsNoTracking()
+            .SingleAsync(a => a.UserId == user.UserId && a.PeriodYear == period.Year && a.PeriodMonth == period.Month);
+
     /// <summary>The real Core tier sync over an in-memory APIM, wired as the Functions host wires it (system actor).</summary>
     private ApimGatewayTierSync TierSync(FakeApimManagementClient apim) =>
         new(apim, new AuditWriter(Context, _clock), new SystemGatewayTierSyncActor(), NullLogger<ApimGatewayTierSync>.Instance);
 
-    private MonthlyResetJob CreateJob(FakeResetLock resetLock, IGatewayTierSync? tierSync = null)
+    private MonthlyResetJob CreateJob(FakeResetLock resetLock, IGatewayTierSync? tierSync = null, ILogger<QuotaResetService>? resetLogger = null)
     {
-        var resolution = new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), tierSync ?? _tierSync, NullLogger<QuotaResolutionService>.Instance);
-        var reset = new QuotaResetService(Context, resolution, new AuditWriter(Context, _clock), _clock, NullLogger<QuotaResetService>.Instance);
+        var sync = tierSync ?? _tierSync;
+
+        // Resolution takes the sync too, but the reset always runs it Deferred and drives the moves
+        // itself, so the instance resolution holds is never the one that reaches APIM here (#211 review).
+        var resolution = new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), sync, NullLogger<QuotaResolutionService>.Instance);
+        var reset = new QuotaResetService(Context, resolution, sync, new AuditWriter(Context, _clock), _clock, resetLogger ?? NullLogger<QuotaResetService>.Instance);
 
         return new MonthlyResetJob(Context, reset, resetLock, _clock, NullLogger<MonthlyResetJob>.Instance);
     }

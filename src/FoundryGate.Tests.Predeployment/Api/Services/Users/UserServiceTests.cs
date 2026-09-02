@@ -170,15 +170,16 @@ public class UserServiceTests : InMemoryDatabaseTest
             TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
+        var tierSync = new ApimGatewayTierSync(_apim, writer, new CurrentUserGatewayTierSyncActor(accessor), NullLogger<ApimGatewayTierSync>.Instance);
         var quotaResolution = new QuotaResolutionService(
             Context,
             tierMapper,
-            new ApimGatewayTierSync(_apim, writer, new CurrentUserGatewayTierSyncActor(accessor), NullLogger<ApimGatewayTierSync>.Instance),
+            tierSync,
             NullLogger<QuotaResolutionService>.Instance);
         var quotaAllocations = new QuotaAllocationService(
             Context,
             quotaResolution,
-            new QuotaResetService(Context, quotaResolution, writer, _timeProvider, NullLogger<QuotaResetService>.Instance),
+            new QuotaResetService(Context, quotaResolution, tierSync, writer, _timeProvider, NullLogger<QuotaResetService>.Instance),
             tierMapper,
             accessor,
             _timeProvider,
