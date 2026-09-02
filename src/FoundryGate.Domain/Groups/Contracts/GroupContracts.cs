@@ -112,5 +112,21 @@ public record AddGroupMemberRequest
     public int UserId { get; init; }
 }
 
-/// <summary>Result of POST /groups/sync-entra for one group (spec &#167;7.3).</summary>
-public record GroupSyncResult(int GroupId, int AddedCount, int RemovedCount);
+/// <summary>
+/// Filter parameters for GET /groups. Bind alongside <see cref="Common.PagedRequest"/> via a separate
+/// <c>[FromQuery]</c> parameter (the <c>AuditLogQuery</c> precedent). Positional and attribute-free:
+/// a filter is not domain input, so an unusable value narrows to nothing rather than 400-ing.
+/// </summary>
+/// <param name="Search">Case-insensitive substring matched against the group's name and description; null or blank matches every group.</param>
+public record GroupQuery(string? Search);
+
+/// <summary>Result of POST /groups/{id}/sync-entra (and one element of POST /groups/sync-entra) for one group (spec &#167;7.3).</summary>
+/// <param name="GroupId">The group that was reconciled.</param>
+/// <param name="AddedCount">Memberships created because the user is in the Entra group but was not in this one.</param>
+/// <param name="RemovedCount">Memberships deleted because the user left the Entra group.</param>
+/// <param name="SkippedUnknownUserCount">
+/// Entra group members with no FoundryGate <c>User</c> row (they have never signed in and were not
+/// picked up by <c>POST /users/sync</c>). They are skipped, never invented — but counted and logged
+/// at Warning, so "the group looks short" has a number attached instead of being silent.
+/// </param>
+public record GroupSyncResult(int GroupId, int AddedCount, int RemovedCount, int SkippedUnknownUserCount);

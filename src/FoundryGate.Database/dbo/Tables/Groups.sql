@@ -18,3 +18,9 @@ GO
 CREATE UNIQUE NONCLUSTERED INDEX [IX_Groups_GroupUnique]
     ON [dbo].[Groups]([GroupUnique] ASC);
 GO
+
+-- Group names are unique across the fork (POST /groups → 409 on a duplicate) and are also the
+-- list's default ordering, so the constraint and the index are the same object.
+CREATE UNIQUE NONCLUSTERED INDEX [IX_Groups_Name]
+    ON [dbo].[Groups]([Name] ASC);
+GO

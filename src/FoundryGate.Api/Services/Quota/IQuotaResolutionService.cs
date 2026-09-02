@@ -24,6 +24,13 @@ namespace FoundryGate.Api.Services.Quota;
 /// never <c>TokensUsed</c> or <c>IsHardStopped</c>, which belong to reconciliation and offboarding.
 /// </para>
 /// <para>
+/// <b>Pending changes count.</b> Levels 3-4 read group membership and group policy <em>through the
+/// change tracker</em>: a <c>GroupMember</c> the caller has just added or removed, and a
+/// <c>Group.MonthlyTokenQuota</c>/<c>IsUnlimited</c> it has just edited, are visible here before
+/// anything is saved. That is what lets a group mutation and the re-resolution it triggers commit in
+/// one <c>SaveChangesAsync</c> instead of racing the database (#30/#31/#41).
+/// </para>
+/// <para>
 /// <b>Gateway.</b> The numeric quota is mapped to a tier product by <see cref="GatewayTierMapper"/>; when
 /// the user has an APIM subscription and the tier differs from their previous allocation's (or none is
 /// known), <see cref="IGatewayTierSync.SyncAsync"/> is invoked — before the caller saves, so a failed

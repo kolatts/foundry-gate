@@ -8,6 +8,7 @@ namespace FoundryGate.Data.Entities;
 /// A group of users that can carry its own quota policy, optionally synced from an Entra group.
 /// </summary>
 [Index(nameof(GroupUnique), IsUnique = true)]
+[Index(nameof(Name), IsUnique = true)]
 public class Group : ICreatedDate
 {
     public int GroupId { get; set; }
@@ -18,6 +19,12 @@ public class Group : ICreatedDate
     /// </summary>
     public Guid GroupUnique { get; set; } = Guid.NewGuid();
 
+    /// <summary>
+    /// Display name, unique across the fork. The uniqueness is a database constraint rather than a
+    /// service-level "does one already exist?" check alone, so two concurrent <c>POST /groups</c> for
+    /// the same name cannot both win; it also serves the group list's default ordering and its
+    /// <c>?search=</c> filter.
+    /// </summary>
     [Required]
     [StringLength(200)]
     public string Name { get; set; } = string.Empty;
