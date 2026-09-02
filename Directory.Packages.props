@@ -24,10 +24,10 @@
     <PackageVersion Include="Azure.ResourceManager.Sql" Version="1.4.0" />
 
     <!-- Web -->
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Authentication" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Authentication.WebAssembly.Msal" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.Authentication" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Authentication.WebAssembly.Msal" Version="10.0.11" />
     <PackageVersion Include="MudBlazor" Version="9.9.0" />
 
     <!-- Functions -->
@@ -56,6 +56,9 @@
     <PackageVersion Include="Scalar.AspNetCore" Version="2.17.2" />
 
     <!-- Test projects -->
+    <!-- Blazor component tests (#49-#55, #51-#53/#62/#63): renders Pages/* with MudBlazor's
+         services and a fake IFoundryGateApiClient, no browser. -->
+    <PackageVersion Include="bunit" Version="2.9.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.11" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
