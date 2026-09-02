@@ -21,12 +21,18 @@ name: Deploy All
 #   push to main (deployable paths) -> the whole chain against dev
 #   workflow_dispatch               -> the whole chain against the chosen environment
 #
-# A production run stops at the `production` reviewer gate once per stage — five approvals,
-# deliberately (GitHub approves pending jobs, not whole runs). Collapsing them would mean
-# running the real work against an ungated Environment carrying the same credential, i.e.
-# putting the production deploy identity behind no gate at all. Decision D-019 in
-# fable-refactor-log.md; the sequence is documented in docs reference/ci-cd and printed by the
-# `plan` job below.
+# A production run stops at the `production` reviewer gate once per pending job — SIX
+# approvals, deliberately (GitHub approves pending jobs, not whole runs). Collapsing them to
+# one would mean running the real work against an ungated Environment carrying the same
+# credential, i.e. putting the production deploy identity behind no gate at all. Decision D-019
+# in fable-refactor-log.md; the sequence is documented in docs reference/ci-cd and printed by
+# the `plan` job below.
+#
+# The count is a property of the JOB graph, not of this file's stage list: `_deploy-infra.yml`
+# gates only its `deploy` job (`validate` is ungated), `_deploy-api.yml` gates one job (it was
+# two until #198), and `functions`/`ui` become pending together. Add a job that declares
+# `environment:` anywhere in the chain and the count goes up — update the `plan` table,
+# reference/ci-cd, D-019 and plans/22 together with it.
 # Docs are not part of this chain: GitHub Pages deploys from docs-deploy.yml on push to main
 # and has no Azure dependency.
 
@@ -90,6 +96,10 @@ jobs:
     name: Plan
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Explicitly nothing. Without this block the job would inherit the workflow's
+    # `id-token: write` + `pull-requests: write`, which would make the "no Azure access"
+    # claim above false even though no step uses them.
+    permissions: {}
     steps:
       - name: Describe the deploy and its approvals
         env:
@@ -113,22 +123,29 @@ jobs:
             exit 0
           fi
 
-          # GitHub approves PENDING JOBS, not runs, so a production run stops five times. This
-          # is the recorded decision (#141 / fable-refactor-log.md D-019), not an oversight:
-          # collapsing it would mean putting the deploy identity behind an ungated Environment.
+          # GitHub approves PENDING JOBS, not runs. The count below is the number of times the
+          # run actually stops, counted from the job graph (every job that declares
+          # `environment:` in a reusable workflow this file calls), not from the number of
+          # stages in the diagram. If you add or remove a gated job anywhere in the chain,
+          # this table is wrong until you update it. Recorded decision: #141 / D-019.
           {
-            echo "## Production: five approvals, in this order"
+            echo "## Production: six approvals, in this order"
             echo ""
             echo "| # | Waiting job(s) | Approving means |"
             echo "|---|---|---|"
-            echo "| 1 | \`Infra\` | apply the Bicep change (the what-if preview runs *inside* this job) |"
-            echo "| 2 | \`Database\` (prepare) | build the dacpac + read deployment outputs — no writes |"
-            echo "| 3 | \`Database\` (deploy) | **the irreversible one**: dacpac deploy, reference seed, SQL firewall window |"
-            echo "| 4 | \`API\` + \`Functions\` + \`UI\` | roll the three app tiers (three jobs, one visit — they go pending together) |"
-            echo "| 5 | \`Postdeployment tests\` | read-only smoke tests |"
+            echo "| 1 | \`Infra - Deploy\` | apply the Bicep change (the what-if preview runs *inside* this job; \`Infra - Validate\` is ungated and has already run) |"
+            echo "| 2 | \`Database - Prepare\` | build the dacpac + read deployment outputs — no writes |"
+            echo "| 3 | \`Database - Deploy\` | **the irreversible one**: dacpac deploy, reference seed, SQL firewall window |"
+            echo "| 4 | \`API - Build, push and deploy\` | build the image, push it to ACR and roll the Container App (one job since #198) |"
+            echo "| 5 | \`Functions\` + \`UI\` | two jobs, one visit — they go pending together once the API is healthy |"
+            echo "| 6 | \`Postdeployment tests\` | read-only smoke tests |"
             echo ""
             echo "Each stage is independently re-runnable, which is why there is no separate"
-            echo "dev-then-production chain. See docs reference/ci-cd 'Production approvals'."
+            echo "dev-then-production chain. Stages 4 and 5 are separate visits because"
+            echo "\`Functions\`/\`UI\` need \`API\`: on a day-0 run the API stage re-runs the whole"
+            echo "subscription deployment to swap the bootstrap placeholder, and an infra re-run"
+            echo "restarting the Function App mid-upload is a real flake. See docs"
+            echo "reference/ci-cd 'Production approvals'."
           } >> "$GITHUB_STEP_SUMMARY"
 
   infra:

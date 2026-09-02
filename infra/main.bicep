@@ -238,6 +238,9 @@ param keyVaultSoftDeleteRetentionInDays int = 7
 @description('Create the Key Vault RSA key the API wraps APIM subscription keys with (#95).')
 param createKeyEncryptionKey bool = true
 
+@description('Define the custom RBAC role the ui-preview CI identity is assigned for Static Web Apps PR previews (#155). No built-in role grants any Microsoft.Web/staticSites action, so without this the only working option is Contributor. Needs Microsoft.Authorization/roleDefinitions/write at subscription scope; a fork whose principal lacks it must set this false and hand-craft the role (the assignment itself is an owner action either way, #109).')
+param deploySwaPreviewRole bool = true
+
 // Standard tags on every resource. Scale model: one FoundryGate stack per environment
 // per subscription; additional REGIONS scale inside a stack (foundryRegions → pool
 // members, all tagged fg-role=foundry); additional SUBSCRIPTIONS scale by deploying
@@ -400,6 +403,20 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
   dependsOn: [gateway]
 }
 
+// The role the `ui-preview` GitHub Environment identity gets assigned so PR previews can read
+// one Static Web App's deployment token and manage its staging environments — and nothing
+// else (#155). Subscription scope because that is where role DEFINITIONS live; its single
+// assignableScope is the Static Web App above, so the role cannot be assigned anywhere else
+// even by someone who wanted to. The ASSIGNMENT is an owner action (#109) — the app
+// registration is not in Bicep.
+module swaPreviewRole 'modules/swa-preview-role.bicep' = if (deployControlPlane && deploySwaPreviewRole) {
+  name: 'foundrygate-swa-preview-role'
+  params: {
+    staticWebAppId: controlPlane.?outputs.staticWebAppId ?? ''
+    environmentName: environmentName
+  }
+}
+
 // ---- Outputs: the contract the deploy workflows and the CLI consume -------------
 // Gateway: addresses, the tier products that developer subscriptions scope to, the
 // workspace holding billing-grade token logs, and the identities/names for further role
@@ -442,7 +459,12 @@ output functionAppName string = controlPlane.?outputs.functionAppName ?? ''
 output functionAppHostname string = controlPlane.?outputs.functionAppHostname ?? ''
 output functionsStorageAccountName string = controlPlane.?outputs.functionsStorageAccountName ?? ''
 output staticWebAppName string = controlPlane.?outputs.staticWebAppName ?? ''
+output staticWebAppId string = controlPlane.?outputs.staticWebAppId ?? ''
 output staticWebAppHostname string = controlPlane.?outputs.staticWebAppHostname ?? ''
+@description('Role definition id to assign to the ui-preview identity, and the one scope it may be assigned at (#155/#109). Empty when the role was not deployed.')
+output swaPreviewRoleDefinitionId string = swaPreviewRole.?outputs.roleDefinitionId ?? ''
+output swaPreviewRoleName string = swaPreviewRole.?outputs.roleName ?? ''
+output swaPreviewRoleAssignableScope string = swaPreviewRole.?outputs.assignableScope ?? ''
 output apiIdentityName string = controlPlane.?outputs.apiIdentityName ?? ''
 output apiIdentityClientId string = controlPlane.?outputs.apiIdentityClientId ?? ''
 output apiIdentityPrincipalId string = controlPlane.?outputs.apiIdentityPrincipalId ?? ''

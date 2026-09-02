@@ -294,6 +294,8 @@ output functionAppName string = functionApp.outputs.functionAppName
 output functionAppHostname string = functionApp.outputs.functionAppHostname
 output functionsStorageAccountName string = storage.outputs.storageAccountName
 output staticWebAppName string = staticWebApp.outputs.staticWebAppName
+@description('ARM resource id — the only assignableScope of the SWA preview publisher role (modules/swa-preview-role.bicep, #155).')
+output staticWebAppId string = staticWebApp.outputs.staticWebAppId
 output staticWebAppHostname string = staticWebApp.outputs.defaultHostname
 output apiIdentityName string = identities.outputs.apiIdentityName
 output apiIdentityClientId string = identities.outputs.apiIdentityClientId

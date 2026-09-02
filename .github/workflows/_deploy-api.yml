@@ -13,6 +13,14 @@ name: Deploy API (Reusable)
 # `az containerapp update --image` would switch the image but not the ingress port or probes, so
 # when the app is still in that mode this workflow re-runs the infra deployment with
 # FG_API_IMAGE=<new image> instead — Bicep then flips port/probes and the image together.
+#
+# ONE GATED JOB, ON PURPOSE (#141). Build-and-push and roll-the-app used to be two jobs, both
+# declaring `environment:`, which cost a production run TWO reviewer approvals for one logically
+# atomic step — and they were strictly sequential anyway (`deploy` did `needs: build-push`,
+# re-checked out, re-logged-in and re-read the same deployment outputs). Merging them removes an
+# approval, a checkout, an OIDC login and an `az deployment sub show` round trip. Do not split
+# them again to "parallelise": nothing here is parallelisable, and every extra job that declares
+# `environment:` is another click a production deploy waits on.
 
 on:
   workflow_call:
@@ -24,7 +32,7 @@ on:
     outputs:
       image:
         description: "Fully-qualified image reference that was deployed."
-        value: ${{ jobs.build-push.outputs.image }}
+        value: ${{ jobs.deploy.outputs.image }}
       api-base-url:
         description: "https://<container app fqdn>"
         value: ${{ jobs.deploy.outputs.api-base-url }}
@@ -39,17 +47,20 @@ env:
   IMAGE_REPOSITORY: foundrygate-api
 
 jobs:
-  build-push:
-    name: API - Build and push image (${{ inputs.environment }})
+  deploy:
+    name: API - Build, push and deploy (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: ${{ inputs.environment }}
+    timeout-minutes: 60
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.verify.outputs.api-base-url }}
     permissions:
       id-token: write
       contents: read
     outputs:
       image: ${{ steps.push.outputs.image }}
       image-tag: ${{ steps.version.outputs.image-tag }}
+      api-base-url: ${{ steps.verify.outputs.api-base-url }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,37 +112,10 @@ jobs:
           docker push "$image"
           docker push "${LOGIN_SERVER}/${IMAGE_REPOSITORY}:${SEMVER}"
           echo "image=${image}" >> "$GITHUB_OUTPUT"
+          # Also on the job environment, so every later step in this now-single job reads the
+          # exact string that was pushed rather than re-deriving it.
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
           echo "Pushed \`${image}\` (also tagged \`${SEMVER}\`)" >> "$GITHUB_STEP_SUMMARY"
-
-  deploy:
-    name: API - Deploy to Container Apps (${{ inputs.environment }})
-    needs: build-push
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    environment:
-      name: ${{ inputs.environment }}
-      url: ${{ steps.verify.outputs.api-base-url }}
-    permissions:
-      id-token: write
-      contents: read
-    outputs:
-      api-base-url: ${{ steps.verify.outputs.api-base-url }}
-    env:
-      IMAGE: ${{ needs.build-push.outputs.image }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Azure login (OIDC)
-        uses: ./.github/actions/azure-oidc-login
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          environment: ${{ inputs.environment }}
-
-      - name: Resolve infra outputs
-        id: infra
-        run: bash .github/scripts/infra/export-outputs.sh "$DEPLOYMENT_NAME"
 
       - name: Detect bootstrap mode
         id: mode
@@ -158,6 +142,8 @@ jobs:
       - name: Replace bootstrap placeholder (infra re-run with FG_API_IMAGE)
         if: steps.mode.outputs.bootstrap == 'true'
         env:
+          # IMAGE is on the job environment ($GITHUB_ENV, set by the push step above);
+          # deploy.sh reads FG_API_IMAGE, so alias it here rather than re-resolving.
           FG_API_IMAGE: ${{ env.IMAGE }}
           FG_ENTRA_API_CLIENT_ID: ${{ vars.FG_ENTRA_API_CLIENT_ID }}
           FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}

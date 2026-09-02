@@ -4,8 +4,19 @@
 # Build from the REPO ROOT (the context needs the shared build props, central package versions
 # and the referenced projects):
 #   docker build -f src/FoundryGate.Api/Dockerfile -t foundrygate-api:local .
-#   docker run --rm -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=local foundrygate-api:local
+#   docker run --rm -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=local \
+#     -e 'ConnectionStrings__FoundryGate=Server=localhost;Database=FoundryGate;Integrated Security=true;TrustServerCertificate=True' \
+#     -e AzureAd__TenantId=00000000-0000-0000-0000-000000000000 \
+#     -e AzureAd__ClientId=00000000-0000-0000-0000-000000000000 \
+#     -e AzureAd__Audience=api://00000000-0000-0000-0000-000000000000 \
+#     -e KeyProtection__Provider=DataProtection \
+#     foundrygate-api:local
 #   curl -i http://localhost:8080/health          # 200 (hermetic liveness; no DB needed)
+#
+# Those settings are required by Program.cs's startup validation and MUST come from the
+# environment — the image ships no appsettings.local.json (.dockerignore, enforced by
+# .github/actions/build-api-image). On Container Apps they come from
+# infra/modules/control-plane.bicep; /health itself is hermetic, so placeholders are fine here.
 #
 # Runtime contract (matches infra/modules/container-app.bicep):
 #   - listens on 8080 (ASPNETCORE_HTTP_PORTS default in the aspnet image; made explicit below)
