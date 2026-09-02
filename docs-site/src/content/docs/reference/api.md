@@ -82,11 +82,54 @@ the same row count.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/requests` | Any | Own requests; Admin sees all. Filter: `?status=Pending|Approved|Rejected` |
-| `POST` | `/requests` | Any | Submit a quota increase request |
-| `GET` | `/requests/{id}` | Owner or Admin | Request detail |
-| `PUT` | `/requests/{id}/approve` | Admin | Approve with optional notes — updates quota immediately |
-| `PUT` | `/requests/{id}/reject` | Admin | Reject with optional notes |
+| `GET` | `/requests` | Any | Own requests; Admin sees all. Paged (`?page=&pageSize=`), newest first. Filters: `?status=` (`0` Pending, `1` Approved, `2` Rejected) and, for admins, `?userId=` |
+| `POST` | `/requests` | Any | Submit own request. Body: `requestedQuota` (null = unlimited), `justification` (10–2000 chars). `201` + `Location` |
+| `POST` | `/requests/for/{userId}` | Admin | Submit on a user's behalf — same rules, `requestedByUserId` is the admin. `201` + `Location` |
+| `GET` | `/requests/{id}` | Owner or Admin | Request detail. `404` for anyone else — see below |
+| `POST` | `/requests/{id}/approve` | Admin | Approve. Applies the tier to the user and re-resolves the current period immediately |
+| `POST` | `/requests/{id}/reject` | Admin | Reject. Nothing about the user's quota changes |
+
+**A request asks for a tier, not a number.** `requestedQuota` must be `null` (unlimited) or exactly
+one of the configured tier caps from `GET /quota/tiers` — anything else is `400` listing the allowed
+values (D-013; the same `EnsureValidQuota` guard as `PUT /users/{id}/quota`). It must also be a
+genuine increase over the requester's currently resolved quota: a bigger finite tier, or unlimited.
+A developer who is already unlimited has nothing larger to ask for, so their submission is `400`
+too. Approval re-checks the stored value against the tier table, so a request filed before a tier was
+removed from configuration is `400` at review time rather than persisting a budget the gateway cannot
+enforce.
+
+**One open request per user per period.** A second submission while one is still `Pending` in the
+same UTC calendar month is `409`; a decided (approved or rejected) request frees the slot at once, so
+a rejected developer can re-ask with a better justification. The check is not yet backed by a database
+constraint, so two simultaneous submissions can both land ([#147](https://github.com/kolatts/foundry-gate/issues/147)).
+
+Submission captures `currentQuota` from the requester's current-period `QuotaAllocation`, resolving
+and creating it if this is their first activity of the month — so the recorded "before" is the same
+number `GET /quota/allocations/me` shows. Every submission writes `quota.requested`; approval writes
+`quota.approved` with the before/after quota, the resolved tier product and whether the gateway
+subscription was moved; rejection writes `quota.rejected`. All three carry target type `Request` and
+the request id.
+
+**Approval is the write path.** It sets the subject's `IsUnlimited` / `MonthlyTokenQuota`, then re-runs
+quota resolution for the current period — which upserts the `QuotaAllocation` and moves the subject's
+APIM subscription to the new tier product — before the response is written. No cron job, no lag. The
+subject's reconciled `tokensUsed` is untouched. Everything (request, user, allocation, audit row)
+commits in one transaction; a failed gateway move fails the approval.
+
+Status codes worth knowing: `403` when the caller has no user row yet (call `GET /users/me` first) or
+is deactivated; `403` when a non-admin passes `?userId=` naming someone else; `409` when the request
+was already decided, or when the subject user is deactivated (re-activate them or reject the request);
+`404` on `GET /requests/{id}` for a request that belongs to someone else — deliberately identical to
+the response for an id that does not exist, so the route cannot be used to enumerate other people's
+requests.
+
+Deprovisioning hooks into the same service: `IQuotaRequestService.CancelPendingForUserAsync` closes a
+departing developer's pending requests so they do not sit in an admin's queue
+([#65](https://github.com/kolatts/foundry-gate/issues/65)/[#66](https://github.com/kolatts/foundry-gate/issues/66)).
+
+Spec §4.4 writes the two review actions as `PUT`; they are `POST` here — non-idempotent state
+transitions whose body is not the resource, matching `POST /users/{id}/activate`,
+`POST /keys/{userId}/rotate` and `POST /quota/reset` elsewhere in this API.
 
 ## Keys
 
