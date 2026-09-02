@@ -1,0 +1,44 @@
+@* Shown once, and only once, after an admin provisions or rotates a user's gateway key
+   (#51): POST /keys/{userId}/provision and POST /keys/{userId}/rotate are the only responses
+   that ever carry the plaintext, and nothing stores it afterwards — GET /keys/me and the user
+   detail page serve a masked hint. If it is lost, the fix is another rotation, not a lookup. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-4">
+            This is the only time this key is shown. Nothing here or in the API can retrieve it
+            again — losing it means rotating the key.
+        </MudAlert>
+
+        <MudTextField T="string"
+                      Value="@PlaintextKey"
+                      Label="@($"Gateway key for {UserDisplayName}")"
+                      Variant="Variant.Outlined"
+                      ReadOnly="true"
+                      Lines="2"
+                      data-testid="revealed-key" />
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+            Hand it over out of band, not by email. The developer sends it to the gateway as
+            <code>x-api-key</code> (Claude Code) or <code>api-key</code> (Codex).
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@Close" data-testid="revealed-key-done">Done</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Instance { get; set; } = default!;
+
+    /// <summary>The plaintext APIM subscription key, straight from the provision/rotate response.</summary>
+    [Parameter, EditorRequired]
+    public string PlaintextKey { get; set; } = string.Empty;
+
+    /// <summary>Whose key it is — an admin acting on someone else needs to see the name.</summary>
+    [Parameter, EditorRequired]
+    public string UserDisplayName { get; set; } = string.Empty;
+
+    private void Close() => Instance.Close(DialogResult.Ok(true));
+}

@@ -2,6 +2,7 @@ using Azure.Core;
 using Azure.Monitor.Query;
 using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Functions.Configuration;
 using FoundryGate.Functions.Services.Quota;
 using FoundryGate.Functions.Services.Usage;
@@ -51,6 +52,10 @@ public static class FunctionsServiceCollectionExtensions
         // documented in reference/infrastructure.
         AddGatewayTierSync(services, settings);
         services.AddQuotaCore();
+
+        // The reset also closes requests left pending past their period (#159); the rule is Core's so a
+        // timer and the admin's POST /quota/reset cannot disagree about what expiry means.
+        services.AddRequestsCore();
 
         services.AddScoped<IMonthlyResetJob, MonthlyResetJob>();
         services.AddScoped<IUsageSyncJob, UsageSyncJob>();

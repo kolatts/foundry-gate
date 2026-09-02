@@ -1,12 +1,431 @@
 @page "/users/{Id:int}"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
 
-<PageTitle>User #@Id — Foundry Gate</PageTitle>
+<PageTitle>@(_detail?.User.DisplayName ?? $"User #{Id}") — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="@($"User #{Id}")" />
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else if (_notFound)
+{
+    <MudAlert Severity="Severity.Warning" data-testid="user-not-found">
+        There's no user #@Id. They may have been removed, or the link may be stale.
+        <MudLink Href="users" Class="ml-2">Back to users</MudLink>
+    </MudAlert>
+}
+else if (_detail is null)
+{
+    <MudSkeleton Width="18rem" Height="3rem" data-testid="user-loading" />
+    <MudSkeleton Width="100%" Height="2rem" Class="mt-4" />
+    <MudSkeleton Width="100%" Height="16rem" Class="mt-2" />
+}
+else
+{
+    <MudButton Variant="Variant.Text"
+               StartIcon="@Icons.Material.Filled.ArrowBack"
+               Href="users"
+               Class="mb-2"
+               data-testid="user-back">All users</MudButton>
+
+    <div class="d-flex align-center ga-3 mb-4">
+        <MudText Typo="Typo.h4" data-testid="user-name">@_detail.User.DisplayName</MudText>
+        <MudChip T="string"
+                 Size="Size.Small"
+                 Variant="Variant.Filled"
+                 Color="@(_detail.User.IsActive ? Color.Success : Color.Default)"
+                 data-testid="user-status">
+            @(_detail.User.IsActive ? "Active" : "Deactivated")
+        </MudChip>
+    </div>
+
+    @* KeepPanelsAlive: the four panels are cheap, and keeping them rendered means a half-filled
+       budget editor survives a tab switch instead of resetting. *@
+    <MudTabs Elevation="1" Rounded="true" ApplyEffectsToContainer="true" KeepPanelsAlive="true">
+        <MudTabPanel Text="Overview" Icon="@Icons.Material.Filled.Person">
+            <MudSimpleTable Dense="true" Hover="false" Elevation="0" Style="background: transparent;">
+                <tbody>
+                    <tr><td><MudText Typo="Typo.body2" Class="mud-text-secondary">Email</MudText></td><td data-testid="user-email">@_detail.User.Email</td></tr>
+                    <tr><td><MudText Typo="Typo.body2" Class="mud-text-secondary">Employee id</MudText></td><td>@(_detail.User.EmployeeId ?? "—")</td></tr>
+                    <tr><td><MudText Typo="Typo.body2" Class="mud-text-secondary">Stable id</MudText></td><td><code>@_detail.User.UserUnique</code></td></tr>
+                    <tr><td><MudText Typo="Typo.body2" Class="mud-text-secondary">Created</MudText></td><td>@_detail.User.CreatedDate.ToLocalTime().ToString("f")</td></tr>
+                    <tr>
+                        <td><MudText Typo="Typo.body2" Class="mud-text-secondary">Last Entra sync</MudText></td>
+                        <td>@(_detail.User.LastSyncedDate is { } synced ? synced.ToLocalTime().ToString("f") : "Never")</td>
+                    </tr>
+                </tbody>
+            </MudSimpleTable>
+
+            <MudDivider Class="my-6" />
+
+            <MudSwitch T="bool"
+                       Value="@_detail.User.IsActive"
+                       ValueChanged="@OnActiveToggledAsync"
+                       Color="Color.Success"
+                       Disabled="@_busy"
+                       Label="Account active"
+                       data-testid="user-active-switch" />
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+                Deactivating deletes this person's APIM subscription, hard-stops their allocation and
+                rejects their pending requests. Re-activating runs the provision pipeline again and
+                mints a fresh key — which only they can reveal.
+            </MudText>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Quota" Icon="@Icons.Material.Filled.DataUsage">
+            @if (_detail.CurrentAllocation is { } allocation)
+            {
+                <div class="d-flex align-center ga-2 mb-2">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="@TierDisplay.LevelColor(allocation.ResolvedLevelType)" data-testid="user-quota-level">
+                        @TierDisplay.LevelLabel(allocation.ResolvedLevelType)
+                    </MudChip>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" data-testid="user-quota-tier">
+                        @TierDisplay.Describe(allocation.IsUnlimited, allocation.AllocatedTokens, _tiers)
+                    </MudChip>
+                    @if (allocation.IsHardStopped)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Error">Hard-stopped</MudChip>
+                    }
+                </div>
+
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                    @TierDisplay.FormatTokensExact(allocation.TokensUsed) used this period
+                    (@allocation.PeriodYear-@allocation.PeriodMonth.ToString("00"))@(allocation.PercentUsed is { } pct ? $" — {pct:P0} of the budget" : string.Empty).
+                </MudText>
+
+                @if (allocation.IsGatewayCapped)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3" data-testid="user-quota-capped">
+                        This allocation's stored number isn't one of the configured tiers, so the gateway
+                        enforces the next tier up. Save a tier below to make the two agree.
+                    </MudAlert>
+                }
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" data-testid="user-quota-none">
+                    No allocation resolved for this month yet — it appears on their next sign-in, or
+                    after the monthly reset.
+                </MudAlert>
+            }
+
+            <MudDivider Class="my-6" />
+
+            <MudText Typo="Typo.subtitle1" Class="mb-3">Set the monthly budget</MudText>
+            <div style="max-width: 32rem;">
+                <QuotaTierPicker Tiers="@_tiers"
+                                 IsUnlimited="@_editIsUnlimited"
+                                 IsUnlimitedChanged="@(value => _editIsUnlimited = value)"
+                                 MonthlyTokenQuota="@_editQuota"
+                                 MonthlyTokenQuotaChanged="@(value => _editQuota = value)"
+                                 Disabled="@_busy"
+                                 TestId="user-quota"
+                                 HelperText="Changing this re-scopes their APIM subscription to the new tier product. Their key doesn't change." />
+
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           Class="mt-4"
+                           Disabled="@(_busy || !QuotaChanged)"
+                           OnClick="@SaveQuotaAsync"
+                           data-testid="user-quota-save">Save budget</MudButton>
+            </div>
+        </MudTabPanel>
+
+        <MudTabPanel Text="@($"Groups ({_detail.Groups.Count})")" Icon="@Icons.Material.Filled.Groups">
+            @if (_detail.Groups.Count == 0)
+            {
+                <MudText Class="mud-text-secondary" data-testid="user-groups-empty">
+                    Not a member of any group. Their budget comes from their own override or the system default.
+                </MudText>
+            }
+            else
+            {
+                <MudSimpleTable Dense="true" Hover="true" Elevation="0" data-testid="user-groups-table">
+                    <thead>
+                        <tr><th>Group</th><th>Member since</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var group in _detail.Groups)
+                        {
+                            <tr>
+                                <td>@group.Name</td>
+                                <td>@group.AddedDate.ToLocalTime().ToString("d")</td>
+                                <td class="text-right">
+                                    <MudButton Variant="Variant.Text" Size="Size.Small" Href="@($"groups/{group.GroupId}")">Open</MudButton>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+                    Memberships are edited on the group, not here — a group's roster is the thing an
+                    Entra sync owns.
+                </MudText>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="Keys" Icon="@Icons.Material.Filled.VpnKey">
+            @if (_detail.ApiKey.IsProvisioned)
+            {
+                <div class="d-flex align-center ga-3">
+                    <MudIcon Icon="@Icons.Material.Filled.VpnKey" Color="Color.Success" />
+                    <MudText Typo="Typo.body1" data-testid="user-key-masked">@(_detail.ApiKey.MaskedKey ?? "Provisioned")</MudText>
+                </div>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                    Only the last four characters are stored in the clear. Nothing here can show the full
+                    key again — rotating issues a new one and shows it once.
+                </MudText>
+
+                <div class="d-flex ga-2 mt-6">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Autorenew"
+                               Disabled="@_busy"
+                               OnClick="@RotateKeyAsync"
+                               data-testid="user-key-rotate">Rotate key</MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Error"
+                               StartIcon="@Icons.Material.Filled.DeleteOutline"
+                               Disabled="@_busy"
+                               OnClick="@RevokeKeyAsync"
+                               data-testid="user-key-revoke">Revoke key</MudButton>
+                </div>
+                <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">
+                    Revoking takes the gateway key away and leaves the account active — to offboard
+                    someone, deactivate them on the Overview tab instead.
+                </MudText>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" data-testid="user-key-none">
+                    No gateway key. One is minted automatically on their first sign-in; provision it
+                    here if they need it before that.
+                </MudAlert>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.AddModerator"
+                           Class="mt-4"
+                           Disabled="@(_busy || !_detail.User.IsActive)"
+                           OnClick="@ProvisionKeyAsync"
+                           data-testid="user-key-provision">Provision key</MudButton>
+                @if (!_detail.User.IsActive)
+                {
+                    <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                        A deactivated account can't hold a key — re-activate them first.
+                    </MudText>
+                }
+            }
+        </MudTabPanel>
+    </MudTabs>
+}
 
 @code {
     /// <summary>UserId from the route.</summary>
     [Parameter]
     public int Id { get; set; }
+
+    private UserDetailResponse? _detail;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+    private bool _editIsUnlimited;
+    private long? _editQuota;
+    private bool _busy;
+    private bool _accessDenied;
+    private bool _notFound;
+
+    private bool QuotaChanged =>
+        _detail is not null &&
+        (_editIsUnlimited != _detail.User.IsUnlimited || _editQuota != _detail.User.MonthlyTokenQuota);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tiers = await Tiers.GetAsync();
+    }
+
+    /// <summary>Re-reads the whole user on every route change — <c>/users/{id}</c> is reused between users.</summary>
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var result = await Api.GetUserAsync(Id);
+        switch (result.Status)
+        {
+            case ApiCallStatus.Forbidden:
+                _accessDenied = true;
+                return;
+            case ApiCallStatus.NotFound:
+                _notFound = true;
+                _detail = null;
+                return;
+        }
+
+        if (!result.IsSuccess || result.Value is null)
+        {
+            Snackbar.Add(result.Message ?? "Couldn't load this user.", Severity.Error);
+            return;
+        }
+
+        _notFound = false;
+        _detail = result.Value;
+        _editIsUnlimited = _detail.User.IsUnlimited;
+        _editQuota = _detail.User.MonthlyTokenQuota;
+    }
+
+    private async Task OnActiveToggledAsync(bool shouldBeActive)
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        var confirmed = shouldBeActive
+            ? await DialogService.ConfirmAsync(
+                title: "Activate user",
+                message: $"Activate {_detail.User.DisplayName}?",
+                detail: "Their quota is re-resolved and a fresh gateway key is minted. They reveal it themselves from My Account.",
+                confirmText: "Activate",
+                confirmColor: Color.Primary)
+            : await DialogService.ConfirmAsync(
+                title: "Deactivate user",
+                message: $"Deactivate {_detail.User.DisplayName}?",
+                detail: "Their APIM subscription is deleted, this month's allocation is hard-stopped and any pending quota requests are rejected. Calls through the gateway stop immediately.",
+                confirmText: "Deactivate",
+                confirmColor: Color.Error);
+
+        if (!confirmed)
+        {
+            // Nothing to undo: the switch renders from _detail, which hasn't changed.
+            StateHasChanged();
+            return;
+        }
+
+        await MutateAsync(
+            () => shouldBeActive ? Api.ActivateUserAsync(Id) : Api.DeactivateUserAsync(Id),
+            shouldBeActive ? "User activated." : "User deactivated.");
+
+    }
+
+    private async Task SaveQuotaAsync()
+    {
+        var request = new UpdateUserQuotaRequest { IsUnlimited = _editIsUnlimited, MonthlyTokenQuota = _editQuota };
+        await MutateAsync(() => Api.UpdateUserQuotaAsync(Id, request), "Monthly budget updated.");
+    }
+
+    private async Task ProvisionKeyAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Provision key",
+            message: $"Provision a gateway key for {_detail.User.DisplayName}?",
+            detail: "An APIM subscription is created under their current tier. The key is shown once, here, and never again.",
+            confirmText: "Provision",
+            confirmColor: Color.Primary);
+
+        if (confirmed)
+        {
+            await RevealingMutateAsync(() => Api.ProvisionUserKeyAsync(Id), "Gateway key provisioned.");
+        }
+    }
+
+    private async Task RotateKeyAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Rotate key",
+            message: $"Rotate {_detail.User.DisplayName}'s gateway key?",
+            detail: "Both APIM keys are regenerated, so the old one stops working straight away. The new key is shown once, here, and never again.",
+            confirmText: "Rotate",
+            confirmColor: Color.Error);
+
+        if (confirmed)
+        {
+            await RevealingMutateAsync(() => Api.RotateUserKeyAsync(Id), "Gateway key rotated.");
+        }
+    }
+
+    private async Task RevokeKeyAsync()
+    {
+        if (_detail is null)
+        {
+            return;
+        }
+
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Revoke key",
+            message: $"Revoke {_detail.User.DisplayName}'s gateway key?",
+            detail: "Their APIM subscription is deleted and calls stop immediately. The account stays active and a new key can be provisioned later.",
+            confirmText: "Revoke",
+            confirmColor: Color.Error);
+
+        if (confirmed)
+        {
+            await MutateAsync(() => Api.RevokeUserKeyAsync(Id), "Gateway key revoked.");
+        }
+    }
+
+    /// <summary>
+    /// Runs one mutation, reports it, and re-reads the user so nothing on screen is stale. The
+    /// activate/deactivate/quota calls hand back the updated <c>UserResponse</c>, but the re-read
+    /// stays: those three also move the allocation and the key, which that row doesn't carry.
+    /// </summary>
+    private async Task MutateAsync<T>(Func<Task<ApiCallResult<T>>> mutation, string successMessage)
+    {
+        _busy = true;
+        try
+        {
+            var result = await mutation();
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Message ?? "That didn't work.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add(successMessage, Severity.Success);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Same, for the two calls whose response carries a plaintext key that must be shown once.</summary>
+    private async Task RevealingMutateAsync(Func<Task<ApiCallResult<ApiKeyRevealResponse>>> mutation, string successMessage)
+    {
+        _busy = true;
+        try
+        {
+            var result = await mutation();
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "That didn't work.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add(successMessage, Severity.Success);
+            await LoadAsync();
+
+            var parameters = new DialogParameters<RevealedKeyDialog>
+            {
+                { x => x.PlaintextKey, result.Value.PlaintextKey },
+                { x => x.UserDisplayName, _detail?.User.DisplayName ?? $"user #{Id}" },
+            };
+            await DialogService.ShowAsync<RevealedKeyDialog>("Copy this key now", parameters);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
 }

@@ -4,6 +4,7 @@ using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Extensions;
 using FoundryGate.Domain.Common;
@@ -213,7 +214,7 @@ public sealed class GroupService(
         // thing commits together.
         var memberIds = quotaChanged ? await ActiveMemberIdsAsync(groupId, cancellationToken) : [];
         var gatewayMoved = await ReresolveAsync(memberIds, cancellationToken);
-        var commitToken = CommitToken(gatewayMoved, cancellationToken);
+        var commitToken = CommitToken.For(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupUpdated,
@@ -270,7 +271,7 @@ public sealed class GroupService(
         // members resolve down the chain (usually to the system default) exactly as they will read
         // once this commits.
         var gatewayMoved = await ReresolveAsync(affectedUserIds, cancellationToken);
-        var commitToken = CommitToken(gatewayMoved, cancellationToken);
+        var commitToken = CommitToken.For(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupDeleted,
@@ -325,7 +326,7 @@ public sealed class GroupService(
         _ = dbContext.GroupMembers.Add(membership);
 
         var gatewayMoved = await ReresolveAsync(user.IsActive ? [user.UserId] : [], cancellationToken);
-        var commitToken = CommitToken(gatewayMoved, cancellationToken);
+        var commitToken = CommitToken.For(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupMemberAdded,
@@ -362,7 +363,7 @@ public sealed class GroupService(
 
         var reresolved = user is { IsActive: true };
         var gatewayMoved = await ReresolveAsync(reresolved ? [userId] : [], cancellationToken);
-        var commitToken = CommitToken(gatewayMoved, cancellationToken);
+        var commitToken = CommitToken.For(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupMemberRemoved,
@@ -435,13 +436,6 @@ public sealed class GroupService(
 
         return resolutions.Any(resolution => resolution.TierSyncRequested);
     }
-
-    /// <summary>
-    /// <see cref="CancellationToken.None"/> once the gateway has accepted a change, the request's own
-    /// token otherwise — a disconnect must not turn an accepted tier move into an unaudited one.
-    /// </summary>
-    private static CancellationToken CommitToken(bool gatewayMoved, CancellationToken cancellationToken) =>
-        gatewayMoved ? CancellationToken.None : cancellationToken;
 
     private IQueryable<GroupMember> MembersOf(int groupId) =>
         dbContext.GroupMembers.AsNoTracking().Where(member => member.GroupId == groupId);
@@ -522,30 +516,16 @@ public sealed class GroupService(
         {
             _ = await dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException exception) when (Mentions(exception, NameIndexMarkers))
+        catch (DbUpdateException exception) when (UniqueIndexViolation.Mentions(exception, NameIndexMarkers))
         {
             logger.LogWarning(exception, "Group name '{GroupName}' was taken concurrently; returning 409.", name);
             throw new ConflictException(DuplicateNameMessage(name), exception);
         }
-        catch (DbUpdateException exception) when (Mentions(exception, EntraGroupIdIndexMarkers))
+        catch (DbUpdateException exception) when (UniqueIndexViolation.Mentions(exception, EntraGroupIdIndexMarkers))
         {
             logger.LogWarning(exception, "Entra group {EntraGroupId} was linked concurrently (group {ExceptGroupId} excluded); returning 409.", entraGroupId, exceptGroupId);
             throw new ConflictException(DuplicateEntraLinkMessage(entraGroupId), exception);
         }
-    }
-
-    /// <summary>True when any exception in the chain names one of <paramref name="markers"/>.</summary>
-    private static bool Mentions(Exception exception, string[] markers)
-    {
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            if (Array.Exists(markers, marker => current.Message.Contains(marker, StringComparison.Ordinal)))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string DuplicateNameMessage(string name) =>

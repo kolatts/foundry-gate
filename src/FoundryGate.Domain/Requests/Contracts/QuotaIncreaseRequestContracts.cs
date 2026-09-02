@@ -62,3 +62,11 @@ public record ReviewQuotaIncreaseRequest
 /// empty page.
 /// </param>
 public record QuotaRequestQuery(QuotaRequestStatusType? Status, int? UserId);
+
+/// <summary>
+/// Result of POST /requests/expire-stale (#159): how many pending requests from a closed billing
+/// period this sweep marked <c>Rejected</c>. Zero means the queue held nothing stale, in which case
+/// nothing at all was written — not even an audit row.
+/// </summary>
+/// <param name="ExpiredCount">Requests closed by this run.</param>
+public record ExpireStaleRequestsResult(int ExpiredCount);

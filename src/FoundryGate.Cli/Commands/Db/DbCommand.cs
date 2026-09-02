@@ -1,4 +1,5 @@
 using System.CommandLine;
+using FoundryGate.Cli.Commands.Db.Compare;
 using FoundryGate.Cli.Commands.Db.Deploy;
 using FoundryGate.Cli.Commands.Db.GrantIdentities;
 using FoundryGate.Cli.Commands.Db.SeedReference;
@@ -11,6 +12,7 @@ internal sealed class DbCommand : Command
 {
     public DbCommand() : base("db", "Commands to manage the FoundryGate database")
     {
+        Add(new CompareCommand());
         Add(new DeployCommand());
         Add(new SeedReferenceCommand());
         Add(new SeedTestCommand());

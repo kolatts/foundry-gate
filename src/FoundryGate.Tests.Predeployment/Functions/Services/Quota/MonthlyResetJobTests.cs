@@ -1,6 +1,7 @@
 using System.Globalization;
 using Azure;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -387,7 +388,15 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         // Resolution takes the sync too, but the reset always runs it Deferred and drives the moves
         // itself, so the instance resolution holds is never the one that reaches APIM here (#211 review).
         var resolution = new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), sync, NullLogger<QuotaResolutionService>.Instance);
-        var reset = new QuotaResetService(Context, resolution, sync, new AuditWriter(Context, _clock), _clock, resetLogger ?? NullLogger<QuotaResetService>.Instance);
+        var auditWriter = new AuditWriter(Context, _clock);
+        var reset = new QuotaResetService(
+            Context,
+            resolution,
+            sync,
+            new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance),
+            auditWriter,
+            _clock,
+            resetLogger ?? NullLogger<QuotaResetService>.Instance);
 
         return new MonthlyResetJob(Context, reset, resetLock, _clock, NullLogger<MonthlyResetJob>.Instance);
     }

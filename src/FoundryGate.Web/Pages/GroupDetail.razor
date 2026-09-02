@@ -1,12 +1,429 @@
 @page "/groups/{Id:int}"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
+@inject IDialogService DialogService
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
 
-<PageTitle>Group #@Id — Foundry Gate</PageTitle>
+<PageTitle>@(_group?.Name ?? $"Group #{Id}") — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="@($"Group #{Id}")" />
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else if (_notFound)
+{
+    <MudAlert Severity="Severity.Warning" data-testid="group-not-found">
+        There's no group #@Id. It may have been deleted.
+        <MudLink Href="groups" Class="ml-2">Back to groups</MudLink>
+    </MudAlert>
+}
+else if (_group is null)
+{
+    <MudSkeleton Width="18rem" Height="3rem" data-testid="group-loading" />
+    <MudSkeleton Width="100%" Height="12rem" Class="mt-4" />
+}
+else
+{
+    <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" Href="groups" Class="mb-2">All groups</MudButton>
+
+    <div class="d-flex align-center ga-3 mb-4">
+        <MudText Typo="Typo.h4" data-testid="group-name">@_group.Name</MudText>
+        @if (_group.IsEntraSynced)
+        {
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Info" Icon="@Icons.Material.Filled.CloudSync" data-testid="group-entra-chip">
+                Entra-managed
+            </MudChip>
+        }
+    </div>
+
+    @if (_group.IsEntraSynced)
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-4" data-testid="group-entra-notice">
+            This group's roster is owned by Entra group <code>@_group.EntraGroupId</code>. Members
+            can't be added or removed here — the next sync would undo the change, so the API refuses
+            it. Change who's in the group in Entra, then sync. The budget below is still yours to set.
+        </MudAlert>
+    }
+
+    <MudGrid>
+        <MudItem xs="12" md="5">
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.subtitle1" Class="mb-4">Policy</MudText>
+
+                <MudTextField @bind-Value="_editName"
+                              Label="Name"
+                              Variant="Variant.Outlined"
+                              Required="true"
+                              MaxLength="@ValidationConstants.GroupNameMaxLength"
+                              Immediate="true"
+                              data-testid="group-edit-name" />
+
+                <MudTextField @bind-Value="_editDescription"
+                              Label="Description"
+                              Variant="Variant.Outlined"
+                              Class="mt-4"
+                              Lines="2"
+                              MaxLength="@ValidationConstants.DescriptionMaxLength"
+                              data-testid="group-edit-description" />
+
+                <MudDivider Class="my-6" />
+
+                <QuotaTierPicker Tiers="@_tiers"
+                                 IsUnlimited="@_editIsUnlimited"
+                                 IsUnlimitedChanged="@(value => _editIsUnlimited = value)"
+                                 MonthlyTokenQuota="@_editQuota"
+                                 MonthlyTokenQuotaChanged="@(value => _editQuota = value)"
+                                 Disabled="@_busy"
+                                 TestId="group-quota"
+                                 HelperText="Members get the highest budget of any group they're in, unless they have an override of their own." />
+
+                <div class="d-flex ga-2 mt-6">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Disabled="@(_busy || !PolicyChanged)"
+                               OnClick="@SavePolicyAsync"
+                               data-testid="group-save">Save policy</MudButton>
+
+                    @if (_group.IsEntraSynced)
+                    {
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Info"
+                                   StartIcon="@Icons.Material.Filled.CloudSync"
+                                   Disabled="@_busy"
+                                   OnClick="@SyncFromEntraAsync"
+                                   data-testid="group-sync">Sync from Entra</MudButton>
+                    }
+                </div>
+
+                <MudDivider Class="my-6" />
+
+                <MudButton Variant="Variant.Text"
+                           Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.DeleteOutline"
+                           Disabled="@_busy"
+                           OnClick="@DeleteAsync"
+                           data-testid="group-delete">Delete group</MudButton>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="7">
+            <MudPaper Elevation="1" Class="pa-6">
+                <MudText Typo="Typo.subtitle1" Class="mb-4">Members (@_group.MemberCount)</MudText>
+
+                @if (!_group.IsEntraSynced)
+                {
+                    <div class="d-flex align-end ga-2 mb-4">
+                        <MudAutocomplete T="UserResponse"
+                                         @bind-Value="_userToAdd"
+                                         Label="Add member"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         SearchFunc="@SearchUsersAsync"
+                                         ToStringFunc="@(u => u is null ? string.Empty : $"{u.DisplayName} ({u.Email})")"
+                                         ResetValueOnEmptyText="true"
+                                         MinCharacters="2"
+                                         Clearable="true"
+                                         Disabled="@_busy"
+                                         Class="flex-grow-1"
+                                         data-testid="group-add-search" />
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Disabled="@(_busy || _userToAdd is null)"
+                                   OnClick="@AddMemberAsync"
+                                   data-testid="group-add-member">Add</MudButton>
+                    </div>
+                }
+
+                <MudDataGrid @ref="_memberGrid"
+                             T="GroupMemberResponse"
+                             ServerData="@LoadMembersAsync"
+                             Hover="true"
+                             Dense="true"
+                             Elevation="0"
+                             data-testid="group-members-grid">
+                    <Columns>
+                        <PropertyColumn Property="@(m => m.DisplayName)" Title="Name" Sortable="false" />
+                        <PropertyColumn Property="@(m => m.Email)" Title="Email" Sortable="false" />
+                        <TemplateColumn Title="" Sortable="false">
+                            <CellTemplate>
+                                <div class="d-flex justify-end ga-1">
+                                    <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                                   Size="Size.Small"
+                                                   Href="@($"users/{context.Item.UserId}")"
+                                                   aria-label="Open user" />
+                                    @if (!_group.IsEntraSynced)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Filled.PersonRemove"
+                                                       Color="Color.Error"
+                                                       Size="Size.Small"
+                                                       Disabled="@_busy"
+                                                       OnClick="@(() => RemoveMemberAsync(context.Item))"
+                                                       aria-label="Remove member"
+                                                       data-testid="@($"group-remove-{context.Item.UserId}")" />
+                                    }
+                                </div>
+                            </CellTemplate>
+                        </TemplateColumn>
+                    </Columns>
+                    <NoRecordsContent>
+                        <MudText Class="pa-6 mud-text-secondary" data-testid="group-members-empty">
+                            @(_group.IsEntraSynced
+                                ? "Nobody yet. Run a sync to pull the roster from Entra."
+                                : "Nobody yet. Search above to add someone.")
+                        </MudText>
+                    </NoRecordsContent>
+                    <PagerContent>
+                        <MudDataGridPager T="GroupMemberResponse" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+                    </PagerContent>
+                </MudDataGrid>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
 
 @code {
     /// <summary>GroupId from the route.</summary>
     [Parameter]
     public int Id { get; set; }
+
+    private MudDataGrid<GroupMemberResponse>? _memberGrid;
+    private GroupResponse? _group;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+    private UserResponse? _userToAdd;
+    private string _editName = string.Empty;
+    private string? _editDescription;
+    private bool _editIsUnlimited;
+    private long? _editQuota;
+    private bool _busy;
+    private bool _accessDenied;
+    private bool _notFound;
+
+    private bool PolicyChanged =>
+        _group is not null &&
+        (_editName != _group.Name ||
+         (_editDescription ?? string.Empty) != (_group.Description ?? string.Empty) ||
+         _editIsUnlimited != _group.IsUnlimited ||
+         _editQuota != _group.MonthlyTokenQuota);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tiers = await Tiers.GetAsync();
+    }
+
+    protected override Task OnParametersSetAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        var result = await Api.GetGroupAsync(Id);
+        switch (result.Status)
+        {
+            case ApiCallStatus.Forbidden:
+                _accessDenied = true;
+                return;
+            case ApiCallStatus.NotFound:
+                _notFound = true;
+                _group = null;
+                return;
+        }
+
+        if (!result.IsSuccess || result.Value is null)
+        {
+            Snackbar.Add(result.Message ?? "Couldn't load this group.", Severity.Error);
+            return;
+        }
+
+        _notFound = false;
+        _group = result.Value.Group;
+        _editName = _group.Name;
+        _editDescription = _group.Description;
+        _editIsUnlimited = _group.IsUnlimited;
+        _editQuota = _group.MonthlyTokenQuota;
+    }
+
+    /// <summary>Re-reads the group and its roster after anything that could have changed either.</summary>
+    private async Task ReloadAllAsync()
+    {
+        await LoadAsync();
+        if (_memberGrid is not null)
+        {
+            await _memberGrid.ReloadServerData();
+        }
+    }
+
+    private async Task<GridData<GroupMemberResponse>> LoadMembersAsync(GridState<GroupMemberResponse> state, CancellationToken cancellationToken)
+    {
+        var result = await Api.GetGroupMembersAsync(Id, new PagedRequest(state.Page + 1, state.PageSize), cancellationToken);
+        if (!result.IsSuccess || result.Value is null)
+        {
+            if (result.Status != ApiCallStatus.NotFound)
+            {
+                Snackbar.Add(result.Message ?? "Couldn't load the roster.", Severity.Error);
+            }
+
+            return new GridData<GroupMemberResponse> { Items = [], TotalItems = 0 };
+        }
+
+        return new GridData<GroupMemberResponse> { Items = result.Value.Items, TotalItems = result.Value.TotalCount };
+    }
+
+    /// <summary>Backs the "Add member" autocomplete with the same admin list <c>/users</c> renders.</summary>
+    private async Task<IEnumerable<UserResponse>> SearchUsersAsync(string value, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return [];
+        }
+
+        // Active users only: a deactivated account can't hold a gateway key, so putting one in a
+        // group changes nothing an admin would see.
+        var result = await Api.GetUsersAsync(new UserListQuery(value, IsActive: true), new PagedRequest(1, 20), cancellationToken);
+        return result.IsSuccess && result.Value is not null ? result.Value.Items : [];
+    }
+
+    private async Task SavePolicyAsync()
+    {
+        var request = new UpdateGroupRequest
+        {
+            Name = _editName.Trim(),
+            Description = string.IsNullOrWhiteSpace(_editDescription) ? null : _editDescription.Trim(),
+            IsUnlimited = _editIsUnlimited,
+            MonthlyTokenQuota = _editQuota,
+        };
+
+        await MutateAsync(() => Api.UpdateGroupAsync(Id, request), "Group policy saved.");
+    }
+
+    private async Task AddMemberAsync()
+    {
+        if (_userToAdd is not { } user)
+        {
+            return;
+        }
+
+        var added = await MutateAsync(
+            () => Api.AddGroupMemberAsync(Id, new AddGroupMemberRequest { UserId = user.UserId }),
+            $"{user.DisplayName} added to the group.");
+
+        if (added)
+        {
+            _userToAdd = null;
+        }
+    }
+
+    private async Task RemoveMemberAsync(GroupMemberResponse member)
+    {
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Remove member",
+            message: $"Remove {member.DisplayName} from {_group?.Name}?",
+            detail: "Their own budget doesn't change; they just stop inheriting this group's. They keep their gateway key.",
+            confirmText: "Remove",
+            confirmColor: Color.Error);
+
+        if (confirmed)
+        {
+            await MutateAsync(() => Api.RemoveGroupMemberAsync(Id, member.UserId), $"{member.DisplayName} removed.");
+        }
+    }
+
+    private async Task SyncFromEntraAsync()
+    {
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Sync from Entra",
+            message: $"Replace {_group?.Name}'s roster with what Entra says it is?",
+            detail: "Members Entra doesn't list are removed and lose this group's budget from their next allocation; members it lists who exist here are added. Their own accounts and keys are untouched.",
+            confirmText: "Sync",
+            confirmColor: Color.Info);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Api.SyncGroupFromEntraAsync(Id);
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "The Entra sync didn't run.", Severity.Error);
+                return;
+            }
+
+            await ReloadAllAsync();
+
+            var parameters = new DialogParameters<GroupSyncResultDialog> { { x => x.Result, result.Value } };
+            await DialogService.ShowAsync<GroupSyncResultDialog>("Synced from Entra", parameters);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (_group is null)
+        {
+            return;
+        }
+
+        var hasMembers = _group.MemberCount > 0;
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Delete group",
+            message: $"Delete {_group.Name}?",
+            detail: hasMembers
+                // The API needs ?force=true for a non-empty group, so say what that means before
+                // sending it rather than letting the 409 be the first mention of it.
+                ? $"It still has {_group.MemberCount} member(s). They stay as users and keep their keys, but they lose this group's budget — their next allocation resolves without it."
+                : "The group is empty, so nothing else changes.",
+            confirmText: "Delete",
+            confirmColor: Color.Error);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Api.DeleteGroupAsync(Id, force: hasMembers);
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Message ?? "Couldn't delete the group.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add("Group deleted.", Severity.Success);
+            Navigation.NavigateTo("groups");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task<bool> MutateAsync(Func<Task<ApiCallResult<bool>>> mutation, string successMessage)
+    {
+        _busy = true;
+        try
+        {
+            var result = await mutation();
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Message ?? "That didn't work.", Severity.Error);
+                return false;
+            }
+
+            Snackbar.Add(successMessage, Severity.Success);
+            await ReloadAllAsync();
+            return true;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
 }

@@ -503,6 +503,56 @@ public class RequestsEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTe
         Assert.Contains(nameof(ReviewQuotaIncreaseRequest.ReviewNotes), problem.Errors.Keys);
     }
 
+    [Fact]
+    public async Task ExpireStale_is_admin_only()
+    {
+        using var anonymous = factory.CreateClient();
+        using var developer = factory.CreateClientAs(Guid.NewGuid().ToString());
+
+        var path = new Uri($"{RequestsPath}/expire-stale", UriKind.Relative);
+        var asAnonymous = await anonymous.PostAsync(path, content: null);
+        var asDeveloper = await developer.PostAsync(path, content: null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, asAnonymous.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, asDeveloper.StatusCode);
+    }
+
+    [Fact]
+    public async Task ExpireStale_closes_requests_from_a_closed_period_and_leaves_this_periods_alone()
+    {
+        // #159/#204: the sweep the monthly reset runs, reachable on its own for the window between a
+        // period ending and the next reset — where those requests are already unapprovable but still
+        // clutter the queue, and where POST /quota/reset would be a much bigger hammer.
+        var adminOid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(entraObjectId: adminOid);
+        var dev = await factory.SeedUserAsync(
+            entraObjectId: Guid.NewGuid().ToString(),
+            configure: u => u.MonthlyTokenQuota = StandardCap);
+        var other = await factory.SeedUserAsync(
+            entraObjectId: Guid.NewGuid().ToString(),
+            configure: u => u.MonthlyTokenQuota = StandardCap);
+
+        var period = BillingPeriod.Current(factory.TimeProvider);
+        var stale = await SeedRequestAsync(dev.UserId, PowerCap, periodMonth: period.Month == 1 ? 12 : period.Month - 1);
+        var live = await SeedRequestAsync(other.UserId, PowerCap);
+
+        using var client = factory.CreateClientAs(adminOid, isAdmin: true);
+        var response = await client.PostAsync(new Uri($"{RequestsPath}/expire-stale", UriKind.Relative), content: null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<ExpireStaleRequestsResult>(JsonOptions);
+        Assert.True(result!.ExpiredCount >= 1);
+
+        await using var dbContext = factory.CreateDbContext();
+        var closed = await dbContext.QuotaIncreaseRequests.SingleAsync(r => r.QuotaIncreaseRequestId == stale.QuotaIncreaseRequestId);
+        Assert.Equal(QuotaRequestStatusType.Rejected, closed.StatusType);
+        Assert.Null(closed.ReviewedByUserId); // nobody reviewed it — that is what marks it lapsed
+        Assert.NotEmpty(closed.ReviewNotes);
+
+        var untouched = await dbContext.QuotaIncreaseRequests.SingleAsync(r => r.QuotaIncreaseRequestId == live.QuotaIncreaseRequestId);
+        Assert.Equal(QuotaRequestStatusType.Pending, untouched.StatusType);
+    }
+
     // -- Helpers --
 
     private static StringContent JsonBody(string json) => new(json, Encoding.UTF8, "application/json");

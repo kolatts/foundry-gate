@@ -1,8 +1,10 @@
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Quota;
+using FoundryGate.Domain.Requests;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.EntityFrameworkCore;
@@ -131,15 +133,80 @@ public class QuotaResetServiceTests : InMemoryDatabaseTest
         Assert.Equal(admin.UserId, audit.ActorUserId);
     }
 
+    [Fact]
+    public async Task A_reset_closes_requests_left_pending_from_a_closed_period_in_the_same_unit_of_work()
+    {
+        // #159: the reset is what keeps the review queue from accumulating a dead entry a month. The
+        // sweep's own audit row is separate from the reset's, and both commit with the allocations.
+        await SeedReferenceDataAsync();
+        var dev = await SeedUserAsync("Dev", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var stale = await SeedRequestAsync(dev, new BillingPeriod(2026, 9), QuotaRequestStatusType.Pending);
+        var live = await SeedRequestAsync(dev, Period, QuotaRequestStatusType.Pending);
+
+        var outcome = await CreateService().ResetAsync(QuotaResetTrigger.Scheduled(), CancellationToken.None);
+
+        // Reported on the outcome, not only in the audit log: an admin who runs POST /quota/reset and
+        // clears six stale requests should be told so by the response (#204 review).
+        Assert.Equal(1, outcome.ExpiredRequestCount);
+
+        await using var verify = CreateVerificationContext();
+        var rows = await verify.QuotaIncreaseRequests.AsNoTracking().ToDictionaryAsync(r => r.QuotaIncreaseRequestId);
+        Assert.Equal(QuotaRequestStatusType.Rejected, rows[stale].StatusType);
+        Assert.Null(rows[stale].ReviewedByUserId);
+        Assert.Equal(QuotaRequestStatusType.Pending, rows[live].StatusType);
+
+        var audits = await verify.AuditLogs.AsNoTracking().ToListAsync();
+        var sweep = Assert.Single(audits, a => a.Action == AuditActions.QuotaRequestsExpired);
+        Assert.Contains("\"expiredCount\":1", sweep.Details, StringComparison.Ordinal);
+        var reset = Assert.Single(audits, a => a.Action == AuditActions.QuotaMonthlyReset);
+        Assert.Contains("\"expiredRequestCount\":1", reset.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_reset_with_nothing_stale_writes_only_its_own_audit_row()
+    {
+        await SeedReferenceDataAsync();
+        var dev = await SeedUserAsync("Dev", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        _ = await SeedRequestAsync(dev, Period, QuotaRequestStatusType.Pending);
+
+        _ = await CreateService().ResetAsync(QuotaResetTrigger.Scheduled(), CancellationToken.None);
+
+        var audit = Assert.Single(await Context.AuditLogs.AsNoTracking().ToListAsync());
+        Assert.Equal(AuditActions.QuotaMonthlyReset, audit.Action);
+        Assert.Contains("\"expiredRequestCount\":0", audit.Details, StringComparison.Ordinal);
+    }
+
+    private async Task<int> SeedRequestAsync(User user, BillingPeriod period, QuotaRequestStatusType status)
+    {
+        var request = new QuotaIncreaseRequest
+        {
+            UserId = user.UserId,
+            RequestedByUserId = user.UserId,
+            PeriodYear = period.Year,
+            PeriodMonth = period.Month,
+            CurrentQuota = TestGatewayTiers.StandardCap,
+            RequestedQuota = TestGatewayTiers.PowerCap,
+            Justification = "Running a batch evaluation this sprint.",
+            StatusType = status,
+        };
+        Context.QuotaIncreaseRequests.Add(request);
+        await Context.SaveChangesAsync();
+        Context.Entry(request).State = EntityState.Detached;
+        return request.QuotaIncreaseRequestId;
+    }
+
     private QuotaResetService CreateService()
     {
         var resolution = new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance);
+
+        var auditWriter = new AuditWriter(Context, _clock);
 
         return new QuotaResetService(
             Context,
             resolution,
             _tierSync,
-            new AuditWriter(Context, _clock),
+            new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance),
+            auditWriter,
             _clock,
             NullLogger<QuotaResetService>.Instance);
     }

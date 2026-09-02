@@ -16,14 +16,17 @@ namespace FoundryGate.Core.Quota;
 /// the run.
 /// </para>
 /// <para>
-/// <b>It does touch APIM, and that is why it is not one transaction.</b> There is no monthly
+/// <b>It can touch APIM, and that is why it is not one transaction.</b> There is no monthly
 /// <em>counter</em> to clear — the gateway's <c>llm-token-limit</c> window is a UTC-truncated calendar
-/// month that resets itself (#10 direction update) — but a reset is the first thing to notice a changed
-/// <c>SystemConfiguration[DefaultMonthlyTokenQuota]</c>, and since #194 the host that runs it can act
-/// on that instead of logging drift. Each such move is committed with its own <c>key.tier-changed</c>
-/// row the moment APIM accepts it, because a single end-of-run save would discard the rows for every
-/// move that already landed when a later one failed (#211 review). Developers whose tier did not move
-/// reach nothing external and still share the final save with the run's audit row.
+/// month that resets itself (#10 direction update). But a reset still resolves tiers, and since #194
+/// the host that runs it can move a subscription rather than log that SQL and the gateway have
+/// diverged. Since #204 a changed <c>SystemConfiguration[DefaultMonthlyTokenQuota]</c> re-resolves its
+/// default-tier users in the Api, so the common cause of that is gone; what remains is a developer
+/// with no earlier allocation (no known previous tier) and anything a re-resolution missed. Each move
+/// is committed with its own <c>key.tier-changed</c> row the moment APIM accepts it, because a single
+/// end-of-run save would discard the rows for every move that already landed when a later one failed
+/// (#211 review). Developers whose tier did not move reach nothing external and still share the final
+/// save with the run's audit row.
 /// </para>
 /// <para>
 /// <b>A refused move does not fail the run.</b> It is logged at Error with the developer's full
@@ -90,14 +93,20 @@ public readonly record struct QuotaResetTrigger(int? ActorUserId, string AuditAc
 /// </param>
 /// <param name="TierSyncCount">
 /// How many developers' APIM subscriptions this run actually moved between tier products. Usually zero
-/// — a reset re-resolves inputs nobody changed — but not by contract: a changed
-/// <c>SystemConfiguration[DefaultMonthlyTokenQuota]</c> re-resolves nobody until a reset notices, and a
-/// developer with no earlier allocation has no known previous tier (#194).
+/// — a reset re-resolves inputs nobody changed — but not by contract: a developer with no earlier
+/// allocation has no known previous tier, and before #204 a changed
+/// <c>SystemConfiguration[DefaultMonthlyTokenQuota]</c> re-resolved nobody until a reset noticed (#194).
 /// </param>
 /// <param name="TierSyncFailureCount">
 /// How many developers' moves the gateway refused. Each is logged at Error with its full identity and
 /// left recording the tier APIM still enforces; the run completed for everybody else. Non-zero means
 /// somebody should look.
+/// </param>
+/// <param name="ExpiredRequestCount">
+/// Quota increase requests left pending from an earlier period that this run closed
+/// (<see cref="Requests.IQuotaRequestExpiry"/>, #159). Usually zero; reported so an admin who ran
+/// <c>POST /quota/reset</c> and cleared six stale requests is told so, rather than having to read the
+/// audit log to find out.
 /// </param>
 /// <param name="Period">The UTC calendar month that was reset.</param>
 /// <param name="ResetDate">The instant written to every touched row's <c>ResetDate</c>.</param>
@@ -105,5 +114,6 @@ public readonly record struct QuotaResetOutcome(
     int UsersResetCount,
     int TierSyncCount,
     int TierSyncFailureCount,
+    int ExpiredRequestCount,
     BillingPeriod Period,
     DateTimeOffset ResetDate);

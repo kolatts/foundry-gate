@@ -35,6 +35,10 @@ public abstract class WebTestContext : BunitContext, IAsyncLifetime
         Services.AddMudServices();
         Services.AddSingleton<IFoundryGateApiClient>(Api);
         Services.AddScoped<DashboardStateService>();
+
+        // The admin pages read the tier catalogue through this rather than calling GET /quota/tiers
+        // each; it fetches through the same fake, so a test still arranges tiers on Api.
+        Services.AddScoped<QuotaTierCatalog>();
         // Resolved lazily so a test can replace Time after the constructor has run but before it
         // renders — which is the only order a test can actually use.
         Services.AddSingleton(_ => Time);

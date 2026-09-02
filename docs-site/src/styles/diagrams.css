@@ -393,6 +393,19 @@
   .fgd-svg-hint { display: block; }
 }
 
+/* ── Mobile SVG variant (reflowed vertical layout) ───────────────
+   A second, vertically-laid-out SVG for ≤640px avoids the scroll container's
+   min-width forcing sideways scroll on phones (#115). Hidden by default; the
+   ≤640px query swaps it in for the horizontally-scrolling desktop/tablet SVG,
+   which no longer needs its "scroll sideways" hint once it's hidden. */
+.fgd-svg-mobile { display: none; }
+
+@media (max-width: 640px) {
+  .fgd-svg-scroll { display: none; }
+  .fgd-svg-hint { display: none; }
+  .fgd-svg-mobile { display: block; }
+}
+
 .fgd-svg .fgd-s-box {
   fill: var(--fg-bg-raised, #101B2A);
   stroke: var(--fg-border-strong, #2A4260);

@@ -52,7 +52,20 @@ Files expected to be created or modified:
 - [ ] `GET /foundry/deployments` returns real deployments from the configured Foundry accounts — live validation, #125
 - [ ] Creating an OpenAI deployment via the API provisions it in Azure (verify in portal) — live validation, #125
 - [ ] Deleting a deployment via the API removes it from Azure — live validation, #125
-- [ ] Creating a deployment via the UI provisions it in Azure (verify in portal) — #62
-- [ ] Deleting a deployment via the UI removes it from Azure — #62
-- [ ] Provisioning state chip updates on grid refresh — #62
-- [ ] Non-admin users cannot access `/foundry` (redirected to AccessDenied) — #62
+- [x] `/foundry` grids `GET /foundry/deployments` with account, name, model, version, SKU, capacity as thousands of TPM, and a colour-coded state chip (`FoundryPageTests`)
+- [x] Provisioning state chip updates on grid refresh — the create path refreshes and says the deployment is provisioning; there is an explicit refresh button, since ARM finishes asynchronously (`FoundryPageTests`)
+- [x] Delete is behind a confirmation and is disabled outright on Anthropic-format rows — the API refuses those, so the button is never offered and then refused (`FoundryPageTests`)
+- [x] The create dialog is OpenAI-format only and says why Claude deployments aren't created here (`FoundryPageTests`)
+- [x] Non-admin users cannot access `/foundry` — `[Authorize(Roles = RoleNames.Admin)]` renders `AccessDenied` via `App.razor` (`AdminPageAuthorizationTests`); a 403 from the API does the same
+- [ ] Creating a deployment via the UI provisions it in Azure (verify in portal) — live validation, #125
+- [ ] Deleting a deployment via the UI removes it from Azure — live validation, #125
+
+### Implementation notes (#62, as built)
+
+- Model and SKU suggestions are a hardcoded shortcut list from the #60 direction update, in
+  `CoerceValue` autocompletes so anything typed is still accepted. A hardcoded catalogue goes
+  stale; the real fix is an endpoint listing what an account can serve — **#173**.
+- Account names are offered from the accounts that already have deployments, and a lone account
+  is pre-selected, so the common case is a pick rather than a guess.
+- Capacity resize (PATCH, from the #60 direction update) is still #130 — the API has no such
+  route, so the page has no resize action.

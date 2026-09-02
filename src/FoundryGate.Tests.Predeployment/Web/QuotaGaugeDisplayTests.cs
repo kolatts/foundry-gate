@@ -9,7 +9,7 @@ namespace FoundryGate.Tests.Predeployment.Web;
 /// rather than inferred from a rendered CSS class: green below 80%, amber from 80% through 95%,
 /// red above 95%.
 /// </summary>
-public class QuotaDisplayTests
+public class QuotaGaugeDisplayTests
 {
     [Theory]
     [InlineData(0, "Success")]
@@ -21,14 +21,14 @@ public class QuotaDisplayTests
     [InlineData(100, "Error")]
     [InlineData(140, "Error")]
     public void GaugeColor_follows_the_documented_thresholds(double percentUsed, string expected) =>
-        Assert.Equal(expected, QuotaDisplay.GaugeColor(percentUsed).ToString());
+        Assert.Equal(expected, TierDisplay.GaugeColor(percentUsed).ToString());
 
     [Fact]
     public void GaugeColor_of_an_unlimited_allocation_is_not_an_alarm()
     {
         // Unlimited has no bar to colour — callers render the "Unlimited" chip instead — but this
         // must never answer Error for a null, or an unlimited developer's row would look critical.
-        Assert.Equal(Color.Success, QuotaDisplay.GaugeColor(null));
+        Assert.Equal(Color.Success, TierDisplay.GaugeColor(null));
     }
 
     [Theory]
@@ -37,7 +37,7 @@ public class QuotaDisplayTests
     [InlineData(42d, 42d)]
     [InlineData(180d, 100d)]
     public void GaugeValue_clamps_into_the_bar_range(double? percentUsed, double expected) =>
-        Assert.Equal(expected, QuotaDisplay.GaugeValue(percentUsed));
+        Assert.Equal(expected, TierDisplay.GaugeValue(percentUsed));
 
     [Theory]
     [InlineData(GatewayTiers.Standard, "Standard")]
@@ -46,9 +46,9 @@ public class QuotaDisplayTests
     [InlineData("enterprise", "Enterprise")]
     [InlineData("", "Unknown tier")]
     public void TierDisplayName_names_configured_tiers_and_title_cases_a_fork_added_one(string productId, string expected) =>
-        Assert.Equal(expected, QuotaDisplay.TierDisplayName(productId));
+        Assert.Equal(expected, TierDisplay.TierDisplayName(productId));
 
     [Fact]
     public void FormatTokens_calls_a_null_allocation_unlimited() =>
-        Assert.Equal("Unlimited", QuotaDisplay.FormatTokens(null));
+        Assert.Equal("Unlimited", TierDisplay.FormatTokensExact(null));
 }

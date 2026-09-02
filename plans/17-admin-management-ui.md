@@ -45,10 +45,37 @@ Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Admin/Users/Sync.razor`
 - `src/FoundryGate.Web/Shared/NavMenu.razor`
 
+## Implementation notes (#51, #52, #53, #63, as built)
+
+- Routes are the flat `Pages/*.razor` files the spec §8.1 skeleton already reserved
+  (`Users.razor`, `UserDetail.razor`, …), not the `Pages/Admin/<Area>/Index.razor` tree this
+  plan sketched — the stubs existed, and replacing them keeps one file per route.
+- **No `MudNumericField` anywhere a quota is set.** A budget IS a gateway tier (D-013), so
+  `Shared/QuotaTierPicker.razor` is a pick from `GET /quota/tiers` plus an unlimited switch, and
+  `Shared/TierDisplay.cs` renders every stored quota as its tier's display name. A legacy value
+  matching no tier is shown as itself rather than silently mapped.
+- The user detail Quota tab has **no manual reset button** (this plan asked for one):
+  `POST /quota/reset` resets the whole tenant for the period, so putting it on one person's page
+  would misrepresent what it does. It belongs on an admin-wide surface.
+- Group membership is edited **on the group, not on the user**: a roster is the thing an Entra
+  sync owns, and the API refuses membership edits on an Entra-linked group (409). The user
+  detail Groups tab lists memberships and links to each group.
+- Approve/reject are `POST` (api.md), not the `PUT` the #48 shell client used; the same
+  correction applies to user activate/deactivate.
+- The review drawer's optimistic row update is a small session overlay keyed by request id —
+  `MudDataGrid` owns the page `ServerData` handed it and won't accept a swapped row, and
+  re-fetching would defeat the point.
+
 ## Verification
-- [ ] `dotnet build` passes
-- [ ] User table search and server-side pagination work correctly
-- [ ] Status toggle requires MudDialog confirmation before calling the API
-- [ ] Group Entra sync shows added/removed member diff in a dialog
-- [ ] Approving a request from the drawer updates the row status without a full grid reload
-- [ ] Non-admin navigating to `/users` is redirected to the AccessDenied page
+- [x] `dotnet build FoundryGate.sln -c Release` passes with zero warnings
+- [x] User table search and server-side pagination work correctly — 300 ms debounce, filter changes reset to page 1 (`UsersPageTests`)
+- [x] Status toggle requires MudDialog confirmation before calling the API; cancelling calls nothing (`UserDetailPageTests`)
+- [x] Group Entra sync shows the added/removed/skipped-unknown counts in a dialog (`GroupDetailPageTests`)
+- [x] Approving a request from the drawer updates the row status without a full grid reload (`RequestsPageTests`)
+- [x] Non-admin navigating to `/users` is redirected to the AccessDenied page — every admin page carries `[Authorize(Roles = RoleNames.Admin)]`, which `App.razor` renders as `AccessDenied` (`AdminPageAuthorizationTests`); a 403 from the API does the same mid-page
+- [x] Key provision/rotate reveal the plaintext once and only once; revoke leaves the account active (`UserDetailPageTests`)
+- [x] An Entra-linked group hides the add/remove controls and explains why (`GroupDetailPageTests`)
+- [x] `?status=Pending` — the dashboard badge's link — arrives as a filter (`RequestsPageTests`)
+- [x] `/users/sync` explains `skippedGroupAssignmentCount` (#121) and `failedCount` (`UsersSyncPageTests`)
+- [ ] Live: these five pages against a deployed API and a real Entra tenant — #192 (#132 is the APIM key lifecycle, which covers none of this)
+- [ ] `/users/sync` shows the *previous* run's time and result — no durable last-sync metadata exists yet, #171

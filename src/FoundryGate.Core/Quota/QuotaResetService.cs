@@ -1,3 +1,4 @@
+using FoundryGate.Core.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Concurrency;
@@ -41,6 +42,7 @@ public sealed class QuotaResetService(
     AppDbContext dbContext,
     IQuotaResolutionService quotaResolution,
     IGatewayTierSync tierSync,
+    IQuotaRequestExpiry requestExpiry,
     IAuditWriter audit,
     TimeProvider timeProvider,
     ILogger<QuotaResetService> logger) : IQuotaResetService
@@ -57,6 +59,17 @@ public sealed class QuotaResetService(
             .Where(u => u.IsActive)
             .OrderBy(u => u.UserId)
             .ToListAsync(cancellationToken);
+
+        // The queue is swept as part of the reset (#159): a request nobody reviewed before the period
+        // closed can no longer raise anything (approval refuses it), so leaving it Pending only means an
+        // admin opens a review queue every month with last month's dead entries still in it. Purely a
+        // database change with its own audit row, added to this same unit of work.
+        //
+        // Deliberately above the commit point (#204 review): its rows commit with the reset either way,
+        // but running its query after the first tier move would mean a transient database failure here
+        // discards a reset APIM has already accepted — the exact divergence CommitToken exists to close.
+        // Up here, a failure aborts before anything external has happened and costs nothing.
+        var expiredRequestCount = await requestExpiry.ExpireStaleAsync(period, cancellationToken);
 
         // Deferred: this pass reaches no gateway, so nothing is past a commit point yet and every
         // allocation it staged is still ours to keep or discard.
@@ -140,6 +153,9 @@ public sealed class QuotaResetService(
             // refused — the second is the number that should make somebody look.
             tierChangeCount = tierSyncCount,
             tierChangeFailureCount = tierSyncFailureCount,
+            // Zero on almost every run; carried anyway so "the queue was swept and found nothing" and
+            // "the sweep did not run" are distinguishable from the reset's own row.
+            expiredRequestCount,
         };
 
         _ = trigger.ActorUserId is { } actorUserId
@@ -155,24 +171,26 @@ public sealed class QuotaResetService(
         if (tierSyncFailureCount > 0)
         {
             logger.LogWarning(
-                "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierChangeCount} tier change(s), {TierChangeFailureCount} refused by the gateway and left un-moved.",
+                "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierChangeCount} tier change(s), {TierChangeFailureCount} refused by the gateway and left un-moved, {ExpiredRequestCount} stale request(s) closed.",
                 period,
                 trigger.AuditAction,
                 touched.Count,
                 tierSyncCount,
-                tierSyncFailureCount);
+                tierSyncFailureCount,
+                expiredRequestCount);
         }
         else
         {
             logger.LogInformation(
-                "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierChangeCount} tier change(s).",
+                "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierChangeCount} tier change(s), {ExpiredRequestCount} stale request(s) closed.",
                 period,
                 trigger.AuditAction,
                 touched.Count,
-                tierSyncCount);
+                tierSyncCount,
+                expiredRequestCount);
         }
 
-        return new QuotaResetOutcome(touched.Count, tierSyncCount, tierSyncFailureCount, period, now);
+        return new QuotaResetOutcome(touched.Count, tierSyncCount, tierSyncFailureCount, expiredRequestCount, period, now);
     }
 
     /// <summary>
