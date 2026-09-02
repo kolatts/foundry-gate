@@ -38,7 +38,7 @@ else
 
     @if (_result is { } result)
     {
-        <MudAlert Severity="@(result.SkippedGroupAssignmentCount > 0 ? Severity.Warning : Severity.Success)"
+        <MudAlert Severity="@ResultSeverity(result)"
                   Class="mt-6"
                   Style="max-width: 44rem;"
                   data-testid="sync-result">
@@ -48,8 +48,19 @@ else
                 <li data-testid="sync-updated">@result.UpdatedCount updated</li>
                 <li data-testid="sync-deactivated">@result.DeactivatedCount deactivated</li>
                 <li data-testid="sync-skipped">@result.SkippedGroupAssignmentCount group assignments skipped</li>
+                <li data-testid="sync-failed">@result.FailedCount departures failed</li>
             </ul>
         </MudAlert>
+
+        @if (result.FailedCount > 0)
+        {
+            <MudAlert Severity="Severity.Error" Class="mt-3" Style="max-width: 44rem;" data-testid="sync-failed-explainer">
+                <MudText Typo="Typo.subtitle2" Class="mb-1">@result.FailedCount departure(s) still hold a working key</MudText>
+                The gateway refused to delete their APIM subscription, so those people were left as
+                they were — everyone else was still processed. Deprovisioning is idempotent, so run
+                the sync again; if it keeps failing, the gateway is the thing to look at.
+            </MudAlert>
+        }
 
         @if (result.SkippedGroupAssignmentCount > 0)
         {
@@ -79,6 +90,17 @@ else
     private UserSyncResult? _result;
     private bool _running;
     private bool _accessDenied;
+
+    /// <summary>
+    /// A run that left someone holding a key is an error, not a success; one that suspended
+    /// departure detection is a warning. Both still added and updated everyone they could.
+    /// </summary>
+    private static Severity ResultSeverity(UserSyncResult result) => result switch
+    {
+        { FailedCount: > 0 } => Severity.Error,
+        { SkippedGroupAssignmentCount: > 0 } => Severity.Warning,
+        _ => Severity.Success,
+    };
 
     private async Task RunAsync()
     {
