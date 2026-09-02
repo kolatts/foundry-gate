@@ -1,0 +1,30 @@
+// FoundryGate usage reconciliation (#39 / #84) — billing-grade per-developer token totals.
+//
+// Run it by hand: Log Analytics workspace > Logs, set the time range to the billing period, paste.
+// The Function passes the period as the query's *time range* rather than a literal in the text, so
+// this file is parameter-free and the same query answers for any period you select in the portal.
+//
+// Two tables, because neither alone is enough:
+//   ApiManagementGatewayLlmLog   per-request prompt/completion/total tokens and the model, from the
+//                                "Logs related to generative AI gateway" diagnostic setting.
+//                                It does NOT carry the APIM subscription.
+//   ApiManagementGatewayLogs     the gateway's request log, which does carry ApimSubscriptionId.
+// CorrelationId is the same value on both rows for one request, so it is the join key.
+//
+// Caveat (documented in #84 and on the architecture overview): an interrupted stream can leave the
+// LLM log with a low or missing token count, so these totals are a floor, not a ceiling. Enforcement
+// does not depend on them — the gateway's own token-quota counter is what returns 403.
+ApiManagementGatewayLlmLog
+| where isnotempty(CorrelationId)
+| join kind=inner (
+    ApiManagementGatewayLogs
+    | where isnotempty(ApimSubscriptionId)
+    | project CorrelationId, ApimSubscriptionId
+  ) on CorrelationId
+| summarize
+    PromptTokens = sum(PromptTokens),
+    CompletionTokens = sum(CompletionTokens),
+    TotalTokens = sum(TotalTokens),
+    RequestCount = count()
+  by ApimSubscriptionId
+| order by TotalTokens desc

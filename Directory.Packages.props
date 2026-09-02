@@ -39,6 +39,15 @@
     <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="2.1.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.7" />
+    <!-- Functions: worker telemetry → Azure Monitor (the worker's own OTel bridge, not the
+         ASP.NET Core package the Api uses — there is no ASP.NET Core pipeline here). -->
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker.OpenTelemetry" Version="1.2.0" />
+    <PackageVersion Include="Azure.Monitor.OpenTelemetry.Exporter" Version="1.8.3" />
+    <!-- Functions: usage reconciliation reads ApiManagementGatewayLlmLog (#39/#84); the blob
+         lease that keeps two replicas from double-running the monthly reset (#38). -->
+    <PackageVersion Include="Azure.Monitor.Query" Version="1.7.1" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.2" />
+    <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.1" />
 
     <!-- Api: Entra auth, Key Vault, health, OpenAPI, OpenTelemetry (#26, #27) -->
     <PackageVersion Include="Azure.Core" Version="1.62.0" />
