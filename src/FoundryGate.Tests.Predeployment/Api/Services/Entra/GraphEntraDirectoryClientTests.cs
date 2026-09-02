@@ -26,6 +26,13 @@ public class GraphEntraDirectoryClientTests
 
     private readonly StubHttpMessageHandler _http = new();
 
+    /// <summary>The two shapes a Graph call takes when it never reaches an API error body.</summary>
+    public static TheoryData<Func<Exception>> TransportFailures => new()
+    {
+        () => new HttpRequestException("The connection was reset."),
+        () => new TaskCanceledException("The request timed out.", new TimeoutException()),
+    };
+
     [Fact]
     public async Task ListAssignedUsersAsync_follows_nextLink_skips_non_user_principals_and_hydrates_in_chunks_of_15()
     {
@@ -151,6 +158,65 @@ public class GraphEntraDirectoryClientTests
         var skipped = Assert.Single(assigned.SkippedGroupAssignments);
         Assert.Equal(new EntraGroupAssignment(DeniedGroupId, "Platform Team"), skipped);
         Assert.Equal(viaGroup, Assert.Single(assigned.Users).ObjectId);
+    }
+
+    [Theory]
+    [MemberData(nameof(TransportFailures))]
+    public async Task ListAssignedUsersAsync_treats_a_transport_fault_on_one_group_as_an_unexpanded_group_not_a_failed_run(Func<Exception> failure)
+    {
+        // Graph briefly unreachable — DNS, a reset connection, a timeout — surfaces as
+        // HttpRequestException / TaskCanceledException once Kiota's retry handler gives up, never as an
+        // ODataError. Catching only the latter would turn this into a 500 for the whole POST /users/sync
+        // instead of the per-group suspension the feature exists to provide.
+        const string ReadableGroupId = "33333333-3333-3333-3333-333333333333";
+        const string UnreachableGroupId = "88888888-8888-8888-8888-888888888888";
+        var viaGroup = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000002").ToString();
+        _http
+            .OnTransportFailure(url => url.Contains($"/groups/{UnreachableGroupId}/", StringComparison.Ordinal), failure)
+            .OnJson(
+                url => url.Contains("/appRoleAssignedTo", StringComparison.Ordinal),
+                AssignmentsPage(
+                    [],
+                    nextLink: null,
+                    extra: $$"""
+                    {"principalId":"{{ReadableGroupId}}","principalType":"Group","principalDisplayName":"AI Developers"},
+                    {"principalId":"{{UnreachableGroupId}}","principalType":"Group","principalDisplayName":"Platform Team"}
+                    """))
+            .OnJson(
+                url => url.StartsWith($"{BaseUrl}/groups/{ReadableGroupId}/transitiveMembers", StringComparison.Ordinal),
+                $$"""{"value":[{"@odata.type":"#microsoft.graph.user","id":"{{viaGroup}}"}]}""")
+            .OnJson(
+                url => url.StartsWith($"{BaseUrl}/users?", StringComparison.Ordinal),
+                UsersPage([viaGroup]));
+
+        var assigned = await CreateClient(ServicePrincipalId).ListAssignedUsersAsync(CancellationToken.None);
+
+        var skipped = Assert.Single(assigned.SkippedGroupAssignments);
+        Assert.Equal(new EntraGroupAssignment(UnreachableGroupId, "Platform Team"), skipped);
+        Assert.Equal(viaGroup, Assert.Single(assigned.Users).ObjectId);
+    }
+
+    [Fact]
+    public async Task ListAssignedUsersAsync_still_propagates_the_callers_own_cancellation()
+    {
+        // The transport-fault tolerance above must not swallow a client that walked away: a
+        // TaskCanceledException whose token IS cancelled is not a directory fault.
+        const string GroupId = "33333333-3333-3333-3333-333333333333";
+        using var cancellation = new CancellationTokenSource();
+        _http
+            .OnJson(
+                url => url.Contains("/appRoleAssignedTo", StringComparison.Ordinal),
+                AssignmentsPage([], nextLink: null, extra: $$"""{"principalId":"{{GroupId}}","principalType":"Group","principalDisplayName":"AI Developers"}"""))
+            .OnTransportFailure(
+                url => url.Contains("/transitiveMembers", StringComparison.Ordinal),
+                () =>
+                {
+                    cancellation.Cancel();
+                    return new TaskCanceledException("The request was canceled.");
+                });
+
+        _ = await Assert.ThrowsAsync<TaskCanceledException>(() =>
+            CreateClient(ServicePrincipalId).ListAssignedUsersAsync(cancellation.Token));
     }
 
     [Fact]

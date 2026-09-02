@@ -162,7 +162,7 @@ public sealed class GraphEntraDirectoryClient(
                     _ = userIds.Add(memberId);
                 }
             }
-            catch (ODataError error)
+            catch (Exception error) when (IsRecoverableGroupReadFault(error, cancellationToken))
             {
                 // A group this run could not read leaves a partial view of the population, which is
                 // exactly the case departure detection must not act on — so it is reported rather than
@@ -254,6 +254,30 @@ public sealed class GraphEntraDirectoryClient(
                 : await group.Members.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Whether a failure expanding one group assignee should degrade that <em>group</em> to
+    /// "unexpanded" rather than fail the whole <see cref="ListAssignedUsersAsync"/> run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="ODataError"/> is Graph's structured error body — a refused permission, a group that
+    /// no longer exists. But a fault that never reaches an API error body looks nothing like one:
+    /// once Kiota's retry handler gives up on DNS, a reset connection or a timeout, the caller sees
+    /// <see cref="HttpRequestException"/> or a <see cref="TaskCanceledException"/> whose token was
+    /// never cancelled. Letting those propagate would turn "Graph was briefly unreachable while
+    /// reading one group" into a <c>500</c> for the entire <c>POST /users/sync</c> — the opposite of
+    /// what per-group degradation exists for, and worse than the suspension it replaces.
+    /// </para>
+    /// <para>
+    /// The caller's own cancellation is never swallowed: with
+    /// <paramref name="cancellationToken"/> signalled, every exception propagates, because a client
+    /// that walked away is not a directory fault.
+    /// </para>
+    /// </remarks>
+    private static bool IsRecoverableGroupReadFault(Exception exception, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested
+        && exception is ODataError or HttpRequestException or TaskCanceledException;
 
     /// <summary>
     /// The service principal whose assignments define FoundryGate's user population:
