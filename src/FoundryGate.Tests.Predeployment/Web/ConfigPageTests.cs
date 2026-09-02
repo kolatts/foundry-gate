@@ -199,6 +199,40 @@ public class ConfigPageTests : WebTestContext
         Assert.Empty(page.FindAll($"[data-testid='config-readonly-{SystemConfigurationKeys.DefaultMonthlyTokenQuota}']"));
     }
 
+    [Theory]
+    [InlineData("AKeyThisPageHasNeverHeardOf")]
+    [InlineData(SystemConfigurationKeys.DefaultMonthlyTokenQuota)]
+    public void Read_only_ness_is_the_apis_decision_whatever_the_key_is_called(string key)
+    {
+        // The #172 tripwire. The page owns no opinion about which keys are editable: a key it has
+        // never heard of is disabled when the API flags it, and a key it renders every day would be
+        // disabled too. A client-side list could satisfy neither case.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+            [WebTestData.ConfigEntry(key, "whatever", isReadOnly: true)]);
+
+        var page = RenderPage<Config>();
+
+        Assert.True(page.Find($"[data-testid='config-value-{key}']").HasAttribute("disabled"));
+    }
+
+    [Theory]
+    [InlineData(SystemConfigurationKeys.LastUserSyncDate)]
+    [InlineData(SystemConfigurationKeys.LastUserSyncResult)]
+    public void A_system_managed_key_the_api_did_not_flag_is_still_editable_here(string key)
+    {
+        // The other half of the tripwire, and the shape of the bug #172 named: the page used to be
+        // *stricter* than the API, disabling a key the API would happily write. It must render what
+        // the API said about this row — not what the Domain constants happen to say today.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+            [WebTestData.ConfigEntry(key, "recorded", isReadOnly: false)]);
+
+        var page = RenderPage<Config>();
+        Edit(page, key, "an edit the API allowed");
+
+        Assert.False(page.Find($"[data-testid='config-value-{key}']").HasAttribute("disabled"));
+        Assert.False(page.Find("[data-testid='config-save']").HasAttribute("disabled"));
+    }
+
     [Fact]
     public void A_read_only_row_is_never_sent_as_a_change()
     {
