@@ -1,4 +1,6 @@
 using Azure.Core;
+using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
 using FoundryGate.Functions.Services;
@@ -34,15 +36,36 @@ public class FunctionsServiceCollectionExtensionsTests
     }
 
     [Fact]
-    public void The_tier_sync_reports_rather_than_silently_no_ops_because_a_reset_can_change_a_tier()
+    public void With_APIM_addressed_this_host_moves_tiers_itself_rather_than_reporting_that_it_cannot()
+    {
+        // #194: a DefaultMonthlyTokenQuota change moves tiers on the next reset, and until this host
+        // carried the management client all it could do was log that SQL and the gateway now disagree.
+        using var provider = BuildProvider(configureGateway: gateway =>
+        {
+            gateway.SubscriptionId = "00000000-0000-0000-0000-000000000001";
+            gateway.ResourceGroup = "rg-foundrygate-test";
+            gateway.ApimName = "apim-foundrygate-test";
+        });
+
+        using var scope = provider.CreateScope();
+
+        Assert.IsType<ApimGatewayTierSync>(scope.ServiceProvider.GetRequiredService<IGatewayTierSync>());
+        Assert.IsType<ArmApimManagementClient>(scope.ServiceProvider.GetRequiredService<IApimManagementClient>());
+
+        // Nobody's request drives a timer trigger, so the key.tier-changed row it writes is
+        // system-attributed — the same shape as the run's own quota.monthly-reset row.
+        Assert.IsType<SystemGatewayTierSyncActor>(scope.ServiceProvider.GetRequiredService<IGatewayTierSyncActor>());
+    }
+
+    [Fact]
+    public void With_no_APIM_addressed_the_tier_sync_is_the_honest_no_op()
     {
         using var provider = BuildProvider();
 
         using var scope = provider.CreateScope();
 
-        // Not NullGatewayTierSync: this host has a gateway, it just cannot reach the management plane
-        // (#193/#194). A DefaultMonthlyTokenQuota change moves tiers on the next reset and must be loud.
-        Assert.IsType<WarningGatewayTierSync>(scope.ServiceProvider.GetRequiredService<IGatewayTierSync>());
+        // "No gateway is configured" is simply true here — there is nothing to enforce a tier.
+        Assert.IsType<NullGatewayTierSync>(scope.ServiceProvider.GetRequiredService<IGatewayTierSync>());
     }
 
     [Fact]
@@ -77,8 +100,13 @@ public class FunctionsServiceCollectionExtensionsTests
         Assert.IsType<NullResetLock>(provider.GetRequiredService<IResetLock>());
     }
 
-    private static ServiceProvider BuildProvider(Dictionary<string, string?>? hostSettings = null)
+    private static ServiceProvider BuildProvider(
+        Dictionary<string, string?>? hostSettings = null,
+        Action<GatewayOptions>? configureGateway = null)
     {
+        var gateway = TestGatewayTiers.Options();
+        configureGateway?.Invoke(gateway);
+
         var settings = new FunctionsAppSettings
         {
             ConnectionStrings = new FoundryGate.Functions.Configuration.ConnectionStringOptions
@@ -86,7 +114,7 @@ public class FunctionsServiceCollectionExtensionsTests
                 // Never opened: registration does not connect, and no test here resolves AppDbContext.
                 FoundryGate = "Server=127.0.0.1,3433;Database=FoundryGate;User Id=sa;Password=x;TrustServerCertificate=True",
             },
-            Gateway = TestGatewayTiers.Options(),
+            Gateway = gateway,
             Storage = new FunctionsStorageOptions(),
         };
 

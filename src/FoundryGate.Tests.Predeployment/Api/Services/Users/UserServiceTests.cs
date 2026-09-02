@@ -172,7 +172,7 @@ public class UserServiceTests : InMemoryDatabaseTest
         var quotaResolution = new QuotaResolutionService(
             Context,
             tierMapper,
-            new ApimGatewayTierSync(keys, NullLogger<ApimGatewayTierSync>.Instance),
+            new ApimGatewayTierSync(_apim, writer, new CurrentUserGatewayTierSyncActor(accessor), NullLogger<ApimGatewayTierSync>.Instance),
             NullLogger<QuotaResolutionService>.Instance);
         var quotaAllocations = new QuotaAllocationService(
             Context,

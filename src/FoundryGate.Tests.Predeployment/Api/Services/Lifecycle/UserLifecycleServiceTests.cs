@@ -9,6 +9,7 @@ using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;

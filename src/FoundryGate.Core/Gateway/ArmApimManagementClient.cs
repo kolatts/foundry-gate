@@ -5,7 +5,7 @@ using Azure.ResourceManager.ApiManagement;
 using Azure.ResourceManager.ApiManagement.Models;
 using FoundryGate.Core.Configuration;
 
-namespace FoundryGate.Api.Services.Keys;
+namespace FoundryGate.Core.Gateway;
 
 /// <summary>
 /// <see cref="IApimManagementClient"/> over <c>Azure.ResourceManager.ApiManagement</c>, addressed by
@@ -23,6 +23,11 @@ namespace FoundryGate.Api.Services.Keys;
 /// </remarks>
 public sealed class ArmApimManagementClient : IApimManagementClient
 {
+    /// <summary>ARM's 404. A literal rather than <c>StatusCodes.Status404NotFound</c>: Core carries no
+    /// ASP.NET Core dependency (CONVENTIONS.md &#167;Solution structure) — that is what lets the isolated
+    /// Functions worker use this client.</summary>
+    private const int NotFoundStatus = 404;
+
     private readonly ArmClient _armClient;
     private readonly ResourceIdentifier _serviceId;
     private readonly string _subscriptionId;
@@ -101,7 +106,7 @@ public sealed class ArmApimManagementClient : IApimManagementClient
             var response = await Subscription(subscriptionName).GetSecretsAsync(cancellationToken);
             return Map(response.Value);
         }
-        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status404NotFound)
+        catch (RequestFailedException exception) when (exception.Status == NotFoundStatus)
         {
             throw new ApimSubscriptionNotFoundException(subscriptionName);
         }
@@ -116,7 +121,7 @@ public sealed class ArmApimManagementClient : IApimManagementClient
         {
             _ = await Subscription(subscriptionName).RegeneratePrimaryKeyAsync(cancellationToken);
         }
-        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status404NotFound)
+        catch (RequestFailedException exception) when (exception.Status == NotFoundStatus)
         {
             throw new ApimSubscriptionNotFoundException(subscriptionName);
         }
@@ -131,7 +136,7 @@ public sealed class ArmApimManagementClient : IApimManagementClient
         {
             _ = await Subscription(subscriptionName).RegenerateSecondaryKeyAsync(cancellationToken);
         }
-        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status404NotFound)
+        catch (RequestFailedException exception) when (exception.Status == NotFoundStatus)
         {
             throw new ApimSubscriptionNotFoundException(subscriptionName);
         }
@@ -149,7 +154,7 @@ public sealed class ArmApimManagementClient : IApimManagementClient
         {
             _ = await Subscription(subscriptionName).UpdateAsync(ETag.All, patch, notify: false, cancellationToken: cancellationToken);
         }
-        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status404NotFound)
+        catch (RequestFailedException exception) when (exception.Status == NotFoundStatus)
         {
             throw new ApimSubscriptionNotFoundException(subscriptionName);
         }
@@ -165,7 +170,7 @@ public sealed class ArmApimManagementClient : IApimManagementClient
             _ = await Subscription(subscriptionName).DeleteAsync(WaitUntil.Completed, ETag.All, cancellationToken);
             return true;
         }
-        catch (RequestFailedException exception) when (exception.Status == StatusCodes.Status404NotFound)
+        catch (RequestFailedException exception) when (exception.Status == NotFoundStatus)
         {
             return false;
         }

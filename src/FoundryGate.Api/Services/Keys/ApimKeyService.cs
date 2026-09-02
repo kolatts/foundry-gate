@@ -2,6 +2,7 @@ using System.Globalization;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -317,47 +318,6 @@ public sealed class ApimKeyService(
             user,
             details => Task.FromResult(auditWriter.AddSystem(AuditActions.KeyRevoked, AuditTargetTypes.ApiKey, TargetId(user), new { details.apimSubscriptionId, details.subscriptionName, details.existedInApim, reason })),
             cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task MoveToProductAsync(User user, string tierProductId, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        var productId = NormalizeTier(tierProductId);
-        RequireKey(user);
-        await EnsureActorAsync(cancellationToken);
-
-        var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
-        var current = await apim.GetSubscriptionAsync(subscriptionName, cancellationToken)
-            ?? throw SubscriptionMissing(user, new ApimSubscriptionNotFoundException(subscriptionName));
-
-        if (string.Equals(current.ProductId, productId, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        try
-        {
-            await apim.UpdateScopeAsync(subscriptionName, productId, cancellationToken);
-        }
-        catch (ApimSubscriptionNotFoundException exception)
-        {
-            throw SubscriptionMissing(user, exception);
-        }
-
-        // Added, not saved (#156 review): this method is called from inside quota resolution, which runs
-        // in the middle of its caller's unit of work. Saving here would commit that caller's
-        // half-finished mutation — a quota written to the database with no audit row describing it — so
-        // the row joins the caller's change tracker and commits with everything else. CancellationToken.None
-        // because APIM has already been re-scoped; the caller's save must run on None for the same reason.
-        await audit.LogAsync(
-            AuditActions.KeyTierChanged,
-            AuditTargetTypes.ApiKey,
-            TargetId(user),
-            new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, before = current.ProductId, after = productId },
-            CancellationToken.None);
-
-        logger.LogInformation("Moved APIM subscription {SubscriptionName} for user {UserId} from product {Before} to {After}.", subscriptionName, user.UserId, current.ProductId, productId);
     }
 
     /// <inheritdoc />

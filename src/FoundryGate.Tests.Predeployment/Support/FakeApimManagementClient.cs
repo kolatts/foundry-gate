@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using Azure;
-using FoundryGate.Api.Services.Keys;
+using FoundryGate.Core.Gateway;
 
 namespace FoundryGate.Tests.Predeployment.Support;
 
@@ -50,6 +50,9 @@ public sealed class FakeApimManagementClient : IApimManagementClient
     /// rotate, which must not cost the developer the primary they were just handed.
     /// </summary>
     public Exception? ThrowOnRegenerateSecondaryKey { get; set; }
+
+    /// <summary>When set, <see cref="UpdateScopeAsync"/> throws it instead of re-scoping — simulates ARM refusing a tier move (a missing role, a 429, a 5xx).</summary>
+    public Exception? ThrowOnUpdateScope { get; set; }
 
     /// <summary>When set, <see cref="DeleteSubscriptionAsync"/> throws it instead of deleting — simulates ARM refusing a deprovision.</summary>
     public Exception? ThrowOnDelete { get; set; }
@@ -223,6 +226,12 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         lock (_gate)
         {
             _calls.Add($"UpdateScope:{subscriptionName}:{productId}");
+
+            if (ThrowOnUpdateScope is { } exception)
+            {
+                throw exception;
+            }
+
             Require(subscriptionName).ProductId = productId;
             AfterMutation?.Invoke();
             return Task.CompletedTask;

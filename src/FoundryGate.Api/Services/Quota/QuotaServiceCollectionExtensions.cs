@@ -13,15 +13,17 @@ public static class QuotaServiceCollectionExtensions
     /// Core services (<see cref="QuotaCoreServiceCollectionExtensions.AddQuotaCore"/>: the pure
     /// <see cref="GatewayTierMapper"/>, <see cref="IQuotaResolutionService"/> and
     /// <see cref="IQuotaResetService"/>), the
-    /// <see cref="IGatewayTierSync"/> seam (<see cref="ApimGatewayTierSync"/> when
+    /// <see cref="IGatewayTierSync"/> seam (Core's <see cref="ApimGatewayTierSync"/> when
     /// <see cref="GatewayOptions.IsApimConfigured"/>, otherwise <see cref="NullGatewayTierSync"/> — #118),
     /// and the Api-only <see cref="IQuotaAllocationService"/>.
     /// </summary>
     /// <remarks>
     /// The tier sync is <b>scoped</b>, not singleton: the APIM implementation composes the scoped
-    /// <c>IApimKeyService</c> (which shares the request's <c>AppDbContext</c> so the <c>key.tier-changed</c>
-    /// row commits with the allocation that caused it), and a singleton may not depend on a scoped
-    /// service. <see cref="NullGatewayTierSync"/> is stateless, so the shorter lifetime costs it nothing.
+    /// <c>IAuditWriter</c> (which shares the request's <c>AppDbContext</c> so the <c>key.tier-changed</c>
+    /// row commits with the allocation that caused it) and the scoped
+    /// <see cref="IGatewayTierSyncActor"/> that attributes it to the caller, and a singleton may not
+    /// depend on a scoped service. <see cref="NullGatewayTierSync"/> is stateless, so the shorter
+    /// lifetime costs it nothing.
     /// </remarks>
     public static IServiceCollection AddQuotaServices(this IServiceCollection services)
     {

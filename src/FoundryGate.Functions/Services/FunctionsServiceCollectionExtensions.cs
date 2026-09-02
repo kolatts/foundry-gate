@@ -1,5 +1,6 @@
 using Azure.Core;
 using Azure.Monitor.Query;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
 using FoundryGate.Functions.Configuration;
 using FoundryGate.Functions.Services.Quota;
@@ -40,13 +41,15 @@ public static class FunctionsServiceCollectionExtensions
         services.AddSingleton(settings.Gateway);
         services.AddSingleton(settings.Storage);
 
-        // Quota resolution + the monthly reset, shared with the Api (#119). The tier sync here reports
-        // rather than moves: this host has no APIM management client, and a reset CAN change a tier —
-        // `PUT /config` on DefaultMonthlyTokenQuota re-resolves nobody, so the next scheduled reset is
-        // the first thing to notice (#193/#194). WarningGatewayTierSync says so at Warning and the run's
-        // audit row counts it; NullGatewayTierSync would have logged "no gateway is configured", which
-        // is false here, at Debug.
-        services.AddScoped<IGatewayTierSync, WarningGatewayTierSync>();
+        // Quota resolution + the monthly reset, shared with the Api (#119), and — since #194 — the same
+        // tier sync the Api runs. A reset CAN change a tier: `PUT /config` on DefaultMonthlyTokenQuota
+        // re-resolves nobody, so the next scheduled reset is the first thing to notice (#193), and a
+        // user with no earlier allocation has no known previous tier. Until #194 this host could only
+        // log that at Warning and let SQL and the gateway disagree; now it moves the subscription
+        // itself, which is why the Functions identity holds API Management Service Contributor
+        // (infra/modules/control-plane-rbac.bicep) — a deliberate widening of its blast radius,
+        // documented in reference/infrastructure.
+        AddGatewayTierSync(services, settings);
         services.AddQuotaCore();
 
         services.AddScoped<IMonthlyResetJob, MonthlyResetJob>();
@@ -57,6 +60,36 @@ public static class FunctionsServiceCollectionExtensions
         AddLogsQueryClient(services);
 
         return services;
+    }
+
+    /// <summary>
+    /// The <see cref="IGatewayTierSync"/> this host runs, plus what it composes. With APIM addressed
+    /// (<c>GatewayOptions.IsApimConfigured</c>) that is the real
+    /// <see cref="ApimGatewayTierSync"/> over <see cref="ArmApimManagementClient"/>, so a tier change
+    /// found by the monthly reset re-scopes the developer's subscription for real and writes the
+    /// <c>key.tier-changed</c> row with the run's own unit of work. Without it —
+    /// <c>func start</c> against docker SQL, or a fork with no gateway —
+    /// <see cref="NullGatewayTierSync"/>, whose "no gateway is configured" Debug line is then true.
+    /// </summary>
+    /// <remarks>
+    /// The actor is <see cref="SystemGatewayTierSyncActor"/>: nothing here runs on anybody's request,
+    /// so the audit row is system-attributed (<c>ActorUserId IS NULL</c>) exactly like the reset's own
+    /// <c>quota.monthly-reset</c> row. The management client is a singleton (<c>ArmClient</c> is
+    /// thread-safe and caches its pipeline); the sync is scoped because it shares the job's
+    /// <c>AppDbContext</c> through <c>IAuditWriter</c>.
+    /// </remarks>
+    private static void AddGatewayTierSync(IServiceCollection services, AppSettings settings)
+    {
+        if (!settings.Gateway.IsApimConfigured)
+        {
+            services.AddScoped<IGatewayTierSync, NullGatewayTierSync>();
+            return;
+        }
+
+        services.AddSingleton<IApimManagementClient>(serviceProvider =>
+            new ArmApimManagementClient(settings.Gateway, serviceProvider.GetRequiredService<TokenCredential>()));
+        services.AddScoped<IGatewayTierSyncActor, SystemGatewayTierSyncActor>();
+        services.AddScoped<IGatewayTierSync, ApimGatewayTierSync>();
     }
 
     /// <summary>

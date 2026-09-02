@@ -19,11 +19,12 @@ namespace FoundryGate.Core.Quota;
 /// be idempotent: a retry, or a call for a subscription already on the target product, is a no-op.
 /// </para>
 /// <para>
-/// The seam, and its no-op implementation <see cref="NullGatewayTierSync"/>, live in Core because
-/// quota resolution does; the real implementation (<c>FoundryGate.Api.Services.Quota
-/// .ApimGatewayTierSync</c>, #118) stays in the Api, which is where the APIM key service it delegates
-/// to lives. A host without that key service (the Functions jobs) registers
-/// <see cref="NullGatewayTierSync"/> — see its remarks for why that is safe there.
+/// The seam and both implementations live in Core because quota resolution does: since #194 the real
+/// one (<see cref="ApimGatewayTierSync"/>, #118) composes <see cref="Gateway.IApimManagementClient"/>
+/// directly rather than the Api's key service, so <em>both</em> hosts register it whenever
+/// <c>GatewayOptions.IsApimConfigured</c> — the Api for a request-time quota change, the Functions
+/// host for a tier the monthly reset discovers. A host with no gateway to address registers
+/// <see cref="NullGatewayTierSync"/>.
 /// </para>
 /// </remarks>
 public interface IGatewayTierSync

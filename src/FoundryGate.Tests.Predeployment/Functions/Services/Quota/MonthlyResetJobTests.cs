@@ -1,8 +1,11 @@
 using System.Globalization;
+using Azure;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Exceptions;
+using FoundryGate.Domain.Keys;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Functions.Services.Quota;
 using FoundryGate.Tests.Predeployment.Data;
@@ -197,27 +200,59 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task A_changed_DefaultMonthlyTokenQuota_moves_tiers_on_the_next_reset_and_is_reported()
+    public async Task A_changed_DefaultMonthlyTokenQuota_moves_the_subscription_on_the_next_reset_and_audits_it()
     {
         // The hole the review found: `PUT /config` on DefaultMonthlyTokenQuota re-resolves nobody, so
-        // the scheduled reset is the first thing to notice — and this host cannot move the APIM
-        // subscription. It must be loud (WarningGatewayTierSync) and counted, not a Debug line claiming
-        // "no gateway is configured".
+        // the scheduled reset is the first thing to notice. Until #194 this host could only log that
+        // SQL and the gateway now disagree; it now re-scopes the subscription itself, in the reset's
+        // own unit of work, with a system-attributed key.tier-changed row beside the run's own.
         await SeedReferenceDataAsync();
-        var dev = await SeedUserAsync("Ada", u => u.ApimSubscriptionId = "foundrygate-1");
-        await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.StandardCap, GatewayTiers.Standard);
+        var dev = await SeedUserAsync("Ada");
+        var subscriptionName = ApimSubscriptionNames.ForUser(dev.UserId);
+        var apim = new FakeApimManagementClient();
+        _ = apim.Seed(subscriptionName, GatewayTiers.Standard);
+        dev.ApimSubscriptionId = apim.GetSubscriptionResourceId(subscriptionName);
+        await Context.SaveChangesAsync();
 
+        await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.StandardCap, GatewayTiers.Standard);
         await SetConfigAsync(SystemConfigurationKeys.DefaultMonthlyTokenQuota, TestGatewayTiers.PowerCap.ToString(CultureInfo.InvariantCulture));
 
-        var logs = new CapturingLoggerProvider();
-        var outcome = await CreateJob(new FakeResetLock(), new WarningGatewayTierSync(logs.CreateLogger<WarningGatewayTierSync>())).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeResetLock(), TierSync(apim)).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
         Assert.Equal(1, outcome.Reset!.Value.TierSyncCount);
-        Assert.Contains(logs.Entries, entry => entry.Contains("cannot move the APIM subscription", StringComparison.Ordinal));
+        Assert.Equal(GatewayTiers.Power, apim.ProductOf(subscriptionName));
 
         var audit = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.QuotaMonthlyReset);
         Assert.Contains("\"tierChangeCount\":1", audit.Details, StringComparison.Ordinal);
+
+        // System-attributed, because a timer trigger is nobody's request.
+        var tierChanged = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.KeyTierChanged);
+        Assert.Null(tierChanged.ActorUserId);
+    }
+
+    [Fact]
+    public async Task A_gateway_that_refuses_the_move_fails_the_run_rather_than_reporting_a_budget_it_cannot_enforce()
+    {
+        // The trade #194 makes explicit: a reset now makes N ARM calls, and a partial failure aborts the
+        // run (the tier sync is called before the reset saves). The alternative — carry on — would leave
+        // the dashboard promising 20M while the gateway kept 403ing at 5M, with nothing rolled back.
+        await SeedReferenceDataAsync();
+        var dev = await SeedUserAsync("Ada");
+        var subscriptionName = ApimSubscriptionNames.ForUser(dev.UserId);
+        var apim = new FakeApimManagementClient { ThrowOnUpdateScope = new RequestFailedException(429, "Too many requests.") };
+        _ = apim.Seed(subscriptionName, GatewayTiers.Standard);
+        dev.ApimSubscriptionId = apim.GetSubscriptionResourceId(subscriptionName);
+        await Context.SaveChangesAsync();
+
+        await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.StandardCap, GatewayTiers.Standard);
+        await SetConfigAsync(SystemConfigurationKeys.DefaultMonthlyTokenQuota, TestGatewayTiers.PowerCap.ToString(CultureInfo.InvariantCulture));
+
+        _ = await Assert.ThrowsAsync<UpstreamDependencyException>(
+            () => CreateJob(new FakeResetLock(), TierSync(apim)).RunAsync(CancellationToken.None));
+
+        await using var verification = CreateVerificationContext();
+        Assert.Empty(await verification.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaMonthlyReset).ToListAsync());
     }
 
     [Fact]
@@ -237,6 +272,10 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         Assert.Empty(_tierSync.Calls);
         Assert.Equal(0, outcome.Reset!.Value.TierSyncCount);
     }
+
+    /// <summary>The real Core tier sync over an in-memory APIM, wired as the Functions host wires it (system actor).</summary>
+    private ApimGatewayTierSync TierSync(FakeApimManagementClient apim) =>
+        new(apim, new AuditWriter(Context, _clock), new SystemGatewayTierSyncActor(), NullLogger<ApimGatewayTierSync>.Instance);
 
     private MonthlyResetJob CreateJob(FakeResetLock resetLock, IGatewayTierSync? tierSync = null)
     {

@@ -4,6 +4,7 @@ using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
@@ -662,64 +663,6 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task MoveToProduct_rescopes_the_subscription_and_audits_before_and_after()
-    {
-        var (service, _) = await CreateServiceAsync();
-        var developer = await SeedUserAsync("Dev", "d@contoso.test");
-        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
-        var name = ApimSubscriptionNames.ForUser(developer.UserId);
-        var keysBefore = _apim.KeysOf(name);
-
-        await service.MoveToProductAsync(developer, GatewayTiers.Unlimited, CancellationToken.None);
-
-        Assert.Equal("unlimited", _apim.ProductOf(name));
-        Assert.Equal(keysBefore, _apim.KeysOf(name)); // keys untouched by a tier move
-
-        // The row is added, not saved (#156 review): this runs inside quota resolution, in the middle of
-        // a caller's unit of work, so saving here would commit that caller's half-finished mutation.
-        Assert.Contains(Context.ChangeTracker.Entries<AuditLog>(), e => e.Entity.Action == AuditActions.KeyTierChanged && e.State == EntityState.Added);
-        _ = await Context.SaveChangesAsync();
-
-        var audit = await SingleAuditAsync(AuditActions.KeyTierChanged, developer.UserId);
-        Assert.Contains("\"before\":\"standard\"", audit.Details, StringComparison.Ordinal);
-        Assert.Contains("\"after\":\"unlimited\"", audit.Details, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task MoveToProduct_to_the_current_product_is_a_no_op()
-    {
-        var (service, _) = await CreateServiceAsync();
-        var developer = await SeedUserAsync("Dev", "d@contoso.test");
-        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
-
-        await service.MoveToProductAsync(developer, "STANDARD", CancellationToken.None);
-
-        Assert.DoesNotContain(_apim.Calls, call => call.StartsWith("UpdateScope:", StringComparison.Ordinal));
-        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyTierChanged).ToListAsync());
-    }
-
-    [Fact]
-    public async Task MoveToProduct_without_a_key_throws_KeyNotFound_and_with_a_bad_tier_throws_Argument()
-    {
-        var (service, _) = await CreateServiceAsync();
-        var developer = await SeedUserAsync("Dev", "d@contoso.test");
-
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.MoveToProductAsync(developer, GatewayTiers.Power, CancellationToken.None));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => service.MoveToProductAsync(developer, "gold", CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task MoveToProduct_when_the_subscription_vanished_throws_Conflict()
-    {
-        var (service, _) = await CreateServiceAsync();
-        var developer = await SeedUserAsync("Dev", "d@contoso.test");
-        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
-        Assert.True(_apim.Remove(ApimSubscriptionNames.ForUser(developer.UserId)));
-
-        await Assert.ThrowsAsync<ConflictException>(() => service.MoveToProductAsync(developer, GatewayTiers.Power, CancellationToken.None));
-    }
-
-    [Fact]
     public async Task ForUser_operations_refuse_an_unknown_user()
     {
         var (service, _) = await CreateServiceAsync();
@@ -760,7 +703,6 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
         var revealed = await service.RevealAsync(developer, CancellationToken.None);
         var rotated = await service.RotateAsync(developer, CancellationToken.None);
         var secondaryAfterRotate = _apim.KeysOf(name).SecondaryKey;
-        await service.MoveToProductAsync(developer, GatewayTiers.Power, CancellationToken.None);
         _ = await service.RevokeAsync(developer, CancellationToken.None);
 
         string[] secrets = [provisioned.PlaintextKey, revealed.PlaintextKey, rotated.PlaintextKey, secondaryAfterProvision, secondaryAfterRotate];

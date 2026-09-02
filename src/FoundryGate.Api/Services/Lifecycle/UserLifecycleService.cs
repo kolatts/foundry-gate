@@ -6,6 +6,7 @@ using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Requests;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;

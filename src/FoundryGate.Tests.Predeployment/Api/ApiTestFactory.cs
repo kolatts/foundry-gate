@@ -1,5 +1,5 @@
 using FoundryGate.Api.Services.Foundry;
-using FoundryGate.Api.Services.Keys;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Interceptors;
