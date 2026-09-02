@@ -151,14 +151,16 @@ public class ConfigPageTests : WebTestContext
     [Fact]
     public void A_retired_key_reports_the_apis_own_reason_rather_than_a_reason_of_our_own()
     {
-        // The editor keeps no client-side list of retired keys: SystemConfigValidator.EnsureEditable
-        // is the authority, and a second copy here drifted the moment a key was un-retired. The
-        // admin reads the 409's message, which names the replacement.
-        const string Retired = SystemConfigurationKeys.ApimProductId;
+        // The editor keeps no client-side list of retired keys: the API is the authority, and a
+        // second copy here drifts the moment a key is retired or un-retired — #186 has since
+        // removed the shipped retired keys from SystemConfigurationKeys altogether, which a
+        // hard-coded list would have turned into a build break rather than a no-op. A fork's own
+        // leftover row is still refused, and the admin reads the API's message.
+        const string Retired = "SomeForkLegacyKey";
         Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>([WebTestData.ConfigEntry(Retired, "legacy-product")]);
         Api.UpdateConfigResults[Retired] = ApiCallResult<bool>.Fail(
             ApiCallStatus.Error,
-            "System configuration key 'ApimProductId' is read-only: quota tiers are APIM products now.");
+            $"System configuration key '{Retired}' is read-only: nothing reads it any more.");
 
         var page = RenderPage<Config>();
         Assert.False(page.Find($"[data-testid='config-value-{Retired}']").HasAttribute("disabled"));
@@ -168,7 +170,7 @@ public class ConfigPageTests : WebTestContext
         page.Find("[data-testid='config-diff-confirm']").Click();
 
         Assert.Contains(
-            "read-only: quota tiers are APIM products now.",
+            "read-only: nothing reads it any more.",
             page.Find($"[data-testid='config-result-{Retired}']").TextContent,
             StringComparison.Ordinal);
     }
