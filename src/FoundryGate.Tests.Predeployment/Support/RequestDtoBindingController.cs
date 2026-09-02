@@ -1,5 +1,4 @@
 using FoundryGate.Api.Controllers;
-using FoundryGate.Domain.Config.Contracts;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Requests.Contracts;
 using FoundryGate.Domain.Users.Contracts;
@@ -10,7 +9,7 @@ namespace FoundryGate.Tests.Predeployment.Support;
 /// <summary>
 /// Test-only controller — this assembly is registered as an application part by
 /// <see cref="Api.ApiTestFactory"/> — that binds every request record Domain defines ahead of
-/// its production controller (the users/groups/requests/config waves). Each action echoes the
+/// its production controller (the users/groups/requests waves). Each action echoes the
 /// bound body; what matters is what happens <em>before</em> the action runs: an invalid body must
 /// be a 400 ProblemDetails, never the 500 a positional record with <c>[property: …]</c> attributes
 /// produced (#128). Once a production controller binds one of these records, its own endpoint
@@ -35,7 +34,4 @@ public sealed class RequestDtoBindingController : ApiControllerBase
 
     [HttpPost("requests/review")]
     public ReviewQuotaIncreaseRequest ReviewQuotaIncrease([FromBody] ReviewQuotaIncreaseRequest request) => request;
-
-    [HttpPost("config")]
-    public UpdateSystemConfigRequest UpdateSystemConfig([FromBody] UpdateSystemConfigRequest request) => request;
 }
