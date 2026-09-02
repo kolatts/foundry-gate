@@ -170,6 +170,34 @@ public class EntraSyncJobTests : InMemoryDatabaseTest
         Assert.Empty(saved.ApimSubscriptionId);
     }
 
+    // There is deliberately no test for the OTHER half of this job's CommitToken — "a pass that
+    // offboarded somebody keeps its own row through a cancellation". The window that protects is real
+    // but narrow: cancellation strictly between SyncAllAsync returning and the save below it, i.e. a
+    // host shutdown at that instant. Cancelling any earlier (say, the moment APIM accepts a deletion)
+    // aborts inside one of the two syncs instead — each honours the raw token up to its own commit
+    // point, which is correct — so the job's row is never reached and the assertion would be testing
+    // the sync, not this. Constructing the real window needs a seam between the two calls that exists
+    // only for the test, which is a worse trade than this comment. The predicate itself is pinned
+    // below.
+    [Fact]
+    public async Task A_pass_that_offboarded_nobody_still_honours_cancellation()
+    {
+        // Half of CommitToken.For's predicate that IS reachable: nothing outside the database was
+        // touched, so an abandoned run stops rather than forcing its row through on
+        // CancellationToken.None (PR #216 review).
+        await SeedReferenceDataAsync();
+        var staying = await SeedUserAsync("oid-staying", "Staying");
+        _directory.AssignedUsers.Add(new EntraUser(staying.EntraObjectId, staying.DisplayName, staying.Email, null));
+
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CreateJob(new FakeJobLock()).RunAsync(cancelled.Token));
+
+        Assert.False(await Context.AuditLogs.AsNoTracking().AnyAsync(a => a.Action == AuditActions.EntraScheduledSync));
+    }
+
     // -- Helpers --
 
     private EntraSyncJob CreateJob(FakeJobLock jobLock, bool enabled = true)
