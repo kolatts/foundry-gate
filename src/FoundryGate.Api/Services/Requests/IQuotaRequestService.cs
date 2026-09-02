@@ -37,6 +37,15 @@ namespace FoundryGate.Api.Services.Requests;
 /// stored <c>QuotaAllocation</c> row, which only reflects the last resolution.
 /// </para>
 /// <para>
+/// <b>A request only applies to the period it was filed for.</b> Approval re-resolves the
+/// <em>current</em> period, so approving a July request in September would raise September's budget
+/// while the row and the response still said July — the number in the UI and the month actually
+/// affected disagreeing. Approving a request from a closed period is therefore a 409 naming that
+/// period; rejecting one is always allowed, so a queue can be cleared by hand. The monthly reset
+/// closes them itself (<see cref="Core.Requests.IQuotaRequestExpiry"/>), so in practice an admin never
+/// meets one (#159).
+/// </para>
+/// <para>
 /// <b>Reviews claim the row.</b> The transition out of <c>Pending</c> is a conditional update, so a
 /// simultaneous approve and reject cannot both proceed: one wins, the other gets a 409. Everything a
 /// review writes — the row, the subject's quota, the allocation, the audit entry — commits in one
@@ -103,9 +112,10 @@ public interface IQuotaRequestService
     /// <exception cref="KeyNotFoundException">No such request (→ 404).</exception>
     /// <exception cref="ArgumentException">The stored <c>RequestedQuota</c> is no longer a configured tier cap — the tier table changed after submission (→ 400).</exception>
     /// <exception cref="Domain.Exceptions.ConflictException">
-    /// The request is already approved or rejected (including by a reviewer racing this one), the subject
-    /// user is deactivated, or the stored <c>RequestedQuota</c> is no longer an increase over the
-    /// subject's live quota — approving would lower it (→ 409).
+    /// The request is already approved or rejected (including by a reviewer racing this one), it was
+    /// filed for a billing period that has since closed (→ 409; see the type remarks — reject it
+    /// instead), the subject user is deactivated, or the stored <c>RequestedQuota</c> is no longer an
+    /// increase over the subject's live quota — approving would lower it (→ 409).
     /// </exception>
     Task<QuotaIncreaseRequestResponse> ApproveAsync(int quotaIncreaseRequestId, ReviewQuotaIncreaseRequest review, CancellationToken cancellationToken);
 
@@ -132,4 +142,19 @@ public interface IQuotaRequestService
     /// method on this service inside it; none of them opens a second one.
     /// </remarks>
     Task<int> CancelPendingForUserAsync(int userId, string note, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Closes every request left <c>Pending</c> from a billing period earlier than the current one, as
+    /// <c>Rejected</c> with a system note and no reviewer, and audits the sweep as one
+    /// <c>quota.requests-expired</c> row carrying the count. Saves.
+    /// </summary>
+    /// <remarks>
+    /// The rule itself is <see cref="Core.Requests.IQuotaRequestExpiry"/> in Core, shared with the
+    /// monthly reset — a timer and a button must not disagree about what expiry means. This entry point
+    /// exists so the Api can sweep on its own (an operator tool, a future admin route); nothing over
+    /// HTTP calls it yet, and the reset is what runs it on the normal schedule. Nothing external is
+    /// touched, so the caller's own token applies throughout.
+    /// </remarks>
+    /// <returns>How many requests were closed; <c>0</c> writes nothing at all.</returns>
+    Task<int> ExpireStaleAsync(CancellationToken cancellationToken);
 }

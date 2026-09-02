@@ -1,3 +1,4 @@
+using FoundryGate.Core.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Concurrency;
@@ -15,6 +16,7 @@ namespace FoundryGate.Core.Quota;
 public sealed class QuotaResetService(
     AppDbContext dbContext,
     IQuotaResolutionService quotaResolution,
+    IQuotaRequestExpiry requestExpiry,
     IAuditWriter audit,
     TimeProvider timeProvider,
     ILogger<QuotaResetService> logger) : IQuotaResetService
@@ -42,6 +44,13 @@ public sealed class QuotaResetService(
         var tierSyncCount = resolutions.Count(r => r.TierSyncRequested);
         var completionToken = CommitToken.For(tierSyncCount > 0, cancellationToken);
 
+        // The queue is swept as part of the reset (#159): a request nobody reviewed before the period
+        // closed can no longer raise anything (approval refuses it), so leaving it Pending only means an
+        // admin opens a review queue every month with last month's dead entries still in it. Purely a
+        // database change with its own audit row, added to this same unit of work — no external system,
+        // so it does not move the commit point, and it rides whichever token the tier syncs decided.
+        var expiredRequestCount = await requestExpiry.ExpireStaleAsync(period, completionToken);
+
         foreach (var allocation in touched)
         {
             Stamp(allocation, now);
@@ -59,6 +68,9 @@ public sealed class QuotaResetService(
             // Named for what it means to a human reading the trail, not for the seam it went through:
             // every one of these is a developer whose enforced budget moved this run.
             tierChangeCount = tierSyncCount,
+            // Zero on almost every run; carried anyway so "the queue was swept and found nothing" and
+            // "the sweep did not run" are distinguishable from the reset's own row.
+            expiredRequestCount,
         };
 
         _ = trigger.ActorUserId is { } actorUserId
@@ -86,11 +98,12 @@ public sealed class QuotaResetService(
         }
 
         logger.LogInformation(
-            "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierChangeCount} tier change(s).",
+            "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierChangeCount} tier change(s), {ExpiredRequestCount} stale request(s) closed.",
             period,
             trigger.AuditAction,
             resolutions.Count,
-            tierSyncCount);
+            tierSyncCount,
+            expiredRequestCount);
 
         return new QuotaResetOutcome(resolutions.Count, tierSyncCount, period, now);
     }

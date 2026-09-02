@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
@@ -26,6 +27,7 @@ namespace FoundryGate.Api.Services.Requests;
 public sealed class QuotaRequestService(
     AppDbContext dbContext,
     IQuotaResolutionService quotaResolution,
+    IQuotaRequestExpiry requestExpiry,
     GatewayTierMapper tierMapper,
     ICurrentUserAccessor currentUser,
     IAuditService audit,
@@ -161,6 +163,19 @@ public sealed class QuotaRequestService(
 
         var (entity, reviewer) = await LoadForReviewAsync(quotaIncreaseRequestId, cancellationToken);
 
+        var period = BillingPeriod.Current(timeProvider);
+        if (entity.PeriodYear != period.Year || entity.PeriodMonth != period.Month)
+        {
+            // The cheapest refusal, and the one that needs no other read. Everything below re-resolves
+            // *this* period, so approving a request filed for another one would raise today's budget
+            // while the row and the response still reported the month it was filed for — the number in
+            // the UI and the month actually affected would disagree (#159). The monthly reset closes
+            // these, so an admin normally never sees one; this is the guard for the window between a
+            // period ending and the next reset running.
+            throw new ConflictException(
+                $"Quota increase request {quotaIncreaseRequestId} was filed for {new BillingPeriod(entity.PeriodYear, entity.PeriodMonth)}, which has ended; the current period is {period}. Approving it would raise the budget for a different month than the one the request records. Reject it and ask the developer to submit a new one.");
+        }
+
         var subject = await dbContext.Users.SingleAsync(u => u.UserId == entity.UserId, cancellationToken);
         if (!subject.IsActive)
         {
@@ -202,7 +217,7 @@ public sealed class QuotaRequestService(
         // Immediately live: upserts this period's allocation and (via the resolution service) moves the
         // subscription to the new tier product before anything is committed, so a failed gateway move
         // fails the approval rather than leaving the database claiming a budget nobody enforces.
-        var resolution = await quotaResolution.ResolveAsync(subject.UserId, BillingPeriod.Current(timeProvider), cancellationToken);
+        var resolution = await quotaResolution.ResolveAsync(subject.UserId, period, cancellationToken);
 
         // Past the commit point (CONVENTIONS.md "External side effects have a commit point") exactly when
         // resolution actually moved the subscription: from there the audit row and the save must not be
@@ -294,6 +309,21 @@ public sealed class QuotaRequestService(
         }
 
         return pending.Count;
+    }
+
+    /// <inheritdoc />
+    public async Task<int> ExpireStaleAsync(CancellationToken cancellationToken)
+    {
+        // The rule is Core's, shared with the monthly reset; the Api's job here is only to give it a
+        // period and own the save. Nothing external is touched, so the caller's token applies throughout
+        // and a count of 0 leaves the change tracker (and the audit log) untouched.
+        var expired = await requestExpiry.ExpireStaleAsync(BillingPeriod.Current(timeProvider), cancellationToken);
+        if (expired > 0)
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        return expired;
     }
 
     private async Task<QuotaIncreaseRequestResponse> SubmitCoreAsync(

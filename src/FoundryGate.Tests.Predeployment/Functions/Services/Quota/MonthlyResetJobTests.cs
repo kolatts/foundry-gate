@@ -1,5 +1,6 @@
 using System.Globalization;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
@@ -241,7 +242,14 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
     private MonthlyResetJob CreateJob(FakeResetLock resetLock, IGatewayTierSync? tierSync = null)
     {
         var resolution = new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), tierSync ?? _tierSync, NullLogger<QuotaResolutionService>.Instance);
-        var reset = new QuotaResetService(Context, resolution, new AuditWriter(Context, _clock), _clock, NullLogger<QuotaResetService>.Instance);
+        var auditWriter = new AuditWriter(Context, _clock);
+        var reset = new QuotaResetService(
+            Context,
+            resolution,
+            new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance),
+            auditWriter,
+            _clock,
+            NullLogger<QuotaResetService>.Instance);
 
         return new MonthlyResetJob(Context, reset, resetLock, _clock, NullLogger<MonthlyResetJob>.Instance);
     }

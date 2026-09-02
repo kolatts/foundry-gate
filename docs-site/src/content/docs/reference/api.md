@@ -250,9 +250,18 @@ exist are re-resolved (`allocatedTokens`, level, tier, capped flag) but **keep t
 `tokensUsed`** — the gateway's monthly window resets itself, so zeroing the mirror mid-month
 would only make dashboards lie. Every touched row gets `isHardStopped = false` and
 `resetDate = now`. Exactly one audit row (`quota.reset`, attributed to the calling admin, details
-`{ usersResetCount, periodYear, periodMonth, createdCount, tierSyncCount }`) per run. Returns
-`{ usersResetCount, periodYear, periodMonth, resetDate }`. Running it twice in a month produces
-the same row count.
+`{ usersResetCount, periodYear, periodMonth, createdCount, tierSyncCount, expiredRequestCount }`)
+per run. Returns `{ usersResetCount, periodYear, periodMonth, resetDate }`. Running it twice in a
+month produces the same row count.
+
+**The reset also sweeps the review queue.** In the same transaction, every quota increase request
+still `Pending` from a *closed* period is set to `Rejected` with a system note and no reviewer — the
+same shape a departing user's requests get ([#159](https://github.com/kolatts/foundry-gate/issues/159)).
+Those requests can no longer be approved anyway (see below), so leaving them Pending would only mean
+an admin opens the queue each month with last month's dead entries still in it. When the sweep closes
+anything it writes one additional `quota.requests-expired` audit row (no actor, no target, details
+`{ expiredCount, currentPeriodYear, currentPeriodMonth, expiredRequestIds }`); a sweep that finds
+nothing writes no row at all. The scheduled monthly job runs exactly the same code.
 
 ## Quota Increase Requests
 
@@ -297,6 +306,14 @@ index** on `(userId, periodYear, periodMonth) WHERE status = Pending`
 double-clicked button, a retrying client — get the same `409` as two sequential ones instead of both
 landing and showing the same person twice in the reviewer queue. The filter is what keeps a *decided*
 request from blocking the rest of the month.
+
+**A request only applies to the period it was filed for.** Approval re-resolves the *current* period,
+so approving a July request in September would raise September's budget while the row and the response
+still said `periodYear: 2026, periodMonth: 7` — the number in the UI and the month actually affected
+disagreeing. Approving a request whose period has closed is therefore `409` naming both periods
+([#159](https://github.com/kolatts/foundry-gate/issues/159)). **Rejection is always allowed**, so an
+admin can clear an old queue by hand; and the monthly reset closes stale requests itself, so in
+practice this `409` only covers the window between a period ending and the next reset running.
 
 Every submission writes `quota.requested`; approval writes `quota.approved` with the before/after
 quota, the quota and level resolution reported at review time, the tier product and whether the gateway
