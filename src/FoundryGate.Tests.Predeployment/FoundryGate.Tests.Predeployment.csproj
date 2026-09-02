@@ -25,8 +25,12 @@
     <!-- Cli/*: the pure command logic (naming, firewall-rule idempotency, contained-user T-SQL) behind
          the ARM/SQL interfaces — no live Azure in this suite. -->
     <ProjectReference Include="..\FoundryGate.Cli\FoundryGate.Cli.csproj" />
+    <ProjectReference Include="..\FoundryGate.Core\FoundryGate.Core.csproj" />
     <ProjectReference Include="..\FoundryGate.Data\FoundryGate.Data.csproj" />
     <ProjectReference Include="..\FoundryGate.Domain\FoundryGate.Domain.csproj" />
+    <!-- Functions/*: the two timer jobs behind their services (#38/#39). The trigger attributes are
+         not exercised — there is no Functions host in this suite — but everything they delegate to is. -->
+    <ProjectReference Include="..\FoundryGate.Functions\FoundryGate.Functions.csproj" />
     <ProjectReference Include="..\FoundryGate.Web\FoundryGate.Web.csproj" />
   </ItemGroup>
 

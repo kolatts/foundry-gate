@@ -1,4 +1,6 @@
 using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Quota;
 
 namespace FoundryGate.Api.Services.Quota;
 
@@ -7,12 +9,13 @@ public static class QuotaServiceCollectionExtensions
 {
     /// <summary>
     /// Registers the validated <see cref="GatewayOptions"/> (singleton, lifted off the already-registered
-    /// <see cref="AppSettings"/> — the tier table lives on <see cref="GatewayOptions.Tiers"/>), the pure
-    /// <see cref="GatewayTierMapper"/> (singleton), the
+    /// <see cref="AppSettings"/> — the tier table lives on <see cref="GatewayOptions.Tiers"/>), the shared
+    /// Core services (<see cref="QuotaCoreServiceCollectionExtensions.AddQuotaCore"/>: the pure
+    /// <see cref="GatewayTierMapper"/>, <see cref="IQuotaResolutionService"/> and
+    /// <see cref="IQuotaResetService"/>), the
     /// <see cref="IGatewayTierSync"/> seam (<see cref="ApimGatewayTierSync"/> when
     /// <see cref="GatewayOptions.IsApimConfigured"/>, otherwise <see cref="NullGatewayTierSync"/> — #118),
-    /// and the two scoped services that share the request's <c>AppDbContext</c>:
-    /// <see cref="IQuotaResolutionService"/> and <see cref="IQuotaAllocationService"/>.
+    /// and the Api-only <see cref="IQuotaAllocationService"/>.
     /// </summary>
     /// <remarks>
     /// The tier sync is <b>scoped</b>, not singleton: the APIM implementation composes the scoped
@@ -25,12 +28,11 @@ public static class QuotaServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddSingleton(serviceProvider => serviceProvider.GetRequiredService<AppSettings>().Gateway);
-        services.AddSingleton<GatewayTierMapper>();
         services.AddScoped<IGatewayTierSync>(serviceProvider =>
             serviceProvider.GetRequiredService<GatewayOptions>().IsApimConfigured
                 ? ActivatorUtilities.CreateInstance<ApimGatewayTierSync>(serviceProvider)
                 : ActivatorUtilities.CreateInstance<NullGatewayTierSync>(serviceProvider));
-        services.AddScoped<IQuotaResolutionService, QuotaResolutionService>();
+        services.AddQuotaCore();
         services.AddScoped<IQuotaAllocationService, QuotaAllocationService>();
 
         return services;

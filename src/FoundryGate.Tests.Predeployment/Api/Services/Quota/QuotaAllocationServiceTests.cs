@@ -1,8 +1,8 @@
 using System.Security.Claims;
 using System.Text.Json;
-using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Quota;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -433,7 +433,7 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
 
     // -- Helpers --
 
-    /// <summary>Real accessor + real audit + real resolution over this test's context, as DI would wire them per request.</summary>
+    /// <summary>Real accessor + real audit + real resolution + real (Core) reset over this test's context, as DI would wire them per request.</summary>
     private QuotaAllocationService CreateService(string oid, IQuotaResolutionService? resolution = null)
     {
         var identity = new ClaimsIdentity([new Claim(ClaimConstants.Oid, oid)], "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
@@ -441,13 +441,14 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
         var auditWriter = new AuditWriter(Context, _clock);
         resolution ??= new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance);
+        var reset = new QuotaResetService(Context, resolution, auditWriter, _clock, NullLogger<QuotaResetService>.Instance);
 
         return new QuotaAllocationService(
             Context,
             resolution,
+            reset,
             TestGatewayTiers.Mapper(),
             accessor,
-            new AuditService(Context, auditWriter, accessor),
             _clock,
             NullLogger<QuotaAllocationService>.Instance);
     }

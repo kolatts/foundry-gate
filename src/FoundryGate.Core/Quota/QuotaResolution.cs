@@ -1,7 +1,7 @@
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Quota;
 
-namespace FoundryGate.Api.Services.Quota;
+namespace FoundryGate.Core.Quota;
 
 /// <summary>
 /// What one <see cref="IQuotaResolutionService.ResolveAsync"/> call did: the upserted (tracked, not

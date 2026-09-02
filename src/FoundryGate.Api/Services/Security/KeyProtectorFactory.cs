@@ -2,6 +2,7 @@ using Azure.Core;
 using Azure.Security.KeyVault.Keys;
 using Azure.Security.KeyVault.Keys.Cryptography;
 using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
 using FoundryGate.Domain.Common;
 using Imagile.Framework.Configuration.Exceptions;
 using Microsoft.AspNetCore.DataProtection;

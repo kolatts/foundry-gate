@@ -11,12 +11,29 @@
 
 - Projects: `FoundryGate.Domain` (zero deps: enums, DTO `record`s, exceptions,
   validation), `FoundryGate.Data` (DbContext + entities + seeding),
+  `FoundryGate.Core` (services more than one host needs — see below),
   `FoundryGate.Api` (controllers + **services live here** under `Services/<Area>/` —
   NO separate Services project), `FoundryGate.Functions` (isolated worker),
   `FoundryGate.Web` (Blazor WASM — references **Domain only**, hard boundary),
   `FoundryGate.Database` (.sqlproj → dacpac), `FoundryGate.Cli` (System.CommandLine
   tool: db deploy/seed, local setup), `FoundryGate.Tests.Predeployment`,
   `FoundryGate.Tests.Postdeployment`.
+- **Where a service lives.** Api-only services stay in `FoundryGate.Api/Services/<Area>/`;
+  services any other host needs live in `FoundryGate.Core/<Area>/` with the same
+  conventions (co-located interface, primary constructors, `Add<Area>Core()` DI
+  extension). `FoundryGate.Core` references Data + Domain and **carries no ASP.NET Core
+  dependency** — that is what makes it usable from the isolated Functions worker. The
+  host keeps whatever the seam's implementation needs from it: the Api registers
+  `ApimGatewayTierSync` (it composes the APIM key service) against Core's
+  `IGatewayTierSync`, the Functions host registers `NullGatewayTierSync`.
+  (Amends the "no separate Services project" rule for the shared case only — #119;
+  a service with exactly one host still belongs to that host.)
+- **Options classes in Core need an explicit validation hop.** The framework's
+  `ValidateRecursively()` only recurses into property types declared in the *root
+  object's own assembly*, so a Core-owned section (`GatewayOptions`) is skipped
+  silently. Each host's `AppSettings` is therefore an `IValidatableObject` yielding
+  `CoreOptionsValidation.ValidateGateway(Gateway, nameof(Gateway))`; add the next
+  Core-owned section there rather than re-deriving the rule.
 - Every csproj: `net10.0`, `ImplicitUsings`, `Nullable enable`,
   **`TreatWarningsAsErrors true`**. No repository pattern, no unit-of-work, ever.
 - Reference `Imagile.Framework.{Core,Configuration,EntityFrameworkCore,

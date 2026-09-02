@@ -1,3 +1,4 @@
+using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Groups.Contracts;
 
@@ -14,8 +15,8 @@ namespace FoundryGate.Api.Services.Groups;
 /// <b>Every quota-visible write re-resolves the affected members.</b> Changing a group's quota,
 /// deleting the group, and adding or removing a member all shift levels 3-4 of the resolution chain
 /// (spec &#167;3.2) for the users involved, so each of those calls ends with
-/// <see cref="Quota.IQuotaResolutionService.ResolveManyAsync"/> over them for the current billing
-/// period. That is also what invokes <see cref="Quota.IGatewayTierSync"/> for the members whose tier
+/// <see cref="IQuotaResolutionService.ResolveManyAsync"/> over them for the current billing
+/// period. That is also what invokes <see cref="IGatewayTierSync"/> for the members whose tier
 /// actually moved — nothing else here touches APIM. Re-resolution covers <b>active</b> members only:
 /// a deactivated developer has no key to enforce against and <c>GET /quota/allocations/me</c> refuses
 /// to mint them an allocation, so minting one here would contradict it.
@@ -24,7 +25,7 @@ namespace FoundryGate.Api.Services.Groups;
 /// <b>One unit of work per call.</b> The mutation, its audit row and the allocations it moves are
 /// added to the request's <c>AppDbContext</c> and committed by a single <c>SaveChangesAsync</c>
 /// (CONVENTIONS.md). Resolution sees the pending mutation because
-/// <see cref="Quota.IQuotaResolutionService"/> reads group state through the change tracker.
+/// <see cref="IQuotaResolutionService"/> reads group state through the change tracker.
 /// </para>
 /// <para>
 /// <b>Quota values are tiers (D-013).</b> Create and update run

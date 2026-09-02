@@ -1,5 +1,6 @@
 using Azure;
 using FoundryGate.Api.Services.Keys;
+using FoundryGate.Core.Quota;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Exceptions;
 

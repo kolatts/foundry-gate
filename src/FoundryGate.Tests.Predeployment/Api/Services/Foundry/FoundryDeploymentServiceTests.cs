@@ -3,6 +3,7 @@ using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Foundry;
 using FoundryGate.Api.Services.Identity;
+using FoundryGate.Core.Configuration;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;

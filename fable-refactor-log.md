@@ -313,6 +313,108 @@ demo data and docs use 5M / 20M / unlimited only.
 literally true for every developer, and it costs nothing structurally — a budget picker
 instead of a number box.
 
+### D-014: `FoundryGate.Core` for services more than one host needs (#119)
+**Date:** 2026-09-02 (Functions wave: #38/#39/#84/#119)
+**Problem:** `plans/10-background-services.md` has the Functions host calling
+`IQuotaResolutionService`, but CONVENTIONS said "services live in Api — NO separate Services
+project" and `FoundryGate.Functions` references Data + Domain only. #119 listed three ways out.
+**Options considered:**
+1. *Functions calls the Api* over HTTP with an app-only token — one implementation of the rules,
+   but it makes a background job depend on the Api being up, needs an app-only path through
+   `ICurrentUserAccessor` (which 403s a principal with no `User` row), and turns one transaction
+   into a network hop.
+2. *Move resolution into Data* — Data becomes the place services live, a bigger dent in the
+   conventions than the problem deserves, and it drags `GatewayOptions` binding into the entity
+   assembly.
+3. *Functions references Api* — pulls ASP.NET Core into an isolated worker.
+4. *A new class library for shared services* (the orchestrator's ruling).
+**Decision:** Option 4. `src/FoundryGate.Core` references Data + Domain and carries no ASP.NET
+Core dependency, which is precisely what makes it usable from the isolated worker. It holds
+`GatewayOptions`/`GatewayTier`, `IQuotaResolutionService`, `GatewayTierMapper`, `IGatewayTierSync`
++ `NullGatewayTierSync`, and a new `IQuotaResetService` that both hosts run — the Api's
+`POST /quota/reset` and the scheduled Function are now the same code with a different audit action
+(`quota.reset` naming the admin, `quota.monthly-reset` with no actor). `ApimGatewayTierSync` stays
+in the Api (it composes the APIM key service); the Functions host registers the null one, which is
+safe because a reset re-resolves unchanged inputs and so can never produce a tier change (asserted
+by `QuotaResetServiceTests`). CONVENTIONS §Solution structure amended: Api-only services stay in
+the Api; anything a second host needs lives in Core with the same conventions and an
+`Add<Area>Core()` extension.
+**Why:** It is the only option where "what a reset does" has exactly one definition, without
+either host learning about the other. The cost is one project.
+**Caught on the way (worth knowing before moving the next options class):**
+`Imagile.Framework.Configuration`'s `ValidateRecursively()` recurses only into property types
+declared in the *root object's own assembly*. Moving `GatewayOptions` to Core therefore removed it
+from startup validation silently — a fork could have started with no `Gateway:Tiers` at all and
+only found out at the first quota resolution. Fixed by making each host's `AppSettings` an
+`IValidatableObject` that yields `CoreOptionsValidation.ValidateGateway(...)`, which reproduces the
+same errors and the same `Gateway.Member` paths. Recorded in CONVENTIONS so the next Core-owned
+section does not rediscover it.
+
+### D-015: The monthly reset honours `ResetDayOfMonth` by waking daily (#165)
+**Date:** 2026-09-02
+**Problem:** `SystemConfiguration[ResetDayOfMonth]` was seeded, listed by `GET /config` and
+validated on write (#161), and read by nothing at all — the exact dead-key failure mode #161's
+409 branch exists to prevent for the other two keys.
+**Decision:** Option 1 of #165 — honour it. `MonthlyQuotaResetFunction`'s cron is `0 1 0 * * *`
+(daily at 00:01 UTC) and `MonthlyResetJob` proceeds only when today is the configured day,
+defaulting to the 1st and falling back to it (with a Warning) for a value a calendar cannot honour.
+**Why:** Deriving the cron from the key is impossible — a `TimerTrigger` expression is fixed at
+deployment, so a config change would need a redeploy to take effect, which is the same dead key
+with extra steps. A daily tick costs one `SystemConfiguration` read on the ~29 days it does
+nothing, and it is safe because the reset is idempotent: the worst a bug in the gate can do is
+re-resolve allocations that were already correct. The gateway's own `token-quota` window is still
+a UTC calendar month regardless — this setting moves FoundryGate's mirror, not the gateway's
+counter, and the docs say so.
+
+### D-016: The usage sync writes no audit row for a pass that changed nothing
+**Date:** 2026-09-02 (#39/#84), amended in the #187 review
+**Decision:** `UsageSyncJob` writes its single `usage.synced` row when a `TokensUsed` value actually
+moved, or when the counts that describe a *problem* — unknown subscriptions, drift, developers with
+no allocation row — differ from the last recorded pass. Otherwise it logs at Debug and saves nothing.
+**Why:** The job runs every 15 minutes — 96 rows a day, ~35k a year, of "nothing happened" in the
+table the admin audit viewer pages through. That buries every real admin action behind noise, for a
+heartbeat Application Insights already provides.
+**Amendment (review of PR #187):** the first implementation gated on `usage.Count == 0 && updated == 0`,
+which does not work: the query returns month-to-date *totals*, so after the first request of the month
+`usage.Count` is never zero again and every tick wrote a row anyway — the reviewer reproduced five rows
+from five ticks with four no-ops. Two further corrections came out of fixing it. Gating on the raw
+problem counts instead would write a row every 15 minutes for as long as one unknown subscription
+existed (the same flood, differently caused), and gating on `updated` alone would silently swallow the
+first pass on which an admin's quota cut put someone over budget without their usage changing. Hence
+"differs from the last recorded pass", read back from the previous row's own details JSON — state we
+wrote ourselves, and anything unreadable is treated as different, so it fails towards recording.
+
+### D-017: The reconciliation KQL de-duplicates before it sums
+**Date:** 2026-09-02 (#187 review)
+**Problem:** `ApiManagementGatewayLlmLog` emits several entries per `CorrelationId` — request and
+response separately, plus one per 32 KB chunk of either — and the token columns are documented
+per *request* ("PromptTokens: The number of prompt tokens used by the request"), not per entry. The
+first query summed across the join, which multiplies a developer's usage by however many entries their
+requests happened to produce. Left in, it would also have made the architecture page's "these totals
+are a floor" caveat exactly backwards.
+**Decision:** collapse the LLM log to one row per `CorrelationId` with `max()` per token column before
+joining, and `distinct` the gateway-log side so a duplicate there cannot re-multiply.
+**Why `max()` rather than `arg_max(SequenceNumber, *)`:** max is right whether the counts repeat on
+every entry, appear only on the response entry, or appear only on the last one; `arg_max` is right only
+in the last case and picks a token-less entry whenever the highest sequence number belongs to a chunked
+request rather than the response. The one shape max would under-count — counts genuinely partitioned
+per chunk — is ruled out by the "used by the request" wording, and #178 verifies it against a live
+gateway before these numbers are trusted for billing.
+
+### D-018: A missed reset day is not a missed month
+**Date:** 2026-09-02 (#187 review)
+**Problem:** the gate was `today != configuredDay`, so one failed tick at 00:01 — a storage blip, a
+cold start that timed out, a deployment landing on the minute — lost the month's reset entirely, while
+three separate comments in the same files promised "the next tick retries".
+**Decision:** the gate is `today >= configuredDay && not yet reset this period`, where "already reset"
+is the existence of a `quota.monthly-reset` audit row inside the period's own date window. A late run
+logs a Warning naming the day it should have happened.
+**Why the audit row is the state:** it commits in the same transaction as the allocations it describes,
+so "the row exists" and "the reset committed" are the same fact — no separate marker to keep honest.
+The predicate is a date bound rather than a substring match on the details JSON (both come from the
+same `TimeProvider`, `OccurredDate` is indexed, and matching `"periodYear":2026` as text would break
+the day the serializer's formatting changed); the details still carry the period for human readers.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the

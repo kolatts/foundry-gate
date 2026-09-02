@@ -1,4 +1,4 @@
-using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Quota;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Quota;
@@ -8,7 +8,7 @@ using Imagile.Framework.Configuration.Exceptions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services.Quota;
+namespace FoundryGate.Tests.Predeployment.Core.Quota;
 
 /// <summary>
 /// The five-level precedence chain (#32), the upsert contract (preserve <c>TokensUsed</c>/<c>IsHardStopped</c>,

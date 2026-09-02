@@ -1,5 +1,5 @@
 using System.Globalization;
-using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Constants;
 
 namespace FoundryGate.Api.Services.Config;

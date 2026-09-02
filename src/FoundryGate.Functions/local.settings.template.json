@@ -1,0 +1,23 @@
+{
+  "_comment": [
+    "Copy this file to local.settings.json (which is gitignored) before running `func start`.",
+    "Everything a deployed Function App gets from infra/modules/control-plane.bicep, a local host",
+    "gets from here. Both timers run on their real schedules locally: the reset only acts on",
+    "SystemConfiguration[ResetDayOfMonth], and the usage sync no-ops with a warning while",
+    "Gateway__LogAnalyticsWorkspaceId is empty (there is no local Log Analytics to query).",
+    "Never put a real secret in local.settings.json — cloud secrets are Key Vault references."
+  ],
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+    "AZURE_FUNCTIONS_ENVIRONMENT": "local",
+    "DOTNET_ENVIRONMENT": "local",
+
+    "ConnectionStrings__FoundryGate": "Server=127.0.0.1,3433;Database=FoundryGate;User Id=sa;Password=Temp1234!;TrustServerCertificate=True",
+
+    "OpenTelemetry__Enabled": "false",
+
+    "Gateway__LogAnalyticsWorkspaceId": ""
+  }
+}

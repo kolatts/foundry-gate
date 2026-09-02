@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <AzureFunctionsVersion>v4</AzureFunctionsVersion>
@@ -6,15 +6,32 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Azure.Core" />
+    <PackageReference Include="Azure.Monitor.OpenTelemetry.Exporter" />
+    <PackageReference Include="Azure.Monitor.Query" />
+    <PackageReference Include="Azure.Security.KeyVault.Secrets" />
+    <PackageReference Include="Azure.Storage.Blobs" />
+    <PackageReference Include="Imagile.Framework.Configuration" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" />
+    <PackageReference Include="Microsoft.Azure.Functions.Worker.OpenTelemetry" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" />
+    <PackageReference Include="Microsoft.Extensions.Azure" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
   </ItemGroup>
 
   <ItemGroup>
     <None Update="host.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- appsettings.json ships the quota tier table (Gateway:Tiers) the same way the Api's does;
+         GatewayOptionsTiersTests fails if the two files or infra/main.bicep's quotaTiers drift. -->
+    <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- Gitignored (it is where a developer's local SQL password ends up); local.settings.template.json
+         is the checked-in copy to start from. -->
     <None Update="local.settings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>Never</CopyToPublishDirectory>
@@ -22,6 +39,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The reconciliation KQL is a real .kql file (editable, reviewable, runnable by hand in the
+         Log Analytics blade) embedded into the assembly, not a C# string literal — #84's acceptance
+         list asks for the query to be checked into the repo. -->
+    <EmbeddedResource Include="Kql\*.kql" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FoundryGate.Core\FoundryGate.Core.csproj" />
     <ProjectReference Include="..\FoundryGate.Data\FoundryGate.Data.csproj" />
     <ProjectReference Include="..\FoundryGate.Domain\FoundryGate.Domain.csproj" />
   </ItemGroup>

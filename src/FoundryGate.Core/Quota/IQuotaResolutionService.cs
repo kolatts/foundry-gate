@@ -1,6 +1,6 @@
 using FoundryGate.Domain.Quota;
 
-namespace FoundryGate.Api.Services.Quota;
+namespace FoundryGate.Core.Quota;
 
 /// <summary>
 /// The five-level quota resolution (spec &#167;3.2; issue #32) — the core business rule of FoundryGate —

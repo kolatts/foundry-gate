@@ -1,18 +1,25 @@
 using System.ComponentModel.DataAnnotations;
 using FoundryGate.Domain.Constants;
 
-namespace FoundryGate.Api.Configuration;
+namespace FoundryGate.Core.Configuration;
 
 /// <summary>
 /// Everything the control plane knows about the gateway data plane it manages, bound from the
-/// <c>Gateway</c> section (issue #108): ARM addressing set by infra on the Container App as
-/// <c>Gateway__SubscriptionId</c>, <c>Gateway__ResourceGroup</c>, <c>Gateway__ApimName</c>,
+/// <c>Gateway</c> section (issue #108): ARM addressing set by infra on the Container App
+/// <em>and</em> the Function App as <c>Gateway__SubscriptionId</c>, <c>Gateway__ResourceGroup</c>,
+/// <c>Gateway__ApimName</c>, <c>Gateway__LogAnalyticsWorkspaceId</c>,
 /// <c>Gateway__KeyEncryptionKeyUri</c>, <c>Gateway__FoundryAccountNames__{i}</c>, …
 /// (infra/modules/control-plane.bicep is the source of truth for the key names) so nobody types
 /// ARM resource ids into <c>SystemConfiguration</c> by hand — and the quota <see cref="Tiers"/>
 /// (<c>Gateway:Tiers</c>, issue #32 / D-013), which every allocation is resolved against.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Lives in Core, not the Api (#119): both hosts bind this same section — the Api for the APIM key
+/// service and Foundry deployments, the Functions host for quota resolution's tier table and the
+/// reconciliation workspace — and one section deserves one class. Each host's own
+/// <c>Configuration/AppSettings.cs</c> carries a <c>Gateway</c> property of this type.
+/// </para>
 /// <para>
 /// The <em>addressing</em> members are optional as a whole: absent locally, where there is no
 /// gateway to manage — features that need them (<c>/foundry/*</c>, <c>/keys/*</c>) fail with a clear
@@ -71,10 +78,27 @@ public class GatewayOptions : IValidatableObject
     /// of the RSA key that wraps APIM subscription keys before they are stored (#95;
     /// <c>Gateway__KeyEncryptionKeyUri</c>). Versionless so a Key Vault key rotation needs no redeploy —
     /// the key protector resolves the current version per wrap and each stored envelope records the
-    /// version that wrapped it. Required when <see cref="KeyProtectionOptions.Provider"/> is
-    /// <see cref="KeyProtectionProviderType.KeyVault"/> (checked at startup by the key protector factory).
+    /// version that wrapped it. Required when the Api's <c>KeyProtection:Provider</c> is
+    /// <c>KeyVault</c> (checked at startup by the key protector factory).
     /// </summary>
     public string? KeyEncryptionKeyUri { get; set; }
+
+    /// <summary>
+    /// The Log Analytics workspace <b>GUID</b> — what the query API calls the "workspace id"
+    /// (<c>Gateway__LogAnalyticsWorkspaceId</c>, from the workspace's <c>properties.customerId</c>;
+    /// <c>infra/modules/monitoring.bicep</c>). This is the value
+    /// <c>LogsQueryClient.QueryWorkspaceAsync</c> takes, and the only gateway setting the usage
+    /// reconciliation job (#39/#84) needs: absent, the job logs and no-ops rather than failing the host,
+    /// because a fork without the GenAI diagnostic setting has nothing to reconcile against.
+    /// </summary>
+    public string? LogAnalyticsWorkspaceId { get; set; }
+
+    /// <summary>
+    /// ARM resource id of the same workspace (<c>Gateway__LogAnalyticsWorkspaceResourceId</c>) — for
+    /// <c>QueryResourceAsync</c> and anything management-plane. Bound so nothing has to reconstruct it;
+    /// nothing reads it yet.
+    /// </summary>
+    public string? LogAnalyticsWorkspaceResourceId { get; set; }
 
     /// <summary>
     /// Foundry (Cognitive Services <c>AIServices</c>) account names in APIM backend-pool order —
@@ -101,6 +125,13 @@ public class GatewayOptions : IValidatableObject
         !string.IsNullOrWhiteSpace(SubscriptionId)
         && !string.IsNullOrWhiteSpace(ResourceGroup)
         && !string.IsNullOrWhiteSpace(ApimName);
+
+    /// <summary>
+    /// <see langword="true"/> when the usage reconciliation job (#39/#84) has a workspace to query.
+    /// Nothing else is needed: the Log Analytics query API is addressed by workspace GUID, and the
+    /// Functions identity's Log Analytics Reader assignment is what authorizes it.
+    /// </summary>
+    public bool IsUsageReconciliationConfigured => !string.IsNullOrWhiteSpace(LogAnalyticsWorkspaceId);
 
     /// <summary>
     /// <see langword="true"/> when Foundry deployment management can address ARM: subscription,
@@ -174,6 +205,16 @@ public class GatewayOptions : IValidatableObject
             yield return new ValidationResult(
                 $"{nameof(KeyEncryptionKeyUri)} must be an absolute https URI of a Key Vault key.",
                 [nameof(KeyEncryptionKeyUri)]);
+        }
+
+        // The query API takes the workspace GUID, not the ARM id — the single most likely thing to get
+        // wrong when wiring the two by hand, and it would fail 15 minutes later inside a timer trigger
+        // rather than at startup. A GUID is cheap to check, so check it.
+        if (!string.IsNullOrWhiteSpace(LogAnalyticsWorkspaceId) && !Guid.TryParse(LogAnalyticsWorkspaceId, out _))
+        {
+            yield return new ValidationResult(
+                $"{nameof(LogAnalyticsWorkspaceId)} must be the workspace GUID (its properties.customerId), not the ARM resource id — that one is {nameof(LogAnalyticsWorkspaceResourceId)}.",
+                [nameof(LogAnalyticsWorkspaceId)]);
         }
 
         // A malformed gateway URL is worth refusing to start over: every developer's CLI config would
