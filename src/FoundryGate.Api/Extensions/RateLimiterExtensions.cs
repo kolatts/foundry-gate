@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Threading.RateLimiting;
+using FoundryGate.Api.Configuration;
 using FoundryGate.Domain.Constants;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -39,6 +40,12 @@ namespace FoundryGate.Api.Extensions;
 /// credential to a token thief.
 /// </para>
 /// <para>
+/// <b>The numbers are configuration</b> (<c>Security:RateLimits</c>, #181), defaulting to the values
+/// that shipped as constants: 5 reveals and 3 rotations per minute. A limiter is also only half the
+/// answer — a patient drain stays inside the cap, which is what the reveal anomaly signal (#180) is
+/// for.
+/// </para>
+/// <para>
 /// <b>Rejection is a ProblemDetails 429 with <c>Retry-After</c></b>, so the body matches every other
 /// error the API produces (CONVENTIONS.md: one exception handler, ProblemDetails everywhere) and a
 /// client can back off without parsing prose. The window is fixed rather than sliding: a fixed window
@@ -52,45 +59,34 @@ public static class RateLimiterExtensions
     private const string AnonymousPartitionKey = "anonymous";
 
     /// <summary>
-    /// The window both policies count within. Constants rather than configuration for now — #181 moves
-    /// them to the options pattern so a fork can retune them without recompiling — and a limiter is only
-    /// half the answer: a patient drain stays inside the cap, which is what the reveal anomaly signal in
-    /// #180 is for.
-    /// </summary>
-    private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
-
-    /// <summary>
-    /// Reveals allowed per <see cref="Window"/> per user. The UI reveals at most once per page load;
-    /// five leaves room for a developer flipping between tabs and still cuts a scripted drain down to a
-    /// rate an audit review would catch.
-    /// </summary>
-    private const int RevealsPerWindow = 5;
-
-    /// <summary>
-    /// Rotations allowed per <see cref="Window"/> per user. Lower than reveal because rotation is a
-    /// write the gateway feels: each call regenerates both APIM keys and breaks whatever the developer
-    /// has configured, so nobody legitimately needs a fourth in a minute.
-    /// </summary>
-    private const int RotationsPerWindow = 3;
-
-    /// <summary>
     /// Registers <see cref="RateLimitPolicyNames.KeyReveal"/> and
     /// <see cref="RateLimitPolicyNames.KeyRotate"/> as fixed-window policies partitioned on the caller's
     /// <c>oid</c>. Nothing is limited globally: a policy applies only where an action carries
     /// <c>[EnableRateLimiting]</c>.
     /// </summary>
-    public static IServiceCollection AddFoundryGateRateLimiter(this IServiceCollection services)
+    /// <param name="services">The host's service collection.</param>
+    /// <param name="limits">
+    /// <c>Security:RateLimits</c> — permit counts and window per policy (#181). Read once here rather
+    /// than resolved per request: the limiter partitions are built from these values and live for the
+    /// process, so a change needs a restart, which is what the options pattern gives anyway.
+    /// </param>
+    public static IServiceCollection AddFoundryGateRateLimiter(this IServiceCollection services, KeyRateLimitOptions limits)
     {
         ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(limits);
 
         return services.AddRateLimiter(options =>
         {
-            options.AddPolicy(RateLimitPolicyNames.KeyReveal, httpContext => PerUser(httpContext, RevealsPerWindow));
-            options.AddPolicy(RateLimitPolicyNames.KeyRotate, httpContext => PerUser(httpContext, RotationsPerWindow));
+            options.AddPolicy(RateLimitPolicyNames.KeyReveal, httpContext => PerUser(httpContext, limits.Reveal));
+            options.AddPolicy(RateLimitPolicyNames.KeyRotate, httpContext => PerUser(httpContext, limits.Rotate));
 
             options.OnRejected = async (context, cancellationToken) =>
             {
-                var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var window) ? window : Window;
+                // The lease reports the policy's own window; the fallback only matters for a lease that
+                // carries no metadata, and the two policies may now be configured differently, so it is
+                // the longer of the two rather than a third number nobody set.
+                var fallback = limits.Reveal.Window > limits.Rotate.Window ? limits.Reveal.Window : limits.Rotate.Window;
+                var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var window) ? window : fallback;
 
                 // The caller is told "tell an administrator"; this is what tells the administrator. A
                 // rejection is expected traffic shaping rather than a fault, so Information — but it
@@ -133,7 +129,7 @@ public static class RateLimiterExtensions
     /// moment later, and sharing one bucket between all of them is how a scanner denies everyone else
     /// their 401).
     /// </summary>
-    private static RateLimitPartition<string> PerUser(HttpContext httpContext, int permitLimit)
+    private static RateLimitPartition<string> PerUser(HttpContext httpContext, RateLimitPolicyOptions policy)
     {
         // GetObjectId() accepts both the short "oid" and the long objectidentifier claim type, the same
         // way ICurrentUserAccessor does, so the partition key is the identity the audit trail and the
@@ -146,8 +142,8 @@ public static class RateLimiterExtensions
                 entraObjectId,
                 _ => new FixedWindowRateLimiterOptions
                 {
-                    PermitLimit = permitLimit,
-                    Window = Window,
+                    PermitLimit = policy.PermitLimit,
+                    Window = policy.Window,
 
                     // No queue: a caller past the limit should be told so immediately, not held on a socket.
                     QueueLimit = 0,

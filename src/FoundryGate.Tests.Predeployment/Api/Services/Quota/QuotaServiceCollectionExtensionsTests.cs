@@ -1,7 +1,8 @@
 using FoundryGate.Api.Configuration;
-using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
+using FoundryGate.Data.Audit;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -10,7 +11,7 @@ namespace FoundryGate.Tests.Predeployment.Api.Services.Quota;
 /// <summary>
 /// <see cref="QuotaServiceCollectionExtensions.AddQuotaServices"/>'s one conditional registration
 /// (#118): the real gateway tier sync only where there is a gateway to talk to, and never a singleton
-/// (it composes the scoped key service).
+/// (it composes the scoped audit writer and the scoped actor seam).
 /// </summary>
 public class QuotaServiceCollectionExtensionsTests
 {
@@ -56,9 +57,11 @@ public class QuotaServiceCollectionExtensionsTests
         services.AddLogging();
         services.AddSingleton(new AppSettings { Gateway = gateway });
 
-        // The APIM tier sync composes IApimKeyService; a fake stands in for the whole keys area so this
-        // test is about the selection rule, not about the key service's own dependency graph.
-        services.AddScoped<IApimKeyService, NeverCalledApimKeyService>();
+        // The APIM tier sync composes the management client, the audit writer and the actor seam; fakes
+        // stand in for all three so this test is about the selection rule, not about their own graphs.
+        services.AddSingleton<IApimManagementClient>(new FakeApimManagementClient());
+        services.AddScoped<IAuditWriter, NeverCalledAuditWriter>();
+        services.AddScoped<IGatewayTierSyncActor>(_ => new FixedGatewayTierSyncActor(null));
         services.AddQuotaServices();
 
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });

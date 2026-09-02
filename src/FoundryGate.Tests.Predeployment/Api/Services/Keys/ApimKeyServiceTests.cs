@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Security.Claims;
+using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
@@ -32,6 +34,7 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
     private readonly FakeApimManagementClient _apim = new();
     private readonly CapturingLoggerProvider _logs = new();
     private readonly DataProtectionKeyProtector _protector = new(new EphemeralDataProtectionProvider());
+
 
     [Fact]
     public async Task Provision_creates_the_subscription_under_the_tier_product_and_stores_only_ciphertext()
@@ -662,61 +665,87 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task MoveToProduct_rescopes_the_subscription_and_audits_before_and_after()
+    public async Task Reveals_below_the_anomaly_threshold_leave_no_anomaly_row()
     {
-        var (service, _) = await CreateServiceAsync();
-        var developer = await SeedUserAsync("Dev", "d@contoso.test");
-        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
-        var name = ApimSubscriptionNames.ForUser(developer.UserId);
-        var keysBefore = _apim.KeysOf(name);
-
-        await service.MoveToProductAsync(developer, GatewayTiers.Unlimited, CancellationToken.None);
-
-        Assert.Equal("unlimited", _apim.ProductOf(name));
-        Assert.Equal(keysBefore, _apim.KeysOf(name)); // keys untouched by a tier move
-
-        // The row is added, not saved (#156 review): this runs inside quota resolution, in the middle of
-        // a caller's unit of work, so saving here would commit that caller's half-finished mutation.
-        Assert.Contains(Context.ChangeTracker.Entries<AuditLog>(), e => e.Entity.Action == AuditActions.KeyTierChanged && e.State == EntityState.Added);
-        _ = await Context.SaveChangesAsync();
-
-        var audit = await SingleAuditAsync(AuditActions.KeyTierChanged, developer.UserId);
-        Assert.Contains("\"before\":\"standard\"", audit.Details, StringComparison.Ordinal);
-        Assert.Contains("\"after\":\"unlimited\"", audit.Details, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task MoveToProduct_to_the_current_product_is_a_no_op()
-    {
-        var (service, _) = await CreateServiceAsync();
+        var (service, _) = await CreateServiceAsync(TestSecurityOptions.RevealAnomaly(threshold: 3));
         var developer = await SeedUserAsync("Dev", "d@contoso.test");
         _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
 
-        await service.MoveToProductAsync(developer, "STANDARD", CancellationToken.None);
+        _ = await service.RevealAsync(developer, CancellationToken.None);
+        _ = await service.RevealAsync(developer, CancellationToken.None);
 
-        Assert.DoesNotContain(_apim.Calls, call => call.StartsWith("UpdateScope:", StringComparison.Ordinal));
-        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyTierChanged).ToListAsync());
+        Assert.Empty(await AnomalyRowsAsync(developer));
+        Assert.DoesNotContain(_logs.Entries, entry => entry.Contains("has been revealed", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task MoveToProduct_without_a_key_throws_KeyNotFound_and_with_a_bad_tier_throws_Argument()
+    public async Task The_reveal_that_reaches_the_threshold_warns_and_writes_one_anomaly_row_per_window()
     {
-        var (service, _) = await CreateServiceAsync();
-        var developer = await SeedUserAsync("Dev", "d@contoso.test");
-
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.MoveToProductAsync(developer, GatewayTiers.Power, CancellationToken.None));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => service.MoveToProductAsync(developer, "gold", CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task MoveToProduct_when_the_subscription_vanished_throws_Conflict()
-    {
-        var (service, _) = await CreateServiceAsync();
+        // A limiter stops a fast drain; four reveals a minute, every minute, stays inside the cap and is
+        // not something a human does (#180). The threshold counts the reveal being served, whose own row
+        // is on the change tracker rather than in the table.
+        var (service, admin) = await CreateServiceAsync(TestSecurityOptions.RevealAnomaly(threshold: 3, windowMinutes: 60));
         var developer = await SeedUserAsync("Dev", "d@contoso.test");
         _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
-        Assert.True(_apim.Remove(ApimSubscriptionNames.ForUser(developer.UserId)));
 
-        await Assert.ThrowsAsync<ConflictException>(() => service.MoveToProductAsync(developer, GatewayTiers.Power, CancellationToken.None));
+        for (var i = 0; i < 3; i++)
+        {
+            _ = await service.RevealAsync(developer, CancellationToken.None);
+        }
+
+        var row = Assert.Single(await AnomalyRowsAsync(developer));
+        Assert.Equal(admin.UserId, row.ActorUserId);
+        Assert.Contains("\"revealCount\":3", row.Details, StringComparison.Ordinal);
+        Assert.Contains("\"threshold\":3", row.Details, StringComparison.Ordinal);
+        Assert.Contains("\"windowMinutes\":60", row.Details, StringComparison.Ordinal);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("has been revealed 3 times", StringComparison.Ordinal));
+
+        // Once per window: a drain past the threshold must not write an anomaly row per reveal, which
+        // would bury the reveals themselves in the trail.
+        _ = await service.RevealAsync(developer, CancellationToken.None);
+        _ = await service.RevealAsync(developer, CancellationToken.None);
+
+        Assert.Single(await AnomalyRowsAsync(developer));
+        Assert.Equal(5, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.KeyRevealed));
+    }
+
+    [Fact]
+    public async Task The_window_rolls_so_a_drain_that_carries_on_is_reported_again_and_an_old_one_is_forgotten()
+    {
+        var (service, _) = await CreateServiceAsync(TestSecurityOptions.RevealAnomaly(threshold: 2, windowMinutes: 60));
+        var developer = await SeedUserAsync("Dev", "d@contoso.test");
+        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+
+        _ = await service.RevealAsync(developer, CancellationToken.None);
+        _ = await service.RevealAsync(developer, CancellationToken.None);
+        Assert.Single(await AnomalyRowsAsync(developer));
+
+        // Two hours later nothing inside the window has happened, so the next reveal is on its own and
+        // says nothing...
+        _timeProvider.Advance(TimeSpan.FromHours(2));
+        _ = await service.RevealAsync(developer, CancellationToken.None);
+        Assert.Single(await AnomalyRowsAsync(developer));
+
+        // ...and the one after it crosses the threshold again, which is correct: it is still happening.
+        _ = await service.RevealAsync(developer, CancellationToken.None);
+        Assert.Equal(2, (await AnomalyRowsAsync(developer)).Count);
+    }
+
+    [Fact]
+    public async Task One_developers_drain_never_raises_an_anomaly_for_another()
+    {
+        var (service, _) = await CreateServiceAsync(TestSecurityOptions.RevealAnomaly(threshold: 2));
+        var noisy = await SeedUserAsync("Noisy", "noisy@contoso.test");
+        var quiet = await SeedUserAsync("Quiet", "quiet@contoso.test");
+        _ = await service.ProvisionAsync(noisy, GatewayTiers.Standard, CancellationToken.None);
+        _ = await service.ProvisionAsync(quiet, GatewayTiers.Standard, CancellationToken.None);
+
+        _ = await service.RevealAsync(noisy, CancellationToken.None);
+        _ = await service.RevealAsync(noisy, CancellationToken.None);
+        _ = await service.RevealAsync(quiet, CancellationToken.None);
+
+        Assert.Single(await AnomalyRowsAsync(noisy));
+        Assert.Empty(await AnomalyRowsAsync(quiet));
     }
 
     [Fact]
@@ -760,7 +789,6 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
         var revealed = await service.RevealAsync(developer, CancellationToken.None);
         var rotated = await service.RotateAsync(developer, CancellationToken.None);
         var secondaryAfterRotate = _apim.KeysOf(name).SecondaryKey;
-        await service.MoveToProductAsync(developer, GatewayTiers.Power, CancellationToken.None);
         _ = await service.RevokeAsync(developer, CancellationToken.None);
 
         string[] secrets = [provisioned.PlaintextKey, revealed.PlaintextKey, rotated.PlaintextKey, secondaryAfterProvision, secondaryAfterRotate];
@@ -775,8 +803,12 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
         }
     }
 
-    /// <summary>Wires the real accessor + audit path over this test's context as the DI container would per request, acting as a seeded admin.</summary>
-    private async Task<(ApimKeyService Service, User Admin)> CreateServiceAsync()
+    /// <summary>
+    /// Wires the real accessor + audit path over this test's context as the DI container would per
+    /// request, acting as a seeded admin. <paramref name="revealAnomaly"/> defaults to the shipped
+    /// ten-an-hour, which no test here comes near unless it says so (#180).
+    /// </summary>
+    private async Task<(ApimKeyService Service, User Admin)> CreateServiceAsync(RevealAnomalyOptions? revealAnomaly = null)
     {
         var admin = await SeedUserAsync("Ada Admin", "ada@contoso.test");
         var identity = new ClaimsIdentity(
@@ -788,7 +820,7 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
         var writer = new AuditWriter(Context, _timeProvider);
         var audit = new AuditService(Context, writer, accessor);
 
-        var service = new ApimKeyService(Context, _apim, _protector, audit, writer, accessor, _timeProvider, _logs.CreateLogger<ApimKeyService>());
+        var service = new ApimKeyService(Context, _apim, _protector, audit, writer, accessor, revealAnomaly ?? TestSecurityOptions.RevealAnomaly(), _timeProvider, _logs.CreateLogger<ApimKeyService>());
         return (service, admin);
     }
 
@@ -798,7 +830,7 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(null), Context);
         var writer = new AuditWriter(Context, _timeProvider);
         var audit = new AuditService(Context, writer, accessor);
-        return new ApimKeyService(Context, _apim, _protector, audit, writer, accessor, _timeProvider, _logs.CreateLogger<ApimKeyService>());
+        return new ApimKeyService(Context, _apim, _protector, audit, writer, accessor, TestSecurityOptions.RevealAnomaly(), _timeProvider, _logs.CreateLogger<ApimKeyService>());
     }
 
     private async Task<User> SeedUserAsync(string displayName, string email, bool isActive = true)
@@ -820,5 +852,15 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
         var targetId = userId.ToString(CultureInfo.InvariantCulture);
         return await Context.AuditLogs.AsNoTracking()
             .SingleAsync(a => a.Action == action && a.TargetType == AuditTargetTypes.ApiKey && a.TargetId == targetId);
+    }
+
+    /// <summary>Every <c>key.reveal-anomaly</c> row written for <paramref name="user"/>, oldest first.</summary>
+    private async Task<List<AuditLog>> AnomalyRowsAsync(User user)
+    {
+        var targetId = user.UserId.ToString(CultureInfo.InvariantCulture);
+        return await Context.AuditLogs.AsNoTracking()
+            .Where(a => a.Action == AuditActions.KeyRevealAnomaly && a.TargetType == AuditTargetTypes.ApiKey && a.TargetId == targetId)
+            .OrderBy(a => a.AuditLogId)
+            .ToListAsync();
     }
 }

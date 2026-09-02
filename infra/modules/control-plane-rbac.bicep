@@ -17,6 +17,17 @@
 //   Key Vault Secrets User
 //   Log Analytics Reader             (workspace) reconciliation reads
 //                                    ApiManagementGatewayLlmLog (#84)
+//   API Management Service Contributor (APIM instance)
+//                                    re-scope a developer's subscription to another tier product
+//                                    when the monthly reset resolves a new tier (#194). A
+//                                    deliberate widening: this identity previously could not
+//                                    change anything at the gateway, and the role Azure offers is
+//                                    the same broad one the API holds — it also permits creating
+//                                    and deleting subscriptions and editing named values. The
+//                                    trade is against the alternative, which is a reset that moves
+//                                    a developer's budget in SQL while the gateway keeps enforcing
+//                                    the old product until the API next touches them (#193). See
+//                                    docs-site reference/infrastructure.
 //   Storage Blob Data Owner          Functions host state + Flex deployment container
 //   Storage Queue Data Contributor   queue triggers/outputs (CONVENTIONS.md typed queues)
 //   Storage Table Data Contributor   table bindings
@@ -154,6 +165,19 @@ resource functionsLogAnalyticsReader 'Microsoft.Authorization/roleAssignments@20
   scope: workspace
   properties: {
     roleDefinitionId: roleId(roles.logAnalyticsReader)
+    principalId: functionsPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// #194: the monthly reset moves a developer's APIM subscription to the tier product their quota
+// resolved to, instead of logging that SQL and the gateway now disagree. Same role and same scope as
+// the API's assignment above — Azure has no narrower built-in for "re-scope a subscription".
+resource functionsApimContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(apim.id, functionsPrincipalId, roles.apimServiceContributor)
+  scope: apim
+  properties: {
+    roleDefinitionId: roleId(roles.apimServiceContributor)
     principalId: functionsPrincipalId
     principalType: 'ServicePrincipal'
   }

@@ -1,18 +1,28 @@
-namespace FoundryGate.Api.Services.Keys;
+namespace FoundryGate.Core.Gateway;
 
 /// <summary>
 /// The thin seam over the APIM management plane (<c>Azure.ResourceManager.ApiManagement</c>) for
-/// subscription lifecycle: exactly the seven operations <see cref="ApimKeyService"/> needs, in
+/// subscription lifecycle: exactly the seven operations the control plane needs, in
 /// FoundryGate's vocabulary (subscription <em>name</em> = <c>foundrygate-{UserId}</c>, product =
-/// quota-tier id), so the key service is testable with an in-memory fake and the ARM SDK's resource
+/// quota-tier id), so its callers are testable with an in-memory fake and the ARM SDK's resource
 /// graph stays in one class (<see cref="ArmApimManagementClient"/>). No live Azure in tests.
 /// </summary>
 /// <remarks>
+/// <para>
+/// Lives in <c>FoundryGate.Core</c>, not the Api (#194): two hosts need it. The Api composes it into
+/// <c>ApimKeyService</c> (provision / rotate / reveal / revoke, plus key protection); the Functions
+/// host needs only <see cref="UpdateScopeAsync"/>, so that the monthly reset can move a developer's
+/// subscription to the tier product their quota resolved to instead of logging that it could not
+/// (<see cref="Quota.ApimGatewayTierSync"/>). Nothing here touches key <em>protection</em> — that
+/// stays in the Api, which is the only host that stores or reveals a developer's key.
+/// </para>
+/// <para>
 /// Error contract: a subscription that does not exist is <see langword="null"/> from
 /// <see cref="GetSubscriptionAsync"/>, <see langword="false"/> from <see cref="DeleteSubscriptionAsync"/>,
 /// and <see cref="ApimSubscriptionNotFoundException"/> from every operation that needs it to exist.
 /// Other ARM failures (auth, throttling, 5xx) surface as <c>Azure.RequestFailedException</c> — an
 /// unmapped 500 for the caller, which is correct: they are operational faults, not caller errors.
+/// </para>
 /// </remarks>
 public interface IApimManagementClient
 {

@@ -42,10 +42,17 @@ return.
 The response carries `quota` (the same shape as `/quota/allocations/me`), `apiKey` (masked to the
 last four characters — the plaintext only ever comes from `/keys/*`), and `cliConfig`:
 `gatewayBaseUrl` (the gateway origin, empty on a host with no gateway configured),
-`anthropicBasePath` (`/anthropic`), `openAiBasePath` (`/openai/v1`), and `modelAliases` — currently
-always empty, because the alias map lives only in the gateway's Bicep
-([#153](https://github.com/kolatts/foundry-gate/issues/153)); use
-[CLI setup](/foundry-gate/getting-started/cli-setup/) for model names until it lands.
+`anthropicBasePath` (`/anthropic`), `openAiBasePath` (`/openai/v1`), and `modelAliases`.
+
+`modelAliases` is **filtered to the caller's own tier product** — the aliases their subscription is
+actually allowed to name, each with the deployment it currently resolves to and its provider
+(`Anthropic` / `OpenAi`), ordered by alias. The gateway's alias map is also its allowlist, so a model
+another tier can use would answer `403 model_not_permitted` for this developer; listing it would be
+worse than saying nothing. Infra feeds the map to the control plane as `Gateway__ModelAliases__*`
+from the same `productModelAliases` object that becomes gateway policy, so the two cannot drift
+([#153](https://github.com/kolatts/foundry-gate/issues/153)). On a host where that is not set — a
+fork on an older deploy, or local development — the list is empty and
+[CLI setup](/foundry-gate/getting-started/cli-setup/) is where the model names are.
 
 **Two tabs are not an error.** When two first logins for the same identity arrive together, both find
 no row and both provision; `Users.EntraObjectId` is unique, so the loser's insert fails, its whole
@@ -362,8 +369,8 @@ transitions whose body is not the resource, matching `POST /users/{id}/activate`
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/keys/me` | Any | Own key info (masked, last 4 visible; `isProvisioned: false` when none). Served from a stored hint — no decryption |
-| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. Rate-limited: **5 per minute per user**. `404` when no key; `429` over the limit |
-| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. Rate-limited: **3 per minute per user**. `404` no key; `409` if the APIM subscription vanished; `429` over the limit |
+| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. Rate-limited: **5 per minute per user** by default (`Security:RateLimits:Reveal`). `404` when no key; `429` over the limit |
+| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. Rate-limited: **3 per minute per user** by default (`Security:RateLimits:Rotate`). `404` no key; `409` if the APIM subscription vanished; `429` over the limit |
 | `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key (same semantics) |
 | `POST` | `/keys/{userId}/provision` | Admin | Provision a key for an active user with none, under the tier **their quota resolves to** (no `?tier=`: a budget *is* a tier, so set the quota to change the product). Returns plaintext once. `409` key exists or user deactivated; reuses an orphaned APIM subscription with fresh keys |
 | `DELETE` | `/keys/{userId}` | Admin | Revoke key only: APIM subscription deleted, stored key cleared, `key.revoked` audited. **User stays active** and can be re-provisioned; `204` even when no key existed. Deactivation is `POST /users/{id}/deactivate` |
@@ -371,6 +378,21 @@ transitions whose body is not the resource, matching `POST /users/{id}/activate`
 Callers of every `/keys/me` route must already have a FoundryGate user row (`GET /users/me` provisions one) — otherwise `403`. The plaintext key is stored encrypted (Key Vault RSA key wrapping; see [Configuration](/reference/configuration/)) and appears in exactly one response per mint or reveal. Provisioning is race-safe: two concurrent `provision` calls for one user cannot both mint — the second gets `409`.
 
 **Rate limits on the `/me` routes.** Reveal hands back the plaintext credential and rotate mints a new one, so a leaked bearer token could otherwise replay either indefinitely with nothing to show for it but a growing run of `key.revealed` audit rows. Both are capped per **caller identity** (the token's `oid`, not the caller's IP address — the UI sits behind a shared egress, so an address limit would throttle a whole office or nobody): 5 reveals and 3 rotations per minute. Over the limit is a `429` with a `Retry-After` header and the usual ProblemDetails body. The admin routes (`/keys/{userId}/rotate`, `/keys/{userId}/provision`, `DELETE /keys/{userId}`) are deliberately uncapped: an admin rotating a compromised team's keys is exactly the traffic a limit would get in the way of, and none of them discloses the caller's own credential.
+
+The numbers are **configuration**, not constants: `Security:RateLimits:Reveal` and
+`Security:RateLimits:Rotate` each carry a `PermitLimit` and a `WindowSeconds`, defaulting to exactly
+the values above, so a fork whose developers work differently retunes them without recompiling
+([#181](https://github.com/kolatts/foundry-gate/issues/181)). Both are validated at startup.
+
+**The anomaly signal.** A limiter stops a *fast* drain and does nothing about a patient one — four
+reveals a minute, every minute, is well inside the cap and is not something a human does. So the
+reveal that pushes a key past `Security:RevealAnomaly:Threshold` (default **10**) inside
+`Security:RevealAnomaly:WindowMinutes` (default **60**) logs a Warning and writes a
+**`key.reveal-anomaly`** audit row alongside the `key.revealed` row that triggered it, carrying the
+count, the threshold and the window. It is written **once per window** — a continuing drain is
+reported again after the window rolls, which is correct, but every reveal does not get its own row.
+The developer's request still succeeds: this is a signal for whoever reads the trail, not a second
+limit ([#180](https://github.com/kolatts/foundry-gate/issues/180)).
 
 **Rotation is committed once APIM has regenerated.** The developer's old key is dead the instant the gateway accepts the regeneration of the *primary*, so everything after that point — reading the new key back, storing it, the `key.rotated` audit row — completes even if the client disconnects. A rotation that fails after that point restores the previous stored values, logs at Error and writes a `key.rotation-failed` row naming the remedy (rotate again, or revoke and re-provision), rather than leaving a key nobody can decrypt. A request abandoned *during* that regeneration gets the same row, marked `regenerationConfirmed: false` — the gateway never said whether it acted, so the stored key is possibly rather than definitely stale.
 
@@ -389,15 +411,17 @@ The gateway runs one Azure AI Foundry account per region (`Gateway__FoundryAccou
 | `GET` | `/foundry/deployments` | Admin | Every deployment in every configured account (account, name, model format/name/version, SKU, capacity in thousands of TPM, provisioning state, created/modified). Primary account first, then by name. Always live (no cache). |
 | `GET` | `/foundry/deployments/{accountName}/{deploymentName}` | Admin | One deployment — poll this after a create until `provisioningState` is `Succeeded`. |
 | `POST` | `/foundry/deployments` | Admin | Create one **OpenAI-format** deployment in one account. Body: `accountName`, `deploymentName`, `modelFormat` (`OpenAI`; default), `modelName`, `modelVersion`, `skuName`, `capacity` (thousands of TPM). `201` + `Location`; the body reflects ARM's initial state (usually `Creating`). |
+| `PATCH` | `/foundry/deployments/{accountName}/{deploymentName}/capacity` | Admin | Rebalance one **OpenAI-format** deployment's TPM in place. Body: `{ "capacity": 25 }` (thousands of TPM, `1`–`100000`). `200` with the deployment as ARM reported it on acceptance; `404` unknown account or deployment; `400` out of range or Anthropic-format. Asking for the capacity it already has is a no-op. |
 | `DELETE` | `/foundry/deployments/{accountName}/{deploymentName}` | Admin | Delete one **OpenAI-format** deployment (`204`). Never recreates. In-flight requests pinned to the name get the backend's 404 once ARM finishes. |
 
 Rules the mutation paths enforce (CLAUDE.md "Anthropic deployments are create-once"; decision log E-006/E-007):
 
 - **An existing name is `409 Conflict`** — the API checks first and never re-PUTs an existing deployment. Replace an OpenAI deployment by deleting it and creating it again, as two explicit, audited actions.
 - **Anthropic is `400 Bad Request` on both create and delete** (`modelFormat: Anthropic` in the body; an existing deployment whose ARM `model.format` is `Anthropic` on delete). Claude deployments are the infrastructure deploy's (#126 tracks lifting this).
+- **Capacity is the one thing that changes in place.** `PATCH .../capacity` is ARM's `Deployments_Update`, whose request body schema is `{ sku, tags }` — there is no `model` field and no `modelProviderData` field, so it *structurally cannot* re-send the model. That is what makes it a different operation from the `CreateOrUpdate` PUT the create-once rule is about, and why a resize needs no delete-and-recreate. It is still refused for **Anthropic** deployments with a `400`: the argument above is sound but has never been run against a live Claude deployment, and E-007 is what happens when a Claude write is assumed rather than observed ([#205](https://github.com/kolatts/foundry-gate/issues/205) is the live check that lifts it).
 - An `accountName` that is not one of the gateway's configured accounts is `400` on create and `404` on read/delete. A configured account that Azure does **not** have is `503 Service Unavailable — feature not configured` on the admin paths (the message names the account, never the resource group); `/foundry/models` skips it.
 - **`503 Service Unavailable — feature not configured`** on every `/foundry/*` route when the `Gateway__*` section is absent (local dev without a gateway). The `detail` names the keys to set, so the UI can tell "not set up" from "broken".
-- Every create and delete writes an audit entry (`foundry.deployment.created` / `foundry.deployment.deleted`, target type `FoundryDeployment`, target id `{accountName}/{deploymentName}`). The admin must have loaded the app once (`GET /users/me`) so the entry has an actor — otherwise the mutation is refused (`403`) before Azure is touched. Once Azure has accepted the change, the audit entry is written regardless of the client disconnecting.
+- Every create, delete and capacity change writes an audit entry (`foundry.deployment.created` / `foundry.deployment.deleted` / `foundry.deployment.capacity-changed`, target type `FoundryDeployment`, target id `{accountName}/{deploymentName}`; the capacity row carries `{ before, after }`). The admin must have loaded the app once (`GET /users/me`) so the entry has an actor — otherwise the mutation is refused (`403`) before Azure is touched. Once Azure has accepted the change, the audit entry is written regardless of the client disconnecting.
 
 ### `GET /foundry/catalog`
 

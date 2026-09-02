@@ -204,6 +204,7 @@ public class QuotaResetServiceTests : InMemoryDatabaseTest
         return new QuotaResetService(
             Context,
             resolution,
+            _tierSync,
             new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance),
             auditWriter,
             _clock,

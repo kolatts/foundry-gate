@@ -23,7 +23,7 @@ namespace FoundryGate.Api.Services.Foundry;
 /// <list type="bullet">
 /// <item><description><see cref="CreateDeploymentAsync"/> checks for an existing deployment of the same name first and throws <see cref="Domain.Exceptions.ConflictException"/> (409). The SDK call is PUT-shaped (<c>CreateOrUpdate</c>); the API never reaches the PUT with an existing name.</description></item>
 /// <item><description><see cref="CreateDeploymentAsync"/> and <see cref="DeleteDeploymentAsync"/> refuse Anthropic-format deployments (400 → #126).</description></item>
-/// <item><description><see cref="DeleteDeploymentAsync"/> deletes exactly once and never recreates. There is no update/replace operation (capacity resize is #130).</description></item>
+/// <item><description><see cref="DeleteDeploymentAsync"/> deletes exactly once and never recreates. There is no update/replace operation: <see cref="UpdateCapacityAsync"/> is a PATCH of <c>sku.capacity</c> alone (#130), whose ARM body schema has no <c>model</c> field at all.</description></item>
 /// </list>
 /// <para><b>Audit and the commit point.</b> Mutations resolve the caller's <c>User</c> row before
 /// touching ARM (an unprovisioned admin is refused with nothing changed), then audit
@@ -108,4 +108,40 @@ public interface IFoundryDeploymentService
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (403 — call <c>GET /users/me</c> first).</exception>
     /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Foundry management is not configured, or the configured account does not exist in Azure (503).</exception>
     Task DeleteDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Changes one deployment's <c>sku.capacity</c> — thousands of TPM — in place and audits
+    /// <c>foundry.deployment.capacity-changed</c> with the before/after values (#130). This is how TPM
+    /// is rebalanced between deployments without recreating anything; the model, its version and the
+    /// deployment name are untouched, so nothing a developer has configured changes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why this is safe where a re-PUT is not.</b> ARM's <c>Deployments_Update</c> is a PATCH whose
+    /// body schema is <c>{ sku, tags }</c>: there is no <c>model</c> and no <c>modelProviderData</c> to
+    /// re-send, so the create-once hazard (CLAUDE.md; E-006/E-007 — a re-PUT drove a Claude deployment
+    /// to <c>Failed</c>) does not apply.
+    /// </para>
+    /// <para>
+    /// <b>Anthropic is still refused, for now.</b> The argument above is structural, not observed: a
+    /// PATCH has never been run against a real Claude deployment, and E-007's lesson is that Claude
+    /// deployments punish assumptions. So this refuses Anthropic-format deployments with a 400 until
+    /// the live check happens, and the refusal message says so. Lifting it is tracked separately; the
+    /// code change is deleting one guard.
+    /// </para>
+    /// <para>
+    /// <b>Asking for the capacity it already has is a no-op</b> that returns the deployment unchanged,
+    /// makes no ARM call and writes no audit row — a PATCH to the same value changes nothing, and an
+    /// audit trail claiming otherwise would be worse than silent.
+    /// </para>
+    /// </remarks>
+    /// <param name="accountName">One of the configured Foundry accounts.</param>
+    /// <param name="deploymentName">The deployment to resize.</param>
+    /// <param name="request">The new capacity in thousands of TPM; <c>1</c>–<c>ValidationConstants.FoundryDeploymentMaxCapacity</c>.</param>
+    /// <param name="cancellationToken">Cancellation token — not observed past the point ARM accepts the change.</param>
+    /// <exception cref="KeyNotFoundException">The account is not one of the configured accounts, or no such deployment exists in it (404).</exception>
+    /// <exception cref="ArgumentException">The capacity is out of range, or the deployment is Anthropic-format (400).</exception>
+    /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (403 — call <c>GET /users/me</c> first).</exception>
+    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Foundry management is not configured, or the configured account does not exist in Azure (503).</exception>
+    Task<FoundryDeploymentResponse> UpdateCapacityAsync(string accountName, string deploymentName, UpdateFoundryDeploymentCapacityRequest request, CancellationToken cancellationToken);
 }

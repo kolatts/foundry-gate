@@ -354,7 +354,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         await SeedAllocationAsync(bob, new BillingPeriod(2026, 8), allocated: 100, tokensUsed: 0, isHardStopped: false, tier: GatewayTiers.Standard);
         var carolExisting = await SeedAllocationAsync(carol, Period, allocated: 1, tokensUsed: 42, isHardStopped: true, tier: GatewayTiers.Standard);
 
-        var results = await CreateService().ResolveManyAsync([carol.UserId, 999_999, alice.UserId, bob.UserId, alice.UserId], Period, CancellationToken.None);
+        var results = await CreateService().ResolveManyAsync([carol.UserId, 999_999, alice.UserId, bob.UserId, alice.UserId], Period, GatewayTierSyncMode.Immediate, CancellationToken.None);
         await Context.SaveChangesAsync();
 
         Assert.Equal([carol.UserId, alice.UserId, bob.UserId], results.Select(r => r.Allocation.UserId));
@@ -384,7 +384,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
     [Fact]
     public async Task ResolveManyAsync_with_no_ids_returns_empty_without_touching_the_database()
     {
-        var results = await CreateService().ResolveManyAsync([], Period, CancellationToken.None);
+        var results = await CreateService().ResolveManyAsync([], Period, GatewayTierSyncMode.Immediate, CancellationToken.None);
 
         Assert.Empty(results);
     }
@@ -452,7 +452,7 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
 
         Context.Groups.Remove(group);
 
-        var result = await CreateService().ResolveManyAsync([user.UserId], Period, CancellationToken.None);
+        var result = await CreateService().ResolveManyAsync([user.UserId], Period, GatewayTierSyncMode.Immediate, CancellationToken.None);
 
         var allocation = Assert.Single(result).Allocation;
         Assert.Equal(QuotaLevelType.SystemDefault, allocation.ResolvedLevelType);

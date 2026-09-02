@@ -9,6 +9,7 @@ using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
 using FoundryGate.Core.Requests;
 using FoundryGate.Data.Audit;
@@ -592,6 +593,7 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
             audit,
             writer,
             accessor,
+            TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
         var tierMapper = TestGatewayTiers.Mapper();

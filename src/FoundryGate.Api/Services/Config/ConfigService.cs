@@ -136,15 +136,15 @@ public sealed class ConfigService(
         // claim above has already written the new value inside this transaction, so resolution reads it
         // and the whole thing commits together — allocations, the config row and the audit row. Before
         // this, an edit here changed nobody until something else happened to touch them, and the first
-        // thing to notice was usually the Functions host's monthly reset, which has no APIM client and so
-        // could only log the divergence it was creating.
+        // thing to notice was usually the Functions host's monthly reset — which, before #194, had no APIM
+        // client and could only log the divergence it was creating.
         var reresolvedUserIds = IsDefaultQuotaChange(entry.Key, before, newValue)
             ? await SystemDefaultUserIdsAsync(cancellationToken)
             : [];
 
         var resolutions = reresolvedUserIds.Count == 0
             ? []
-            : await quotaResolution.ResolveManyAsync(reresolvedUserIds, BillingPeriod.Current(timeProvider), cancellationToken);
+            : await quotaResolution.ResolveManyAsync(reresolvedUserIds, BillingPeriod.Current(timeProvider), GatewayTierSyncMode.Immediate, cancellationToken);
 
         var gatewayMoved = resolutions.Any(resolution => resolution.TierSyncRequested);
         var commitToken = CommitToken.For(gatewayMoved, cancellationToken);

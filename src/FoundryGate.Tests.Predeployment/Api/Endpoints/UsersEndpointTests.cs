@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FoundryGate.Domain.Common;
+using FoundryGate.Domain.Config;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Keys;
 using FoundryGate.Domain.Users.Contracts;
@@ -96,6 +97,15 @@ public class UsersEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestF
         Assert.Equal(ApiTestFactory.GatewayUrl, profile.CliConfig.GatewayBaseUrl);
         Assert.Equal("/anthropic", profile.CliConfig.AnthropicBasePath);
         Assert.Equal("/openai/v1", profile.CliConfig.OpenAiBasePath);
+
+        // Model aliases: the ones this developer's tier product actually permits, and only those
+        // (#153). `opus` is configured for Unlimited only, and a new developer resolves to Standard —
+        // listing it would promise a model the gateway answers with 403 model_not_permitted.
+        Assert.Equal(GatewayTiers.Standard, profile.Quota.TierProductId);
+        Assert.Equal(["gpt", "sonnet"], profile.CliConfig.ModelAliases.Select(alias => alias.Alias));
+        Assert.Equal("claude-sonnet-4-5", profile.CliConfig.ModelAliases.Single(a => a.Alias == "sonnet").DeploymentName);
+        Assert.Equal(ModelProviderType.Anthropic, profile.CliConfig.ModelAliases.Single(a => a.Alias == "sonnet").Provider);
+        Assert.Equal(ModelProviderType.OpenAi, profile.CliConfig.ModelAliases.Single(a => a.Alias == "gpt").Provider);
 
         await using var dbContext = factory.CreateDbContext();
         var audit = await dbContext.AuditLogs.AsNoTracking()

@@ -1,6 +1,12 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!-- The APIM management-plane client moved here from the Api (#194) so the Functions host can
+         re-scope a developer's subscription during the monthly reset. Azure.Core carries
+         TokenCredential; neither pulls in ASP.NET Core, which is what keeps this project usable
+         from the isolated Functions worker (CONVENTIONS.md §Solution structure). -->
+    <PackageReference Include="Azure.Core" />
+    <PackageReference Include="Azure.ResourceManager.ApiManagement" />
     <PackageReference Include="Imagile.Framework.Configuration" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />

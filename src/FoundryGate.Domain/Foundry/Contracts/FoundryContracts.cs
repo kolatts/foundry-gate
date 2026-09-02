@@ -175,3 +175,21 @@ public record CreateFoundryDeploymentRequest
     [Range(1, ValidationConstants.FoundryDeploymentMaxCapacity)]
     public int Capacity { get; init; }
 }
+
+/// <summary>
+/// <c>PATCH /foundry/deployments/{accountName}/{deploymentName}/capacity</c> body (admin, #130):
+/// rebalance a live deployment's TPM without recreating it.
+/// </summary>
+/// <remarks>
+/// Capacity is the one part of a deployment ARM lets you change in place. The operation is
+/// <c>Deployments_Update</c>, a <b>PATCH</b> whose body schema is <c>{ sku, tags }</c> — it has no
+/// <c>model</c> field at all, which is exactly why it is not the create-once hazard a re-PUT is
+/// (CLAUDE.md; fable-refactor-log E-006/E-007). Init-property record, not positional — see
+/// <see cref="CreateFoundryDeploymentRequest"/>'s remarks (#128).
+/// </remarks>
+public record UpdateFoundryDeploymentCapacityRequest
+{
+    /// <summary>New ARM <c>sku.capacity</c> in <b>thousands of TPM</b> (25 = 25K tokens/minute). Must fit inside the subscription's remaining quota for the model, or ARM rejects the change.</summary>
+    [Range(1, ValidationConstants.FoundryDeploymentMaxCapacity)]
+    public int Capacity { get; init; }
+}
