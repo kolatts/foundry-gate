@@ -1,0 +1,47 @@
+@using System.Text.Json
+
+@* The audit row's opaque `details` blob (#55). The API never interprets it, so neither does this:
+   valid JSON is re-indented for reading, anything else is shown exactly as stored. A log viewer
+   that throws on a malformed row is a log viewer that hides the row you most need to see. *@
+
+@if (string.IsNullOrWhiteSpace(Details))
+{
+    <MudText Typo="Typo.caption" Class="mud-text-secondary" data-testid="audit-details-empty">No details recorded.</MudText>
+}
+else
+{
+    <pre class="fg-mono-raw fg-snippet" data-testid="audit-details">@Formatted</pre>
+}
+
+@code {
+    /// <summary>The raw <c>details</c> string from an audit entry; null or blank renders a placeholder.</summary>
+    [Parameter]
+    public string? Details { get; set; }
+
+    private string Formatted => Prettify(Details);
+
+    /// <summary>
+    /// Re-indents <paramref name="details"/> when it parses as JSON; returns it untouched when it
+    /// doesn't. Never throws — a row whose details are a bare string, truncated JSON, or something a
+    /// future writer invented still renders.
+    /// </summary>
+    public static string Prettify(string? details)
+    {
+        if (string.IsNullOrWhiteSpace(details))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(details);
+            return JsonSerializer.Serialize(document.RootElement, PrettyOptions);
+        }
+        catch (JsonException)
+        {
+            return details;
+        }
+    }
+
+    private static readonly JsonSerializerOptions PrettyOptions = new() { WriteIndented = true };
+}

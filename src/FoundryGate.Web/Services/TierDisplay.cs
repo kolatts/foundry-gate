@@ -12,12 +12,12 @@ namespace FoundryGate.Web.Services;
 /// would otherwise appear.
 /// </summary>
 /// <remarks>
-/// The single owner of quota presentation (#188). The developer surface wrote a parallel
-/// <c>QuotaDisplay</c> whose tier lookup is a hard-coded <c>switch</c> over
-/// <see cref="GatewayTiers"/> — that is the half which breaks the first time a fork configures a
-/// tier product of its own, so this one wins: it resolves names from the live
-/// <c>GET /quota/tiers</c> catalogue, which is what D-013 actually says a budget is. Its gauge
-/// helpers fold in here when it is deleted, on the rebase that brings both waves together.
+/// The single owner of quota presentation (#188). Two of these existed while the developer and
+/// admin waves were open: the other resolved a tier name from a hard-coded <c>switch</c> over
+/// <see cref="GatewayTiers"/>, which is the half that breaks the first time a fork configures a
+/// tier product of its own, and it formatted the same token count a second way. This one won and
+/// absorbed its gauge helpers: names come from the live <c>GET /quota/tiers</c> catalogue, which
+/// is what D-013 says a budget actually is.
 /// <para>
 /// The two token formats are named rather than left to guess: <see cref="FormatTokensCompact"/>
 /// ("5M tokens") for a grid cell or chip, <see cref="FormatTokensExact"/> ("5,000,000") where the
@@ -113,6 +113,69 @@ public static class TierDisplay
     /// </summary>
     public static string FormatTokensExact(long? tokens) =>
         tokens?.ToString("N0", CultureInfo.CurrentCulture) ?? "Unlimited";
+
+    /// <summary>Below this percentage of the monthly budget the gauge is green.</summary>
+    public const double WarningThresholdPercent = 80;
+
+    /// <summary>Above this percentage the gauge is red; from <see cref="WarningThresholdPercent"/> to here it is amber.</summary>
+    public const double CriticalThresholdPercent = 95;
+
+    /// <summary>
+    /// Gauge colour for a percentage of monthly budget consumed (#49): green below 80%, amber from
+    /// 80% through 95%, red above 95%.
+    /// </summary>
+    /// <param name="percentUsed">
+    /// <c>PercentUsed</c> from a <c>QuotaAllocationResponse</c>. <see langword="null"/> means
+    /// unlimited — there is no bar to colour, so callers render the "Unlimited" chip instead; this
+    /// answers <see cref="Color.Success"/> for that case rather than throwing.
+    /// </param>
+    public static Color GaugeColor(double? percentUsed) => percentUsed switch
+    {
+        > CriticalThresholdPercent => Color.Error,
+        >= WarningThresholdPercent => Color.Warning,
+        _ => Color.Success,
+    };
+
+    /// <summary>
+    /// The value <c>MudProgressLinear</c> should show for a percentage that may be missing or past
+    /// 100 (a legacy over-cap allocation): clamped into <c>[0, 100]</c>, zero when unlimited.
+    /// </summary>
+    public static double GaugeValue(double? percentUsed) => percentUsed switch
+    {
+        null => 0,
+        < 0 => 0,
+        > 100 => 100,
+        _ => percentUsed.Value,
+    };
+
+    /// <summary>
+    /// The human name for an APIM tier product id (<see cref="GatewayTiers"/>), for the places that
+    /// hold a product id rather than a quota — <c>QuotaAllocationResponse.TierProductId</c>, mostly.
+    /// Prefers the catalogue's own <see cref="QuotaTierResponse.DisplayName"/> when
+    /// <paramref name="tiers"/> is supplied, so a fork that adds a tier product gets its real name;
+    /// falls back to title-casing the id rather than showing nothing.
+    /// </summary>
+    public static string TierDisplayName(string? tierProductId, IReadOnlyList<QuotaTierResponse>? tiers = null)
+    {
+        if (string.IsNullOrEmpty(tierProductId))
+        {
+            return "Unknown tier";
+        }
+
+        var match = tiers?.FirstOrDefault(t => string.Equals(t.ProductId, tierProductId, StringComparison.OrdinalIgnoreCase));
+        return match?.DisplayName ?? CultureInfo.InvariantCulture.TextInfo.ToTitleCase(tierProductId);
+    }
+
+    /// <summary>Where a budget came from, as a sentence fragment addressed to the developer who has it.</summary>
+    public static string LevelSentence(QuotaLevelType level) => level switch
+    {
+        QuotaLevelType.UserUnlimited => "your unlimited flag",
+        QuotaLevelType.UserOverride => "your personal quota",
+        QuotaLevelType.GroupUnlimited => "an unlimited group you belong to",
+        QuotaLevelType.GroupMax => "the most generous group you belong to",
+        QuotaLevelType.SystemDefault => "the fork-wide default",
+        _ => "quota resolution",
+    };
 
     private static QuotaTierResponse? FindUnlimited(IReadOnlyList<QuotaTierResponse>? tiers) =>
         tiers?.FirstOrDefault(t => t.IsUnlimited);

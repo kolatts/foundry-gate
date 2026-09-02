@@ -23,12 +23,25 @@ public class UsersSyncPageTests : WebTestContext
     }
 
     [Fact]
+    public void Cancelling_the_confirmation_runs_nothing()
+    {
+        // This button deactivates accounts and deletes APIM subscriptions in bulk; it was the one
+        // unconfirmed action in the admin surface.
+        var page = RenderPage<UsersSync>();
+
+        page.Find("[data-testid=run-sync]").Click();
+        page.WaitForElement("[data-testid=confirm-cancel]").Click();
+
+        page.WaitForAssertion(() => Assert.Equal(0, Api.CallCount("SyncUsersAsync")));
+    }
+
+    [Fact]
     public void Running_the_sync_reports_every_count()
     {
         Api.UserSyncResult = ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(3, 12, 1, 0, 0));
 
         var page = RenderPage<UsersSync>();
-        page.Find("[data-testid=run-sync]").Click();
+        RunSync(page);
 
         page.WaitForAssertion(() =>
         {
@@ -45,13 +58,19 @@ public class UsersSyncPageTests : WebTestContext
         Api.UserSyncResult = ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(1, 4, 0, 2, 0));
 
         var page = RenderPage<UsersSync>();
-        page.Find("[data-testid=run-sync]").Click();
+        RunSync(page);
 
         page.WaitForAssertion(() =>
         {
             var explainer = page.Find("[data-testid=sync-skipped-explainer]");
             Assert.Contains("Nobody was deactivated", explainer.TextContent, StringComparison.Ordinal);
-            Assert.Contains("121", explainer.InnerHtml, StringComparison.Ordinal);
+
+            // #186 inverted this count: expansion works, so a non-zero value is the groups whose
+            // expansion FAILED. The copy has to name the fix (the Graph role), not tell an admin to
+            // restructure their tenant.
+            Assert.Contains("could not be expanded", explainer.TextContent, StringComparison.Ordinal);
+            Assert.Contains("GroupMember.ReadBasic.All", explainer.TextContent, StringComparison.Ordinal);
+            Assert.DoesNotContain("individually", explainer.TextContent, StringComparison.Ordinal);
         });
     }
 
@@ -61,7 +80,7 @@ public class UsersSyncPageTests : WebTestContext
         Api.UserSyncResult = ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(0, 4, 2, 0, 1));
 
         var page = RenderPage<UsersSync>();
-        page.Find("[data-testid=run-sync]").Click();
+        RunSync(page);
 
         page.WaitForAssertion(() =>
             Assert.Contains("still hold a working key", page.Find("[data-testid=sync-failed-explainer]").TextContent, StringComparison.Ordinal));
@@ -73,11 +92,18 @@ public class UsersSyncPageTests : WebTestContext
         Api.UserSyncResult = ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(1, 4, 1, 0, 0));
 
         var page = RenderPage<UsersSync>();
-        page.Find("[data-testid=run-sync]").Click();
+        RunSync(page);
 
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=sync-result]")));
         Assert.Empty(page.FindAll("[data-testid=sync-skipped-explainer]"));
         Assert.Empty(page.FindAll("[data-testid=sync-failed-explainer]"));
+    }
+
+    /// <summary>Presses the button and confirms — the sync is gated on a dialog.</summary>
+    private static void RunSync(IRenderedComponent<Microsoft.AspNetCore.Components.IComponent> page)
+    {
+        page.Find("[data-testid=run-sync]").Click();
+        page.WaitForElement("[data-testid=confirm-ok]").Click();
     }
 
     [Fact]
@@ -96,7 +122,7 @@ public class UsersSyncPageTests : WebTestContext
         Api.UserSyncResult = ApiCallResult<UserSyncResult>.Fail(ApiCallStatus.Forbidden, "You don't have permission to do that.");
 
         var page = RenderPage<UsersSync>();
-        page.Find("[data-testid=run-sync]").Click();
+        RunSync(page);
 
         page.WaitForAssertion(() => Assert.Contains("Access denied", page.Markup, StringComparison.Ordinal));
     }

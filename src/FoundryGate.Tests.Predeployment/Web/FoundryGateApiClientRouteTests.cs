@@ -25,7 +25,7 @@ public class FoundryGateApiClientRouteTests
     [Fact]
     public async Task ActivateUserAsync_posts_to_the_activate_route()
     {
-        var (client, handler) = CreateClient(Json(AdminTestData.User()));
+        var (client, handler) = CreateClient(Json(WebTestData.User()));
 
         _ = await client.ActivateUserAsync(userId: 7);
 
@@ -35,7 +35,7 @@ public class FoundryGateApiClientRouteTests
     [Fact]
     public async Task DeactivateUserAsync_posts_to_the_deactivate_route()
     {
-        var (client, handler) = CreateClient(Json(AdminTestData.User()));
+        var (client, handler) = CreateClient(Json(WebTestData.User()));
 
         _ = await client.DeactivateUserAsync(userId: 7);
 
@@ -65,13 +65,13 @@ public class FoundryGateApiClientRouteTests
     [Fact]
     public async Task UpdateUserQuotaAsync_puts_to_the_quota_route_and_reads_back_the_user()
     {
-        var (client, handler) = CreateClient(Json(AdminTestData.User(displayName: "Ada Lovelace")));
+        var (client, handler) = CreateClient(Json(WebTestData.User(displayName: "Dev Eloper")));
 
         var result = await client.UpdateUserQuotaAsync(7, new UpdateUserQuotaRequest { IsUnlimited = true });
 
         AssertSent(handler, HttpMethod.Put, "users/7/quota");
         Assert.True(result.IsSuccess);
-        Assert.Equal("Ada Lovelace", result.Value?.DisplayName);
+        Assert.Equal("Dev Eloper", result.Value?.DisplayName);
     }
 
     [Fact]
@@ -79,16 +79,16 @@ public class FoundryGateApiClientRouteTests
     {
         // The regression #169 names: as UserResponse this deserialized to an object whose every
         // field was default, and the page rendered a blank user rather than failing.
-        var detail = AdminTestData.UserDetail(
-            AdminTestData.User(userId: 7, displayName: "Ada Lovelace"),
-            groups: [AdminTestData.Membership(groupId: 3, name: "Platform")]);
+        var detail = WebTestData.UserDetail(
+            WebTestData.User(userId: 7, displayName: "Dev Eloper"),
+            groups: [WebTestData.Membership(groupId: 3, name: "Platform")]);
         var (client, handler) = CreateClient(Json(detail));
 
         var result = await client.GetUserAsync(7);
 
         AssertSent(handler, HttpMethod.Get, "users/7");
         Assert.True(result.IsSuccess);
-        Assert.Equal("Ada Lovelace", result.Value?.User.DisplayName);
+        Assert.Equal("Dev Eloper", result.Value?.User.DisplayName);
         Assert.Equal("Platform", Assert.Single(result.Value!.Groups).Name);
         Assert.NotNull(result.Value.CurrentAllocation);
         Assert.NotNull(result.Value.ApiKey);

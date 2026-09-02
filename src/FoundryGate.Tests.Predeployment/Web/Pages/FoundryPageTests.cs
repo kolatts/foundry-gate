@@ -19,8 +19,8 @@ public class FoundryPageTests : WebTestContext
     public void Renders_the_account_model_capacity_and_state_of_every_deployment()
     {
         Api.ArrangeDeployments(
-            AdminTestData.Deployment(accountName: "fg-eastus", deploymentName: "gpt-5-codex", capacity: 25),
-            AdminTestData.Deployment(accountName: "fg-swedencentral", deploymentName: "claude-opus-5", format: FoundryModelFormatType.Anthropic, provisioningState: "Creating"));
+            WebTestData.Deployment(accountName: "fg-eastus", deploymentName: "gpt-5-codex", capacity: 25),
+            WebTestData.Deployment(accountName: "fg-swedencentral", deploymentName: "claude-opus-5", format: FoundryModelFormatType.Anthropic, provisioningState: "Creating"));
 
         var page = RenderPage<Foundry>();
 
@@ -40,7 +40,7 @@ public class FoundryPageTests : WebTestContext
     [Fact]
     public void An_anthropic_deployment_cannot_be_deleted_from_here()
     {
-        Api.ArrangeDeployments(AdminTestData.Deployment(deploymentName: "claude-opus-5", format: FoundryModelFormatType.Anthropic));
+        Api.ArrangeDeployments(WebTestData.Deployment(deploymentName: "claude-opus-5", format: FoundryModelFormatType.Anthropic));
 
         var page = RenderPage<Foundry>();
 
@@ -57,7 +57,7 @@ public class FoundryPageTests : WebTestContext
     [Fact]
     public void Cancelling_the_delete_confirmation_leaves_the_deployment_alone()
     {
-        Api.ArrangeDeployments(AdminTestData.Deployment(deploymentName: "gpt-5-codex"));
+        Api.ArrangeDeployments(WebTestData.Deployment(deploymentName: "gpt-5-codex"));
 
         var page = RenderPage<Foundry>();
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-delete-gpt-5-codex]")));
@@ -71,7 +71,7 @@ public class FoundryPageTests : WebTestContext
     [Fact]
     public void Confirming_deletes_the_named_deployment_in_its_own_account()
     {
-        Api.ArrangeDeployments(AdminTestData.Deployment(accountName: "fg-eastus", deploymentName: "gpt-5-codex"));
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus", deploymentName: "gpt-5-codex"));
 
         var page = RenderPage<Foundry>();
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-delete-gpt-5-codex]")));
@@ -85,8 +85,8 @@ public class FoundryPageTests : WebTestContext
     [Fact]
     public void The_create_dialog_sends_an_openai_deployment_and_says_why_claude_isnt_offered()
     {
-        Api.ArrangeDeployments(AdminTestData.Deployment(accountName: "fg-eastus"));
-        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(AdminTestData.Deployment(deploymentName: "gpt-5-1-codex-max"));
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(WebTestData.Deployment(deploymentName: "gpt-5-1-codex-max"));
 
         var page = RenderPage<Foundry>();
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
@@ -115,7 +115,7 @@ public class FoundryPageTests : WebTestContext
     [Fact]
     public void Cancelling_the_create_dialog_sends_nothing()
     {
-        Api.ArrangeDeployments(AdminTestData.Deployment());
+        Api.ArrangeDeployments(WebTestData.Deployment());
 
         var page = RenderPage<Foundry>();
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));

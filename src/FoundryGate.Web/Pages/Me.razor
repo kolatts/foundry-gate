@@ -1,6 +1,224 @@
 @page "/me"
 @attribute [Authorize]
+@using FoundryGate.Domain.Common
+@using FoundryGate.Domain.Foundry.Contracts
+@using FoundryGate.Domain.Requests.Contracts
+@using FoundryGate.Domain.Users.Contracts
+@implements IDisposable
+@inject IFoundryGateApiClient ApiClient
+@inject ISnackbar Snackbar
+
+@* The developer's home (#49). One profile fetch — GET /users/me carries the resolved quota, the
+   masked key and the gateway addressing in a single round trip — plus the model list and the
+   caller's own request history. *@
 
 <PageTitle>My Account — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="My Account" />
+<MudText Typo="Typo.h4" HtmlTag="h1" GutterBottom="true">@(_profile?.DisplayName ?? "My account")</MudText>
+
+@if (_loading)
+{
+    <MudGrid data-testid="me-loading">
+        <MudItem xs="12" md="7">
+            <MudSkeleton Height="180px" Width="100%" SkeletonType="SkeletonType.Rectangle" />
+        </MudItem>
+        <MudItem xs="12" md="5">
+            <MudSkeleton Height="180px" Width="100%" SkeletonType="SkeletonType.Rectangle" />
+        </MudItem>
+    </MudGrid>
+}
+else if (_profile is null)
+{
+    <MudAlert Severity="@(_profileStatus == ApiCallStatus.Unauthorized ? Severity.Warning : Severity.Error)"
+              Icon="@Icons.Material.Filled.CloudOff"
+              data-testid="me-load-error">
+        @_profileMessage
+        @if (_profileStatus == ApiCallStatus.Unauthorized)
+        {
+            <MudLink Href="authentication/login" Underline="Underline.Always" Class="ml-1">Sign in again</MudLink>
+        }
+    </MudAlert>
+}
+else
+{
+    <MudGrid>
+        <MudItem xs="12" md="7">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <QuotaGauge Allocation="@_profile.Quota" />
+
+                    <MudStack Row="true" Spacing="2" Class="mt-4" Wrap="Wrap.Wrap">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.TrendingUp"
+                                   Href="me/request"
+                                   data-testid="me-request-more">
+                            Request more
+                        </MudButton>
+                    </MudStack>
+                </MudCardContent>
+            </MudCard>
+
+            @if (!_profile.IsActive)
+            {
+                <MudAlert Severity="Severity.Error" Class="mt-4" Icon="@Icons.Material.Filled.PersonOff" data-testid="me-inactive">
+                    Your Foundry Gate account is deactivated, so the gateway will reject your
+                    requests. Contact an administrator.
+                </MudAlert>
+            }
+        </MudItem>
+
+        <MudItem xs="12" md="5">
+            <KeyDisplay Key="@_profile.ApiKey"
+                        KeyChanged="OnKeyChanged"
+                        RevealedKeyChanged="OnRevealedKeyChanged" />
+        </MudItem>
+
+        <MudItem xs="12">
+            <CliSetupPanel CliConfig="@_profile.CliConfig" Models="@_models" RevealedKey="@_revealedKey" />
+        </MudItem>
+
+        <MudItem xs="12">
+            <MudCard Elevation="2">
+                <MudCardContent>
+                    <div class="d-flex align-center justify-space-between mb-2">
+                        <MudText Typo="Typo.subtitle2" Class="fg-label">Your quota increase requests</MudText>
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Add"
+                                   Href="me/request">
+                            New request
+                        </MudButton>
+                    </div>
+
+                    @if (_requests.Count == 0)
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined" data-testid="me-requests-empty">
+                            You haven't asked for more budget yet. When you do, its review status
+                            shows up here.
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudTable Items="@_requests" Dense="true" Hover="true" Elevation="0" data-testid="me-requests-table">
+                            <HeaderContent>
+                                <MudTh>Submitted</MudTh>
+                                <MudTh>Requested</MudTh>
+                                <MudTh>Status</MudTh>
+                                <MudTh>Reviewed</MudTh>
+                                <MudTh>Notes</MudTh>
+                            </HeaderContent>
+                            <RowTemplate Context="request">
+                                <MudTd DataLabel="Submitted">@request.CreatedDate.ToLocalTime().ToString("d MMM yyyy")</MudTd>
+                                <MudTd DataLabel="Requested" Class="fg-mono">@TierDisplay.FormatTokensExact(request.RequestedQuota)</MudTd>
+                                <MudTd DataLabel="Status">
+                                    <MudChip T="string" Size="Size.Small" Color="@StatusColor(request.StatusType)" Variant="Variant.Text">
+                                        @request.StatusType
+                                    </MudChip>
+                                </MudTd>
+                                <MudTd DataLabel="Reviewed">
+                                    @(request.ReviewedDate?.ToLocalTime().ToString("d MMM yyyy") ?? "—")
+                                </MudTd>
+                                <MudTd DataLabel="Notes">@(string.IsNullOrWhiteSpace(request.ReviewNotes) ? "—" : request.ReviewNotes)</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    }
+                </MudCardContent>
+            </MudCard>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    private const int RequestHistoryPageSize = 10;
+
+    private UserProfileResponse? _profile;
+    private IReadOnlyList<FoundryModelResponse> _models = [];
+    private IReadOnlyList<QuotaIncreaseRequestResponse> _requests = [];
+    private string? _revealedKey;
+    private bool _loading = true;
+    private ApiCallStatus _profileStatus = ApiCallStatus.Success;
+    private string _profileMessage = string.Empty;
+
+    // Cancelled on dispose, so a reply that arrives after the developer has navigated away is
+    // abandoned rather than written into a component that is no longer on screen.
+    private readonly CancellationTokenSource _pageLifetime = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var ct = _pageLifetime.Token;
+
+        // The profile and the model list are independent, so pay for one round trip rather than
+        // two. The history is not: GET /requests returns EVERY user's requests to an admin, so it
+        // has to name the caller's own UserId — which only the profile carries. #49 says "own
+        // only", and an admin reading a stranger's request under "Your quota increase requests" is
+        // the version of this bug that costs the most trust.
+        var profileTask = ApiClient.GetMeAsync(ct);
+        var modelsTask = ApiClient.GetFoundryModelsAsync(ct);
+
+        var profile = await profileTask;
+        var models = await modelsTask;
+
+        if (profile.IsSuccess)
+        {
+            _profile = profile.Value;
+        }
+        else
+        {
+            _profileStatus = profile.Status;
+            _profileMessage = profile.Message ?? "Couldn't load your account.";
+        }
+
+        if (models.IsSuccess && models.Value is not null)
+        {
+            _models = models.Value;
+        }
+        else if (_profile is not null)
+        {
+            // Not fatal: the CLI panel degrades to "ask an admin which deployments exist".
+            Snackbar.Add(models.Message ?? "Couldn't load the model list.", Severity.Warning);
+        }
+
+        if (_profile is not null)
+        {
+            var requests = await ApiClient.GetRequestsAsync(
+                new QuotaRequestQuery(Status: null, UserId: _profile.UserId),
+                new PagedRequest(1, RequestHistoryPageSize),
+                ct);
+
+            if (requests.IsSuccess && requests.Value is not null)
+            {
+                _requests = requests.Value.Items;
+            }
+            else
+            {
+                Snackbar.Add(requests.Message ?? "Couldn't load your request history.", Severity.Warning);
+            }
+        }
+
+        _loading = false;
+    }
+
+    public void Dispose()
+    {
+        _pageLifetime.Cancel();
+        _pageLifetime.Dispose();
+    }
+
+    private void OnKeyChanged(FoundryGate.Domain.Keys.Contracts.ApiKeyResponse key)
+    {
+        if (_profile is not null)
+        {
+            _profile = _profile with { ApiKey = key };
+        }
+    }
+
+    private void OnRevealedKeyChanged(string? key) => _revealedKey = key;
+
+    private static Color StatusColor(QuotaRequestStatusType status) => status switch
+    {
+        QuotaRequestStatusType.Approved => Color.Success,
+        QuotaRequestStatusType.Rejected => Color.Error,
+        _ => Color.Warning,
+    };
+}

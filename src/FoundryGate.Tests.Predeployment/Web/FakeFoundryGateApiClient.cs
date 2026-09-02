@@ -14,17 +14,21 @@ namespace FoundryGate.Tests.Predeployment.Web;
 
 /// <summary>
 /// A hand-rolled <see cref="IFoundryGateApiClient"/> for the Blazor component tests (CONVENTIONS.md:
-/// no mocking library). Every method returns a canned <see cref="ApiCallResult{T}"/> from a settable
-/// property, so a test overrides only the call it cares about and inherits sensible successes for
-/// the rest. Calls are counted by name, and the arguments the pages send are captured, so a test can
-/// assert what the page asked for as well as what it rendered.
+/// no mocking library). Every method answers from a settable property, so a test overrides only the
+/// call it cares about and inherits sensible successes for the rest; every mutation records what the
+/// page sent, so a test can assert what was asked for as well as what was rendered.
 /// </summary>
 /// <remarks>
-/// <see cref="Gate"/> holds every call until it is completed — that is how the "submit is disabled
-/// while the request is in flight" and "the dashboard is refreshing" states are observed, without a
-/// sleep anywhere in the suite.
+/// <see cref="Gate"/> holds every call until it is completed — that is how "submit is disabled while
+/// the request is in flight" and "the dashboard is still loading" are observed, with no sleep
+/// anywhere in the suite.
+/// <para>
+/// Declared <c>partial</c> on purpose: waves that add methods to <see cref="IFoundryGateApiClient"/>
+/// (through its own <c>*.Admin.cs</c> / <c>*.Me.cs</c> partials) add the matching fakes in a partial
+/// file of their own rather than editing this one, so two frontend waves never collide on it.
+/// </para>
 /// </remarks>
-public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
+public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
 {
     private readonly Dictionary<string, int> _calls = new(StringComparer.Ordinal);
 
@@ -35,17 +39,66 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     public ApiCallResult<UserProfileResponse> MeResult { get; set; } = ApiCallResult<UserProfileResponse>.Ok(WebTestData.Profile());
 
+    public ApiCallResult<PagedResult<UserResponse>> UsersResult { get; set; } =
+        ApiCallResult<PagedResult<UserResponse>>.Ok(PagedResult<UserResponse>.Empty(1, 25));
+
+    /// <summary>
+    /// What <c>GET /users/{id}</c> answers. A detail shape, not a row: the endpoint has returned
+    /// <see cref="UserDetailResponse"/> since #156, and the client was reading it as a
+    /// <c>UserResponse</c> until #169 — which deserialized to an all-default object rather than
+    /// failing.
+    /// </summary>
+    public ApiCallResult<UserDetailResponse> UserResult { get; set; } = ApiCallResult<UserDetailResponse>.Ok(WebTestData.UserDetail());
+
+    /// <summary>
+    /// What the three user-row mutations answer. <c>PUT /users/{id}/quota</c>, activate and
+    /// deactivate all return the updated <see cref="UserResponse"/>; the client discarded those
+    /// bodies until #169.
+    /// </summary>
+    public ApiCallResult<UserResponse> UserMutationResult { get; set; } = ApiCallResult<UserResponse>.Ok(WebTestData.User());
+
+    public ApiCallResult<UserSyncResult> UserSyncResult { get; set; } =
+        ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(0, 0, 0, 0, 0));
+
+    public ApiCallResult<PagedResult<GroupResponse>> GroupsResult { get; set; } =
+        ApiCallResult<PagedResult<GroupResponse>>.Ok(PagedResult<GroupResponse>.Empty(1, 25));
+
+    public ApiCallResult<GroupResponse> CreateGroupResult { get; set; } = ApiCallResult<GroupResponse>.Ok(WebTestData.Group());
+
+    public ApiCallResult<GroupDetailResponse> GroupDetailResult { get; set; } =
+        ApiCallResult<GroupDetailResponse>.Ok(new GroupDetailResponse(WebTestData.Group(), []));
+
+    public ApiCallResult<PagedResult<GroupMemberResponse>> GroupMembersResult { get; set; } =
+        ApiCallResult<PagedResult<GroupMemberResponse>>.Ok(PagedResult<GroupMemberResponse>.Empty(1, 25));
+
+    public ApiCallResult<GroupSyncResult> GroupSyncResult { get; set; } =
+        ApiCallResult<GroupSyncResult>.Ok(new GroupSyncResult(0, 0, 0, 0));
+
     public ApiCallResult<IReadOnlyList<FoundryModelResponse>> FoundryModelsResult { get; set; } =
         ApiCallResult<IReadOnlyList<FoundryModelResponse>>.Ok([WebTestData.Model()]);
 
     public ApiCallResult<IReadOnlyList<QuotaTierResponse>> QuotaTiersResult { get; set; } =
-        ApiCallResult<IReadOnlyList<QuotaTierResponse>>.Ok(WebTestData.Tiers());
+        ApiCallResult<IReadOnlyList<QuotaTierResponse>>.Ok(WebTestData.Tiers);
+
+    public ApiCallResult<PagedResult<QuotaAllocationResponse>> QuotaAllocationsResult { get; set; } =
+        ApiCallResult<PagedResult<QuotaAllocationResponse>>.Ok(PagedResult<QuotaAllocationResponse>.Empty(1, 25));
+
+    public ApiCallResult<QuotaAllocationResponse> QuotaAllocationResult { get; set; } =
+        ApiCallResult<QuotaAllocationResponse>.Ok(WebTestData.Allocation());
+
+    public ApiCallResult<QuotaResetResult> QuotaResetResult { get; set; } =
+        ApiCallResult<QuotaResetResult>.Ok(new QuotaResetResult(0, 2026, 9, DateTimeOffset.UnixEpoch));
 
     public ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>> RequestsResult { get; set; } =
         ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>.Ok(WebTestData.Page<QuotaIncreaseRequestResponse>());
 
+    public ApiCallResult<QuotaIncreaseRequestResponse> RequestResult { get; set; } =
+        ApiCallResult<QuotaIncreaseRequestResponse>.Ok(WebTestData.Request());
+
     public ApiCallResult<QuotaIncreaseRequestResponse> SubmitRequestResult { get; set; } =
         ApiCallResult<QuotaIncreaseRequestResponse>.Ok(WebTestData.Request());
+
+    public ApiCallResult<ApiKeyResponse> KeyResult { get; set; } = ApiCallResult<ApiKeyResponse>.Ok(WebTestData.Key());
 
     public ApiCallResult<ApiKeyRevealResponse> RevealKeyResult { get; set; } =
         ApiCallResult<ApiKeyRevealResponse>.Ok(WebTestData.Reveal());
@@ -67,46 +120,7 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
     public ApiCallResult<PagedResult<AuditLogEntryResponse>> AuditResult { get; set; } =
         ApiCallResult<PagedResult<AuditLogEntryResponse>>.Ok(WebTestData.Page<AuditLogEntryResponse>());
 
-    // -- Canned responses for the admin management pages (#51-#53, #62, #63) --------------------
-
-    public ApiCallResult<PagedResult<UserResponse>> UsersResult { get; set; } =
-        ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page<UserResponse>());
-
-    public ApiCallResult<UserDetailResponse> UserDetailResult { get; set; } =
-        ApiCallResult<UserDetailResponse>.Fail(ApiCallStatus.NotFound, "No user arranged for this test.");
-
-    public ApiCallResult<UserSyncResult> UserSyncResult { get; set; } =
-        ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(0, 0, 0, 0, 0));
-
-    public ApiCallResult<PagedResult<GroupResponse>> GroupsResult { get; set; } =
-        ApiCallResult<PagedResult<GroupResponse>>.Ok(WebTestData.Page<GroupResponse>());
-
-    public ApiCallResult<GroupDetailResponse> GroupDetailResult { get; set; } =
-        ApiCallResult<GroupDetailResponse>.Fail(ApiCallStatus.NotFound, "No group arranged for this test.");
-
-    public ApiCallResult<PagedResult<GroupMemberResponse>> GroupMembersResult { get; set; } =
-        ApiCallResult<PagedResult<GroupMemberResponse>>.Ok(WebTestData.Page<GroupMemberResponse>());
-
-    public ApiCallResult<GroupResponse> CreateGroupResult { get; set; } =
-        ApiCallResult<GroupResponse>.Fail(ApiCallStatus.Error, "No create result arranged for this test.");
-
-    public ApiCallResult<GroupSyncResult> GroupSyncResult { get; set; } =
-        ApiCallResult<GroupSyncResult>.Ok(new GroupSyncResult(0, 0, 0, 0));
-
-    public ApiCallResult<QuotaIncreaseRequestResponse> RequestResult { get; set; } =
-        ApiCallResult<QuotaIncreaseRequestResponse>.Fail(ApiCallStatus.NotFound, "No request arranged for this test.");
-
-    public ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>> FoundryDeploymentsResult { get; set; } =
-        ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>.Ok([]);
-
-    public ApiCallResult<FoundryDeploymentResponse> CreateFoundryDeploymentResult { get; set; } =
-        ApiCallResult<FoundryDeploymentResponse>.Fail(ApiCallStatus.Error, "No create result arranged for this test.");
-
-    /// <summary>What the user row-returning mutations (quota, activate, deactivate) answer.</summary>
-    public ApiCallResult<UserResponse> UserMutationResult { get; set; } =
-        ApiCallResult<UserResponse>.Ok(AdminTestData.User());
-
-    /// <summary>What every "it worked" mutation answers. Set a failure to exercise the error path.</summary>
+    /// <summary>What every "it worked" mutation returns — activate, deactivate, quota edits, membership changes.</summary>
     public ApiCallResult<bool> MutationResult { get; set; } = ApiCallResult<bool>.Ok(true);
 
     // -- Captured arguments ---------------------------------------------------------------------
@@ -117,9 +131,10 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     public List<(AuditLogQuery Query, PagedRequest Paging)> AuditQueries { get; } = [];
 
-    public List<(QuotaRequestQuery Query, PagedRequest Paging)> FilteredRequestQueries { get; } = [];
+    /// <summary>Every filtered <c>GET /requests</c> the pages made, in order.</summary>
+    public List<(QuotaRequestQuery Query, PagedRequest Paging)> RequestListCalls { get; } = [];
 
-    public List<(UserListQuery Query, PagedRequest Paging)> UserListCalls { get; } = [];
+    public List<(PagedRequest Paging, string? Search)> GroupListCalls { get; } = [];
 
     public List<int> ActivatedUserIds { get; } = [];
 
@@ -127,13 +142,11 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     public List<(int UserId, UpdateUserQuotaRequest Request)> QuotaUpdates { get; } = [];
 
-    public List<(PagedRequest Paging, string? Search)> GroupListCalls { get; } = [];
-
     public List<CreateGroupRequest> CreatedGroups { get; } = [];
 
     public List<(int GroupId, UpdateGroupRequest Request)> GroupUpdates { get; } = [];
 
-    public List<(int GroupId, bool Force)> DeletedGroups { get; } = [];
+    public List<int> DeletedGroupIds { get; } = [];
 
     public List<(int GroupId, int UserId)> AddedGroupMembers { get; } = [];
 
@@ -151,82 +164,60 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     public List<int> RevokedKeyUserIds { get; } = [];
 
-    public List<CreateFoundryDeploymentRequest> CreatedDeployments { get; } = [];
-
-    public List<(string AccountName, string DeploymentName)> DeletedDeployments { get; } = [];
-
     /// <summary>How many times the named method was called (method names, e.g. <c>GetDashboardAsync</c>).</summary>
     public int CallCount(string method) => _calls.TryGetValue(method, out var count) ? count : 0;
+
+    // -- Fluent arrange helpers -----------------------------------------------------------------
+
+    public FakeFoundryGateApiClient ArrangeTiers(IReadOnlyList<QuotaTierResponse> tiers)
+    {
+        QuotaTiersResult = ApiCallResult<IReadOnlyList<QuotaTierResponse>>.Ok(tiers);
+        return this;
+    }
+
+    public FakeFoundryGateApiClient ArrangeUsers(params UserResponse[] users)
+    {
+        UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page(users));
+        return this;
+    }
+
+    public FakeFoundryGateApiClient ArrangeGroups(params GroupResponse[] groups)
+    {
+        GroupsResult = ApiCallResult<PagedResult<GroupResponse>>.Ok(WebTestData.Page(groups));
+        return this;
+    }
+
+    public FakeFoundryGateApiClient ArrangeGroup(GroupResponse group, params GroupMemberResponse[] members)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+
+        GroupDetailResult = ApiCallResult<GroupDetailResponse>.Ok(new GroupDetailResponse(group, members));
+        GroupMembersResult = ApiCallResult<PagedResult<GroupMemberResponse>>.Ok(WebTestData.Page(members));
+        return this;
+    }
+
+    public FakeFoundryGateApiClient ArrangeRequests(params QuotaIncreaseRequestResponse[] requests)
+    {
+        RequestsResult = ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>.Ok(WebTestData.Page(requests));
+        return this;
+    }
+
+    public FakeFoundryGateApiClient ArrangeMutationFailure(ApiCallStatus status, string message)
+    {
+        MutationResult = ApiCallResult<bool>.Fail(status, message);
+        return this;
+    }
 
     // -- IFoundryGateApiClient ------------------------------------------------------------------
 
     public Task<ApiCallResult<UserProfileResponse>> GetMeAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetMeAsync), MeResult);
 
-    public Task<ApiCallResult<IReadOnlyList<FoundryModelResponse>>> GetFoundryModelsAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(GetFoundryModelsAsync), FoundryModelsResult);
-
-    public Task<ApiCallResult<IReadOnlyList<QuotaTierResponse>>> GetQuotaTiersAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(GetQuotaTiersAsync), QuotaTiersResult);
-
-    public Task<ApiCallResult<ApiKeyRevealResponse>> RevealMyKeyAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(RevealMyKeyAsync), RevealKeyResult);
-
-    public Task<ApiCallResult<ApiKeyRevealResponse>> RotateMyKeyAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(RotateMyKeyAsync), RotateKeyResult);
-
-    public Task<ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>> GetRequestsAsync(PagedRequest paging, CancellationToken ct = default) =>
-        RespondAsync(nameof(GetRequestsAsync), RequestsResult);
-
-    public Task<ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>> GetRequestsAsync(
-        QuotaRequestQuery query,
-        PagedRequest paging,
-        CancellationToken ct = default)
-    {
-        FilteredRequestQueries.Add((query, paging));
-        return RespondAsync(nameof(GetRequestsAsync), RequestsResult);
-    }
-
-    public Task<ApiCallResult<QuotaIncreaseRequestResponse>> SubmitRequestAsync(SubmitQuotaIncreaseRequest request, CancellationToken ct = default)
-    {
-        SubmittedRequests.Add(request);
-        return RespondAsync(nameof(SubmitRequestAsync), SubmitRequestResult);
-    }
-
-    public Task<ApiCallResult<DashboardSummaryResponse>> GetDashboardAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(GetDashboardAsync), DashboardResult);
-
-    public Task<ApiCallResult<IReadOnlyList<SystemConfigEntryResponse>>> GetConfigAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(GetConfigAsync), ConfigResult);
-
-    public Task<ApiCallResult<bool>> UpdateConfigAsync(string key, UpdateSystemConfigRequest request, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        ConfigUpdates.Add((key, request.Value));
-        var result = UpdateConfigResults.TryGetValue(key, out var perKey) ? perKey : UpdateConfigResult;
-        return RespondAsync(nameof(UpdateConfigAsync), result);
-    }
-
-    public Task<ApiCallResult<PagedResult<AuditLogEntryResponse>>> GetAuditLogAsync(AuditLogQuery query, PagedRequest paging, CancellationToken ct = default)
-    {
-        AuditQueries.Add((query, paging));
-        return RespondAsync(nameof(GetAuditLogAsync), AuditResult);
-    }
-
-    // -- Admin management pages (#51-#53, #62, #63) ----------------------------------------------
-
     public Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(PagedRequest paging, CancellationToken ct = default) =>
-        GetUsersAsync(new UserListQuery(null, null), paging, ct);
-
-    public Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(UserListQuery query, PagedRequest paging, CancellationToken ct = default)
-    {
-        UserListCalls.Add((query, paging));
-        return RespondAsync(nameof(GetUsersAsync), UsersResult);
-    }
+        RespondAsync(nameof(GetUsersAsync), UsersResult);
 
     public Task<ApiCallResult<UserDetailResponse>> GetUserAsync(int userId, CancellationToken ct = default) =>
-        RespondAsync(nameof(GetUserAsync), UserDetailResult);
+        RespondAsync(nameof(GetUserAsync), UserResult);
 
     public Task<ApiCallResult<UserResponse>> UpdateUserQuotaAsync(int userId, UpdateUserQuotaRequest request, CancellationToken ct = default)
     {
@@ -276,12 +267,11 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
         return RespondAsync(nameof(UpdateGroupAsync), MutationResult);
     }
 
-    public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, CancellationToken ct = default) =>
-        DeleteGroupAsync(groupId, force: false, ct);
-
-    public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, bool force, CancellationToken ct = default)
+    public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, CancellationToken ct = default)
     {
-        DeletedGroups.Add((groupId, force));
+        // The forced overload records the flag as well; this one is the un-forced call.
+        DeletedGroups.Add((groupId, false));
+        DeletedGroupIds.Add(groupId);
         return RespondAsync(nameof(DeleteGroupAsync), MutationResult);
     }
 
@@ -308,24 +298,56 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
         return RespondAsync(nameof(SyncGroupFromEntraAsync), GroupSyncResult);
     }
 
+    /// <summary>
+    /// Answers <see cref="GroupsSyncResult"/> when a test arranged one — the bulk route returns a
+    /// row per group, including rows with <c>Succeeded = false</c>, which the single-group result
+    /// cannot express. Falls back to wrapping the single-group result so tests that only care that
+    /// the call happened need arrange nothing.
+    /// </summary>
     public Task<ApiCallResult<IReadOnlyList<GroupSyncResult>>> SyncGroupsFromEntraAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(SyncGroupsFromEntraAsync), ApiCallResult<IReadOnlyList<GroupSyncResult>>.Ok([]));
+        RespondAsync(
+            nameof(SyncGroupsFromEntraAsync),
+            GroupsSyncResult.Value is { Count: > 0 }
+                ? GroupsSyncResult
+                : GroupSyncResult.IsSuccess && GroupSyncResult.Value is { } one
+                    ? ApiCallResult<IReadOnlyList<GroupSyncResult>>.Ok([one])
+                    : ApiCallResult<IReadOnlyList<GroupSyncResult>>.Fail(GroupSyncResult.Status, GroupSyncResult.Message ?? "Sync failed."));
+
+    public Task<ApiCallResult<IReadOnlyList<FoundryModelResponse>>> GetFoundryModelsAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetFoundryModelsAsync), FoundryModelsResult);
+
+    public Task<ApiCallResult<IReadOnlyList<QuotaTierResponse>>> GetQuotaTiersAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetQuotaTiersAsync), QuotaTiersResult);
 
     public Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(PagedRequest paging, CancellationToken ct = default) =>
-        RespondAsync(nameof(GetQuotaAllocationsAsync), ApiCallResult<PagedResult<QuotaAllocationResponse>>.Ok(WebTestData.Page<QuotaAllocationResponse>()));
+        RespondAsync(nameof(GetQuotaAllocationsAsync), QuotaAllocationsResult);
 
     public Task<ApiCallResult<QuotaAllocationResponse>> GetMyQuotaAllocationAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(GetMyQuotaAllocationAsync), ApiCallResult<QuotaAllocationResponse>.Ok(WebTestData.Allocation()));
+        RespondAsync(nameof(GetMyQuotaAllocationAsync), QuotaAllocationResult);
 
     public Task<ApiCallResult<QuotaAllocationResponse>> GetUserQuotaAllocationAsync(int userId, CancellationToken ct = default) =>
-        RespondAsync(
-            nameof(GetUserQuotaAllocationAsync),
-            UserDetailResult.Value?.CurrentAllocation is { } allocation
-                ? ApiCallResult<QuotaAllocationResponse>.Ok(allocation)
-                : NotStubbed<QuotaAllocationResponse>());
+        RespondAsync(nameof(GetUserQuotaAllocationAsync), QuotaAllocationResult);
 
     public Task<ApiCallResult<QuotaResetResult>> ResetQuotaAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(ResetQuotaAsync), NotStubbed<QuotaResetResult>());
+        RespondAsync(nameof(ResetQuotaAsync), QuotaResetResult);
+
+    public Task<ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>> GetRequestsAsync(PagedRequest paging, CancellationToken ct = default) =>
+        RespondAsync(nameof(GetRequestsAsync), RequestsResult);
+
+    public Task<ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>> GetRequestsAsync(
+        QuotaRequestQuery query,
+        PagedRequest paging,
+        CancellationToken ct = default)
+    {
+        RequestListCalls.Add((query, paging));
+        return RespondAsync(nameof(GetRequestsAsync), RequestsResult);
+    }
+
+    public Task<ApiCallResult<QuotaIncreaseRequestResponse>> SubmitRequestAsync(SubmitQuotaIncreaseRequest request, CancellationToken ct = default)
+    {
+        SubmittedRequests.Add(request);
+        return RespondAsync(nameof(SubmitRequestAsync), SubmitRequestResult);
+    }
 
     public Task<ApiCallResult<QuotaIncreaseRequestResponse>> GetRequestAsync(int requestId, CancellationToken ct = default) =>
         RespondAsync(nameof(GetRequestAsync), RequestResult);
@@ -347,7 +369,13 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
     }
 
     public Task<ApiCallResult<ApiKeyResponse>> GetMyKeyAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(GetMyKeyAsync), ApiCallResult<ApiKeyResponse>.Ok(WebTestData.Key()));
+        RespondAsync(nameof(GetMyKeyAsync), KeyResult);
+
+    public Task<ApiCallResult<ApiKeyRevealResponse>> RevealMyKeyAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(RevealMyKeyAsync), RevealKeyResult);
+
+    public Task<ApiCallResult<ApiKeyRevealResponse>> RotateMyKeyAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(RotateMyKeyAsync), RotateKeyResult);
 
     public Task<ApiCallResult<ApiKeyRevealResponse>> RotateUserKeyAsync(int userId, CancellationToken ct = default)
     {
@@ -367,67 +395,26 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
         return RespondAsync(nameof(RevokeUserKeyAsync), MutationResult);
     }
 
-    public Task<ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>> GetFoundryDeploymentsAsync(CancellationToken ct = default) =>
-        RespondAsync(nameof(GetFoundryDeploymentsAsync), FoundryDeploymentsResult);
+    public Task<ApiCallResult<IReadOnlyList<SystemConfigEntryResponse>>> GetConfigAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetConfigAsync), ConfigResult);
 
-    public Task<ApiCallResult<FoundryDeploymentResponse>> CreateFoundryDeploymentAsync(CreateFoundryDeploymentRequest request, CancellationToken ct = default)
+    public Task<ApiCallResult<bool>> UpdateConfigAsync(string key, UpdateSystemConfigRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        CreatedDeployments.Add(request);
-        return RespondAsync(nameof(CreateFoundryDeploymentAsync), CreateFoundryDeploymentResult);
+        ConfigUpdates.Add((key, request.Value));
+        var result = UpdateConfigResults.TryGetValue(key, out var perKey) ? perKey : UpdateConfigResult;
+        return RespondAsync(nameof(UpdateConfigAsync), result);
     }
 
-    public Task<ApiCallResult<bool>> DeleteFoundryDeploymentAsync(string accountName, string deploymentName, CancellationToken ct = default)
+    public Task<ApiCallResult<PagedResult<AuditLogEntryResponse>>> GetAuditLogAsync(AuditLogQuery query, PagedRequest paging, CancellationToken ct = default)
     {
-        DeletedDeployments.Add((accountName, deploymentName));
-        return RespondAsync(nameof(DeleteFoundryDeploymentAsync), MutationResult);
+        AuditQueries.Add((query, paging));
+        return RespondAsync(nameof(GetAuditLogAsync), AuditResult);
     }
 
-    // -- Arrange helpers ------------------------------------------------------------------------
-
-    /// <summary>The tier catalogue every quota display and editor reads.</summary>
-    public FakeFoundryGateApiClient ArrangeTiers(IReadOnlyList<QuotaTierResponse> tiers)
-    {
-        QuotaTiersResult = ApiCallResult<IReadOnlyList<QuotaTierResponse>>.Ok(tiers);
-        return this;
-    }
-
-    /// <summary>One full page of users for <c>GET /users</c>.</summary>
-    public FakeFoundryGateApiClient ArrangeUsers(params UserResponse[] users)
-    {
-        UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page(users));
-        return this;
-    }
-
-    /// <summary>One full page of groups for <c>GET /groups</c>.</summary>
-    public FakeFoundryGateApiClient ArrangeGroups(params GroupResponse[] groups)
-    {
-        GroupsResult = ApiCallResult<PagedResult<GroupResponse>>.Ok(WebTestData.Page(groups));
-        return this;
-    }
-
-    /// <summary>A group plus its roster: <c>GET /groups/{id}</c> and <c>GET /groups/{id}/members</c> together.</summary>
-    public FakeFoundryGateApiClient ArrangeGroup(GroupResponse group, params GroupMemberResponse[] members)
-    {
-        GroupDetailResult = ApiCallResult<GroupDetailResponse>.Ok(new GroupDetailResponse(group, members));
-        GroupMembersResult = ApiCallResult<PagedResult<GroupMemberResponse>>.Ok(WebTestData.Page(members));
-        return this;
-    }
-
-    /// <summary>One full page of quota-increase requests for <c>GET /requests</c>.</summary>
-    public FakeFoundryGateApiClient ArrangeRequests(params QuotaIncreaseRequestResponse[] requests)
-    {
-        RequestsResult = ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>.Ok(WebTestData.Page(requests));
-        return this;
-    }
-
-    /// <summary>What <c>GET /foundry/deployments</c> returns.</summary>
-    public FakeFoundryGateApiClient ArrangeDeployments(params FoundryDeploymentResponse[] deployments)
-    {
-        FoundryDeploymentsResult = ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>.Ok(deployments);
-        return this;
-    }
+    public Task<ApiCallResult<DashboardSummaryResponse>> GetDashboardAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetDashboardAsync), DashboardResult);
 
     // -- Plumbing -------------------------------------------------------------------------------
 
@@ -442,7 +429,4 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
 
         return result;
     }
-
-    private static ApiCallResult<T> NotStubbed<T>() =>
-        ApiCallResult<T>.Fail(ApiCallStatus.Unavailable, "This call has no canned response in FakeFoundryGateApiClient.");
 }

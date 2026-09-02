@@ -1,3 +1,6 @@
+@implements IDisposable
+@inject DashboardStateService DashboardState
+
 <MudNavMenu Class="pa-2">
     <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Home">Home</MudNavLink>
 
@@ -17,7 +20,15 @@
                         <MudNavLink Href="users/sync" Icon="@Icons.Material.Filled.Sync">Sync Entra Users</MudNavLink>
                         <MudNavLink Href="groups" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Groups">Groups</MudNavLink>
                         <MudNavLink Href="groups/new" Icon="@Icons.Material.Filled.AddCircleOutline">New Group</MudNavLink>
-                        <MudNavLink Href="requests" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.FactCheck">All Requests</MudNavLink>
+                        <MudNavLink Href="requests" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.FactCheck">
+                            <MudBadge Content="@DashboardState.PendingRequestCount"
+                                      Color="Color.Warning"
+                                      Overlap="false"
+                                      Visible="@(DashboardState.PendingRequestCount > 0)"
+                                      data-testid="nav-pending-badge">
+                                All Requests
+                            </MudBadge>
+                        </MudNavLink>
                         <MudNavLink Href="foundry" Icon="@Icons.Material.Filled.Memory">Foundry Deployments</MudNavLink>
                         <MudNavLink Href="config" Icon="@Icons.Material.Filled.Settings">Configuration</MudNavLink>
                         <MudNavLink Href="audit" Icon="@Icons.Material.Filled.History">Audit Log</MudNavLink>
@@ -27,3 +38,13 @@
         </Authorized>
     </AuthorizeView>
 </MudNavMenu>
+
+@code {
+    // The pending-request badge is published by /dashboard (#54) rather than fetched here: the
+    // nav is rendered for every signed-in user, and GET /dashboard is admin-only.
+    protected override void OnInitialized() => DashboardState.Changed += OnDashboardStateChanged;
+
+    private void OnDashboardStateChanged() => _ = InvokeAsync(StateHasChanged);
+
+    public void Dispose() => DashboardState.Changed -= OnDashboardStateChanged;
+}
