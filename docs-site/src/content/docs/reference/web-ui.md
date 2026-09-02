@@ -72,7 +72,7 @@ answers `409` anyway, the page says so and locks the form instead of navigating 
 | `/requests` | Any | The quota increase review queue. **Not admin-only**: a developer sees their own requests here (the nav links it as "My Requests"), an admin sees everyone's — the API scopes the list, not the route |
 | `/requests/{id}` | Owner or Admin | One request, with the approve/reject panel for admins |
 | `/foundry` | Admin | Foundry model deployments |
-| `/config` | Admin | Edit the `SystemConfiguration` key-value rows |
+| `/config` | Admin | Edit the `SystemConfiguration` key-value rows (the `RateCard` gets a multi-line box — it is JSON) |
 | `/audit` | Admin | Browse and filter the audit trail |
 
 ### `/dashboard`
@@ -93,6 +93,11 @@ flag: the gateway 403s an over-budget request itself. **Who has run out of token
 grid — both are usage figures, so they sit next to the list they describe rather than in an
 enforcement-looking card — and it links to `/quota?isOverBudget=true&isActive=true` the same way.
 
+Once the fork has priced its tokens (the `RateCard` configuration key), the caption also carries an
+**estimated cost** for the period and the consumers grid gains an "Est. cost" column. Both are
+hover-labelled as estimates and neither appears at all until a rate card exists — a zero would read as
+"free". See [Cost estimates](/foundry-gate/reference/configuration/#cost-estimates-ratecard).
+
 Every figure here is a reconciliation number from the Log Analytics sync, refreshed on that job's
 cadence — not a live view of gateway enforcement.
 
@@ -108,6 +113,9 @@ on rewrites the query string, so the page you are looking at is the page you can
 the dashboard's cards link straight in with the filter already applied. A chip that is off means "no
 opinion", not "only the ones that are not" — turning **Hard-stopped** off shows everyone again
 rather than hiding the rows you came for.
+
+An "Est. cost" column appears here too, on the same terms: only once a `RateCard` is configured, and
+labelled an estimate wherever it shows.
 
 Rows exist only for developers who have been resolved this period: their first visit of the month,
 or the last `POST /quota/reset`. A budget that matches no configured tier carries a warning icon —

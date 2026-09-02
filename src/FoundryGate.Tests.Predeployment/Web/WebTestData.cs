@@ -89,6 +89,7 @@ public static class WebTestData
         bool isHardStopped = false,
         string userDisplayName = "Dev Eloper",
         string userEmail = "dev@example.test",
+        decimal? estimatedCost = null,
         QuotaLevelType level = QuotaLevelType.SystemDefault) =>
         new(
             QuotaAllocationId: 1,
@@ -106,7 +107,8 @@ public static class WebTestData
             ResolvedLevelType: level,
             TierProductId: tierProductId,
             IsGatewayCapped: isGatewayCapped,
-            ResetDate: null);
+            ResetDate: null,
+            EstimatedCost: estimatedCost);
 
     public static ApiKeyResponse Key(bool isProvisioned = true, string? maskedKey = "••••••••1a2b") =>
         new(isProvisioned, isProvisioned ? maskedKey : null, isProvisioned ? "/subscriptions/x/apim/sub/dev-7" : null);
@@ -254,7 +256,8 @@ public static class WebTestData
         long totalTokensUsed = 123_456_789,
         IReadOnlyList<TopConsumerResponse>? topConsumers = null,
         int hardStoppedUserCount = 0,
-        int overBudgetUserCount = 0) =>
+        int overBudgetUserCount = 0,
+        decimal? estimatedCostThisPeriod = null) =>
         new(
             totalUserCount,
             activeUserCount,
@@ -263,14 +266,16 @@ public static class WebTestData
             totalTokensUsed,
             topConsumers ?? [Consumer()],
             hardStoppedUserCount,
-            overBudgetUserCount);
+            overBudgetUserCount,
+            estimatedCostThisPeriod);
 
     public static TopConsumerResponse Consumer(
         string displayName = "Heavy User",
         long tokensUsed = 4_900_000,
         long? allocatedTokens = 5_000_000,
-        double? percentUsed = 98) =>
-        new(9, Guid.Parse("33333333-3333-3333-3333-333333333333"), displayName, tokensUsed, allocatedTokens, percentUsed);
+        double? percentUsed = 98,
+        decimal? estimatedCostThisPeriod = null) =>
+        new(9, Guid.Parse("33333333-3333-3333-3333-333333333333"), displayName, tokensUsed, allocatedTokens, percentUsed, estimatedCostThisPeriod);
 
     public static SystemConfigEntryResponse ConfigEntry(
         string key = SystemConfigurationKeys.DefaultMonthlyTokenQuota,

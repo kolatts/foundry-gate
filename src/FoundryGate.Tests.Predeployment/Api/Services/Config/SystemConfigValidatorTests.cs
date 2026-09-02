@@ -144,6 +144,53 @@ public class SystemConfigValidatorTests
     public void EnsureEditable_lets_every_other_key_through(string key) =>
         SystemConfigValidator.EnsureEditable(key);
 
+    // -- RateCard (#177) --
+
+    [Fact]
+    public void RateCard_stores_a_valid_card_normalized()
+    {
+        var stored = _validator.Normalize(
+            SystemConfigurationKeys.RateCard,
+            """  [ { "modelPrefix": "*", "inputPerMillion": 3, "outputPerMillion": 15 } ]  """);
+
+        // Re-serialized, so two admins pasting the same rates with different whitespace leave the
+        // same row behind — and so the row is always in the shape the reader expects.
+        Assert.Equal("""[{"modelPrefix":"*","inputPerMillion":3,"outputPerMillion":15}]""", stored);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void RateCard_treats_an_emptied_box_as_no_rate_card(string value) =>
+        Assert.Equal("[]", _validator.Normalize(SystemConfigurationKeys.RateCard, value));
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("{}")]
+    [InlineData("""[{"modelPrefix":"*","inputPerMillion":-1,"outputPerMillion":1}]""")]
+    [InlineData("""[{"modelPrefix":"","inputPerMillion":1,"outputPerMillion":1}]""")]
+    public void RateCard_rejects_a_malformed_card_with_the_rule_in_the_message(string value)
+    {
+        // A wrong rate card is a wrong invoice on the dashboard, so it has to fail at the edit.
+        var exception = Assert.Throws<ArgumentException>(
+            () => _validator.Normalize(SystemConfigurationKeys.RateCard, value));
+
+        Assert.Contains("modelPrefix", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("inputPerMillion", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RateCard_refuses_a_card_too_long_to_store()
+    {
+        var entries = Enumerable.Range(0, 400)
+            .Select(i => $$"""{"modelPrefix":"model-prefix-that-is-quite-long-{{i}}","inputPerMillion":1,"outputPerMillion":1}""");
+
+        var exception = Assert.Throws<ArgumentException>(
+            () => _validator.Normalize(SystemConfigurationKeys.RateCard, $"[{string.Join(',', entries)}]"));
+
+        Assert.Contains(ValidationConstants.ConfigValueMaxLength.ToString(System.Globalization.CultureInfo.InvariantCulture), exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Every_system_managed_key_is_refused_and_no_other_is()
     {

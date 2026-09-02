@@ -3,6 +3,7 @@ using FoundryGate.Domain.Dashboard.Contracts;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
+using MudBlazor;
 
 namespace FoundryGate.Tests.Predeployment.Web;
 
@@ -119,6 +120,51 @@ public class DashboardPageTests : WebTestContext
         var page = RenderPage<Dashboard>();
 
         Assert.Contains("nobody over budget", page.Find("[data-testid='stat-over-budget']").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_estimated_cost_is_shown_once_the_fork_has_priced_its_tokens()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(
+            estimatedCostThisPeriod: 1_234.5m,
+            topConsumers: [WebTestData.Consumer("Heavy User", 4_900_000, 5_000_000, 98, estimatedCostThisPeriod: 49m)]));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Contains("1,234.50", page.Find("[data-testid='stat-estimated-cost']").TextContent, StringComparison.Ordinal);
+        Assert.Contains("49.00", page.Find("[data-testid='consumer-cost-9']").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_estimated_cost_is_labelled_an_estimate_wherever_it_appears()
+    {
+        // #177: one blended rate over a token total that is itself a floor. A number without that
+        // caveat reads as a bill, which is exactly what it is not.
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(estimatedCostThisPeriod: 10m));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Contains("estimated cost", page.Find("[data-testid='stat-estimated-cost']").TextContent, StringComparison.Ordinal);
+
+        // The caveat lives in a tooltip, which MudBlazor renders on hover rather than into the
+        // markup — so assert on the component that carries it.
+        Assert.Contains(
+            page.FindComponents<MudTooltip>(),
+            tooltip => tooltip.Instance.Text?.Contains("estimate", StringComparison.OrdinalIgnoreCase) == true
+                && tooltip.Instance.Text.Contains("#177", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void No_rate_card_means_no_cost_on_screen_rather_than_a_zero()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(
+            estimatedCostThisPeriod: null,
+            topConsumers: [WebTestData.Consumer("Heavy User")]));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Empty(page.FindAll("[data-testid='stat-estimated-cost']"));
+        Assert.Empty(page.FindAll("[data-testid='consumer-cost-9']"));
     }
 
     [Fact]

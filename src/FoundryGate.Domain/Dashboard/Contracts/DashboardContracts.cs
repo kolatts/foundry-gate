@@ -30,6 +30,18 @@ namespace FoundryGate.Domain.Dashboard.Contracts;
 /// <c>token-quota</c> policy, so these developers are already being refused; this count is how an
 /// admin finds them before they ask. Unlimited allocations are never counted.
 /// </param>
+/// <param name="EstimatedCostThisPeriod">
+/// <see cref="TotalTokensUsedThisPeriod"/> priced at the fork's configured <c>RateCard</c> blended
+/// rate (#177), or <see langword="null"/> when no rate card is configured — which is how a fork
+/// ships, and a truer answer than a zero that reads as "free".
+/// <para>
+/// <b>An estimate, and labelled one everywhere it is rendered.</b> One blended rate is applied to
+/// one token total because that is all the control plane stores: <c>QuotaAllocation.TokensUsed</c>
+/// has no prompt/completion split and no per-model split (#213 stores both). The total is itself a
+/// floor (interrupted streams undercount, #84; cache-token weighting at the gateway is unverified,
+/// #88). Cost is a reporting figure — the gateway enforces tokens, never dollars.
+/// </para>
+/// </param>
 public record DashboardSummaryResponse(
     int TotalUserCount,
     int ActiveUserCount,
@@ -38,13 +50,23 @@ public record DashboardSummaryResponse(
     long TotalTokensUsedThisPeriod,
     IReadOnlyList<TopConsumerResponse> TopConsumers,
     int HardStoppedUserCount,
-    int OverBudgetUserCount);
+    int OverBudgetUserCount,
+    decimal? EstimatedCostThisPeriod);
 
 /// <summary>One entry in the dashboard's top-consumers list.</summary>
+/// <remarks>Like its parent, this is a positional record the Web client deserializes: append, never insert.</remarks>
+/// <param name="UserId">The consumer's int PK.</param>
+/// <param name="UserUnique">The consumer's externally-shared stable id.</param>
+/// <param name="DisplayName">The consumer's display name.</param>
+/// <param name="TokensUsed">Reconciled tokens this period.</param>
+/// <param name="AllocatedTokens">Their budget; null when unlimited.</param>
+/// <param name="PercentUsed">Null when unlimited; otherwise the share of the budget spent.</param>
+/// <param name="EstimatedCostThisPeriod">This consumer's <paramref name="TokensUsed"/> at the blended rate, or null when no rate card is configured. An estimate — see <see cref="DashboardSummaryResponse.EstimatedCostThisPeriod"/>.</param>
 public record TopConsumerResponse(
     int UserId,
     Guid UserUnique,
     string DisplayName,
     long TokensUsed,
     long? AllocatedTokens,
-    double? PercentUsed);
+    double? PercentUsed,
+    decimal? EstimatedCostThisPeriod);

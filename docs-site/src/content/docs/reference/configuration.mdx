@@ -16,10 +16,57 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 | `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. **Superseded** for deployment management by the `Gateway__*` environment variables below (the gateway runs one account per region, and infra sets them, so nothing has to be typed here); kept as seeded reference data. |
 | `EntraGroupSyncEnabled` | `"false"` | Set to `"true"` to enable automatic Entra group member sync. When `false`, group sync must be triggered manually from the admin UI. |
 | `ResetDayOfMonth` | `"1"` | Day of month the monthly quota reset acts on, `1`–`28` (no month is short of a 28th). The reset Function wakes daily at 00:01 UTC and runs on the first tick **on or after** this day that finds the month not yet reset — so a tick lost to an outage is picked up the next day instead of costing the month its reset, and a change here takes effect the next day with no redeploy. A value outside the range falls back to `1` with a warning rather than never resetting. Note this moves *FoundryGate's* allocation rows only — the gateway's own `token-quota` window is a UTC calendar month and always resets on the 1st, whatever this says. |
+| `RateCard` | `"[]"` | What a token costs, as a JSON array of `{ "modelPrefix", "inputPerMillion", "outputPerMillion" }` objects. Drives the estimated cost figures on `/dashboard` and `/quota` — see [Cost estimates](#cost-estimates-ratecard). Empty by default: until you price your own tokens, no cost is shown anywhere. |
 
 Blank values (`""`) are deliberate placeholders. Nothing breaks while they are blank: everything the
 gateway is actually addressed by comes from the `Gateway__*` environment variables below, which infra
 sets automatically.
+
+### Cost estimates (`RateCard`)
+
+Azure cannot answer "what did this developer cost?". Claude bills as a single aggregate Marketplace
+CCU meter, so Cost Management cannot break spend down per deployment, per subscription or per user.
+FoundryGate therefore computes it from your own prices:
+
+```json
+[
+  { "modelPrefix": "*", "inputPerMillion": 3, "outputPerMillion": 15 },
+  { "modelPrefix": "claude-opus", "inputPerMillion": 15, "outputPerMillion": 75 }
+]
+```
+
+Prices are per million tokens, in whatever currency you priced them in — FoundryGate never renders a
+currency symbol, because it does not know which one you meant. `modelPrefix` is matched against a
+deployment's model name by prefix; `*` is the fallback. Each prefix may appear at most once and no
+price may be negative; `PUT /config/RateCard` answers `400` with the rule in the message, and stores
+the card re-serialized so whitespace differences do not leave two versions of the same rates.
+
+**The formula, and its caveat.** For an allocation:
+
+```
+estimatedCost = tokensUsed / 1_000_000 × blendedRatePerMillion
+blendedRatePerMillion = mean(inputPerMillion, outputPerMillion) of the "*" entry
+```
+
+Only the `*` entry is read today. `QuotaAllocation.TokensUsed` is a **single total**: it carries no
+prompt/completion split, so the two prices cannot be applied separately, and no per-model split, so
+the per-model entries are validated and stored but nothing reads them yet
+([#213](https://github.com/kolatts/foundry-gate/issues/213) stores both splits — the reconciliation
+KQL already selects `PromptTokens`/`CompletionTokens` and sees `ModelName` on every row, so the data
+is discarded on the way in rather than missing at the source). If you know your real prompt/completion
+mix, express it by setting **both** of the `*` entry's prices to your own blended number.
+
+Three reasons every figure derived from this is labelled an estimate, and stays labelled:
+
+1. one blended rate, because there is no prompt/completion split;
+2. one rate for every model, because there is no per-model split;
+3. the token totals are a floor — interrupted streams undercount
+   ([#84](https://github.com/kolatts/foundry-gate/issues/84)) and cache-read/creation token weighting
+   at the gateway is unverified ([#88](https://github.com/kolatts/foundry-gate/issues/88)).
+
+With no `*` entry — the shipped default — every cost field is `null` and nothing renders one. That is
+deliberate: a zero would read as "free". Cost is a reporting figure and nothing else; the gateway
+enforces tokens, never dollars.
 
 ### System-managed keys
 

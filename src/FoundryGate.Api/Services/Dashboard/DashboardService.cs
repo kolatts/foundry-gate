@@ -1,3 +1,4 @@
+using FoundryGate.Api.Services.Cost;
 using FoundryGate.Data;
 using FoundryGate.Domain.Dashboard.Contracts;
 using FoundryGate.Domain.Quota;
@@ -26,6 +27,7 @@ namespace FoundryGate.Api.Services.Dashboard;
 public sealed class DashboardService(
     AppDbContext dbContext,
     IMemoryCache cache,
+    ICostEstimator costEstimator,
     TimeProvider timeProvider) : IDashboardService
 {
     /// <summary>Prefix of the <see cref="IMemoryCache"/> key; the current <see cref="BillingPeriod"/> is appended.</summary>
@@ -110,6 +112,10 @@ public sealed class DashboardService(
                 a.AllocatedTokens))
             .ToListAsync(cancellationToken);
 
+        // The fork's own prices, read once for the whole summary (#177). Null everywhere when no
+        // rate card is configured, which is how a fork ships — a truer answer than a zero.
+        var rateCard = await costEstimator.GetRateCardAsync(cancellationToken);
+
         return new DashboardSummaryResponse(
             totalUserCount,
             activeUserCount,
@@ -122,9 +128,11 @@ public sealed class DashboardService(
                 c.DisplayName,
                 c.TokensUsed,
                 c.AllocatedTokens,
-                PercentUsed(c.AllocatedTokens, c.TokensUsed)))],
+                PercentUsed(c.AllocatedTokens, c.TokensUsed),
+                rateCard.Estimate(c.TokensUsed)))],
             hardStoppedUserCount,
-            overBudgetUserCount);
+            overBudgetUserCount,
+            rateCard.Estimate(totalTokensUsedThisPeriod));
     }
 
     private IQueryable<Data.Entities.QuotaAllocation> CurrentPeriod(BillingPeriod period) =>

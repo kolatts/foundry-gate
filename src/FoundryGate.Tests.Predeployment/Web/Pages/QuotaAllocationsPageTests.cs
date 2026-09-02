@@ -4,6 +4,7 @@ using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Quota.Contracts;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
+using MudBlazor;
 
 namespace FoundryGate.Tests.Predeployment.Web.Pages;
 
@@ -175,6 +176,39 @@ public class QuotaAllocationsPageTests : WebTestContext
             Assert.Contains("Unlimited", page.Find("[data-testid=quota-grid]").TextContent, StringComparison.Ordinal);
             Assert.Empty(page.FindAll("[data-testid=quota-over-budget-13]"));
         });
+    }
+
+    [Fact]
+    public void An_estimated_cost_column_appears_once_the_fork_has_priced_its_tokens()
+    {
+        Api.ArrangeAllocations(WebTestData.Allocation(userId: 11, tokensUsed: 4_000_000, estimatedCost: 36m));
+
+        var page = RenderPage<QuotaAllocations>();
+
+        page.WaitForAssertion(() =>
+        {
+            Assert.Contains("36.00", page.Find("[data-testid=quota-cost-11]").TextContent, StringComparison.Ordinal);
+
+            // #177: an unqualified currency figure next to a developer's name reads as a bill. The
+            // caveat is a tooltip, which MudBlazor renders on hover rather than into the markup.
+            Assert.Contains(
+                page.FindComponents<MudTooltip>(),
+                tooltip => tooltip.Instance.Text?.Contains("#177", StringComparison.Ordinal) == true);
+        });
+    }
+
+    [Fact]
+    public void Without_a_rate_card_there_is_no_cost_column_at_all()
+    {
+        // An always-empty "Est. cost" column reads as "we could not work it out" rather than as
+        // "nobody has priced this fork's tokens".
+        Api.ArrangeAllocations(WebTestData.Allocation(userId: 11, estimatedCost: null));
+
+        var page = RenderPage<QuotaAllocations>();
+
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=quota-grid]")));
+        Assert.Empty(page.FindAll("[data-testid=quota-cost-11]"));
+        Assert.DoesNotContain("Est. cost", page.Find("[data-testid=quota-grid]").TextContent, StringComparison.Ordinal);
     }
 
     [Fact]

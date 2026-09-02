@@ -252,7 +252,9 @@ the page are the same query. Note that the deprovision pipeline hard-stops *and*
 `?isHardStopped=true` on its own is mostly people who have left.
 
 `QuotaAllocationResponse` carries, besides the numeric fields (`allocatedTokens` — null when
-unlimited — `tokensUsed`, `percentUsed`, `isHardStopped`):
+unlimited — `tokensUsed`, `percentUsed`, `isHardStopped`, and `estimatedCost`, which is `tokensUsed`
+at the `RateCard` blended rate or `null` when none is configured — an estimate, see
+[Cost estimates](/foundry-gate/reference/configuration/#cost-estimates-ratecard)):
 
 - `resolvedLevelType` — which level of the five-level precedence chain produced the quota:
   `0` UserUnlimited, `1` UserOverride, `2` GroupUnlimited, `3` GroupMax, `4` SystemDefault.
@@ -559,15 +561,15 @@ keys that are missing.
 ### `GET /dashboard`
 
 Returns `{ totalUserCount, activeUserCount, unlimitedUserCount, pendingQuotaIncreaseRequestCount,
-totalTokensUsedThisPeriod, topConsumers, hardStoppedUserCount, overBudgetUserCount }` for the
-current UTC calendar month.
+totalTokensUsedThisPeriod, topConsumers, hardStoppedUserCount, overBudgetUserCount,
+estimatedCostThisPeriod }` for the current UTC calendar month.
 
 - `unlimitedUserCount` counts **active** unlimited users — a deactivated account consumes nothing.
 - `totalTokensUsedThisPeriod` sums every allocation in the period, deactivated users included: the
   tokens they spent before offboarding are still tokens this month spent.
 - `topConsumers` is the ten busiest **active** users this period, each with `userId`, `userUnique`,
-  `displayName`, `tokensUsed`, `allocatedTokens` and `percentUsed` — `null` for an unlimited user,
-  `100` for a zero quota with any usage.
+  `displayName`, `tokensUsed`, `allocatedTokens`, `percentUsed` — `null` for an unlimited user,
+  `100` for a zero quota with any usage — and `estimatedCostThisPeriod`.
 - `hardStoppedUserCount` counts **active** users whose current-period allocation carries
   `isHardStopped`. That flag is set by the deprovision pipeline and cleared by re-activation and by
   the monthly reset; quota exhaustion never sets it. An active user carrying it is an
@@ -576,6 +578,13 @@ current UTC calendar month.
 - `overBudgetUserCount` counts **active** users whose finite budget reconciled usage has reached or
   passed (`tokensUsed >= allocatedTokens`): the "who has run out" figure. The gateway is already
   refusing them with its own `403`. Unlimited allocations are never counted.
+
+- `estimatedCostThisPeriod` (and each consumer's) is `tokensUsed` priced at the `RateCard`
+  configuration's blended rate, or `null` when no rate card is configured — which is the shipped
+  default, and truer than a zero that reads as "free". **An estimate**: one blended rate over one
+  token total, because an allocation carries no prompt/completion split and no per-model split. See
+  [Cost estimates](/foundry-gate/reference/configuration/#cost-estimates-ratecard) for the formula
+  and its caveats.
 
 Every usage figure here is a reconciliation number from the Log Analytics sync, refreshed on that
 job's cadence — not a live view of gateway enforcement.

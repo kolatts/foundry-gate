@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using FoundryGate.Api.Services.Cost;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
@@ -24,6 +25,7 @@ public sealed class QuotaAllocationService(
     IQuotaResolutionService quotaResolution,
     IQuotaResetService quotaReset,
     GatewayTierMapper tierMapper,
+    ICostEstimator costEstimator,
     ICurrentUserAccessor currentUser,
     TimeProvider timeProvider,
     ILogger<QuotaAllocationService> logger) : IQuotaAllocationService
@@ -74,8 +76,11 @@ public sealed class QuotaAllocationService(
             .Select(Projection)
             .ToPagedAsync(paging, cancellationToken);
 
+        // One rate card for the whole page — it is a cached configuration read, not a per-row one.
+        var rateCard = await costEstimator.GetRateCardAsync(cancellationToken);
+
         return new PagedResult<QuotaAllocationResponse>(
-            [.. page.Items.Select(ToResponse)],
+            [.. page.Items.Select(row => ToResponse(row, rateCard))],
             page.TotalCount,
             page.Page,
             page.PageSize);
@@ -96,11 +101,12 @@ public sealed class QuotaAllocationService(
         }
 
         var period = BillingPeriod.Current(timeProvider);
+        var rateCard = await costEstimator.GetRateCardAsync(cancellationToken);
 
         var row = await FindRowAsync(user.UserId, period, cancellationToken);
         if (row is not null)
         {
-            return ToResponse(row);
+            return ToResponse(row, rateCard);
         }
 
         var resolution = await quotaResolution.ResolveAsync(user.UserId, period, cancellationToken);
@@ -126,21 +132,23 @@ public sealed class QuotaAllocationService(
             }
 
             logger.LogInformation(exception, "Concurrent allocation creation for user {UserId} in {Period}; returning the winning row.", user.UserId, period);
-            return ToResponse(row);
+            return ToResponse(row, rateCard);
         }
 
         // completionToken, not the request's: the read-back is what turns the committed row into the
         // response, and failing it on a cancelled token would report a save that actually succeeded as
         // an error (#163).
-        return ToResponse(await FindRowAsync(user.UserId, period, completionToken)
-            ?? throw new InvalidOperationException($"Allocation for user {user.UserId} in {period} was saved but could not be read back."));
+        return ToResponse(
+            await FindRowAsync(user.UserId, period, completionToken)
+            ?? throw new InvalidOperationException($"Allocation for user {user.UserId} in {period} was saved but could not be read back."),
+            rateCard);
     }
 
     /// <inheritdoc />
     public async Task<QuotaAllocationResponse?> FindUserAllocationAsync(int userId, CancellationToken cancellationToken)
     {
         var row = await FindRowAsync(userId, BillingPeriod.Current(timeProvider), cancellationToken);
-        return row is null ? null : ToResponse(row);
+        return row is null ? null : ToResponse(row, await costEstimator.GetRateCardAsync(cancellationToken));
     }
 
     /// <inheritdoc />
@@ -151,7 +159,7 @@ public sealed class QuotaAllocationService(
         var row = await FindRowAsync(userId, period, cancellationToken);
         if (row is not null)
         {
-            return ToResponse(row);
+            return ToResponse(row, await costEstimator.GetRateCardAsync(cancellationToken));
         }
 
         if (!await dbContext.Users.AnyAsync(u => u.UserId == userId, cancellationToken))
@@ -248,7 +256,7 @@ public sealed class QuotaAllocationService(
             .Select(Projection)
             .SingleOrDefaultAsync(cancellationToken);
 
-    private static QuotaAllocationResponse ToResponse(AllocationRow row) =>
+    private static QuotaAllocationResponse ToResponse(AllocationRow row, RateCard rateCard) =>
         new(
             row.QuotaAllocationId,
             row.UserId,
@@ -265,7 +273,8 @@ public sealed class QuotaAllocationService(
             row.ResolvedLevelType,
             row.TierProductId,
             row.IsGatewayCapped,
-            row.ResetDate);
+            row.ResetDate,
+            EstimatedCost: rateCard.Estimate(row.TokensUsed));
 
     /// <summary>Null when unlimited; a zero quota reads as 100% the moment anything is used (never a division by zero).</summary>
     private static double? PercentUsed(long? allocated, long used) => allocated switch

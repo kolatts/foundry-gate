@@ -203,6 +203,8 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
     [InlineData(SystemConfigurationKeys.EntraGroupSyncEnabled, "yes")]
     [InlineData(SystemConfigurationKeys.ApimResourceId, "not-an-arm-id")]
     [InlineData(SystemConfigurationKeys.FoundryResourceId, "not-an-arm-id")]
+    [InlineData(SystemConfigurationKeys.RateCard, "not json")]
+    [InlineData(SystemConfigurationKeys.RateCard, """[{"modelPrefix":"*","inputPerMillion":-1,"outputPerMillion":1}]""")]
     public async Task Update_with_a_value_the_key_does_not_allow_returns_400_and_changes_nothing(string key, string value)
     {
         var oid = Guid.NewGuid().ToString();

@@ -141,6 +141,17 @@ else
                                 <text>nobody over budget</text>
                             }
                         </span>
+                        @if (_summary.EstimatedCostThisPeriod is { } estimatedCost)
+                        {
+                            @* #177: only rendered when the fork has configured a RateCard. The word
+                               "estimate" is not decoration — see the tooltip. *@
+                            <text> · </text>
+                            <MudTooltip Text="@TierDisplay.CostEstimateTooltip">
+                                <span data-testid="stat-estimated-cost">
+                                    <span class="fg-mono">@TierDisplay.FormatCost(estimatedCost)</span> estimated cost
+                                </span>
+                            </MudTooltip>
+                        }
                     </MudText>
 
                     @if (_summary.TopConsumers.Count == 0)
@@ -165,6 +176,19 @@ else
                                 <TemplateColumn Title="Budget" CellClass="fg-mono">
                                     <CellTemplate Context="cell">@TierDisplay.FormatTokensExact(cell.Item.AllocatedTokens)</CellTemplate>
                                 </TemplateColumn>
+                                @if (_summary.TopConsumers.Any(c => c.EstimatedCostThisPeriod is not null))
+                                {
+                                    @* The column appears only once a rate card exists — an empty
+                                       "Est. cost" column would read as "we couldn't work it out". *@
+                                    <TemplateColumn Title="Est. cost" CellClass="fg-mono">
+                                        <HeaderTemplate>
+                                            <MudTooltip Text="@TierDisplay.CostEstimateTooltip">Est. cost</MudTooltip>
+                                        </HeaderTemplate>
+                                        <CellTemplate Context="cell">
+                                            <span data-testid="@($"consumer-cost-{cell.Item.UserId}")">@TierDisplay.FormatCost(cell.Item.EstimatedCostThisPeriod)</span>
+                                        </CellTemplate>
+                                    </TemplateColumn>
+                                }
                                 <TemplateColumn Title="Share of budget">
                                     <CellTemplate Context="cell">
                                         @if (cell.Item.PercentUsed is null)

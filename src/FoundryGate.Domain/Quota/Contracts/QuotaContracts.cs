@@ -46,6 +46,14 @@ namespace FoundryGate.Domain.Quota.Contracts;
 /// rather than at the number shown. Surfaced so admins can correct the value to a tier.
 /// </param>
 /// <param name="ResetDate">When this period's allocation row was last (re)computed by a monthly/manual reset; null for a row created on demand (first <c>/me</c> of the month).</param>
+/// <param name="EstimatedCost">
+/// <paramref name="TokensUsed"/> priced at the fork's configured <c>RateCard</c> blended rate
+/// (#177), or <see langword="null"/> when no rate card is configured. <b>An estimate</b>, and
+/// labelled one wherever it is rendered: one blended rate over one token total, because this row
+/// carries no prompt/completion split and no per-model split (#213 stores both), and the total is
+/// itself a floor (#84, #88). Appended at the end — this is a positional record the Web client
+/// deserializes.
+/// </param>
 public record QuotaAllocationResponse(
     int QuotaAllocationId,
     int UserId,
@@ -62,7 +70,8 @@ public record QuotaAllocationResponse(
     QuotaLevelType ResolvedLevelType,
     string TierProductId,
     bool IsGatewayCapped,
-    DateTimeOffset? ResetDate);
+    DateTimeOffset? ResetDate,
+    decimal? EstimatedCost);
 
 /// <summary>
 /// Filters for GET /quota/allocations (<c>[FromQuery]</c>, alongside <c>PagedRequest</c>) — issue

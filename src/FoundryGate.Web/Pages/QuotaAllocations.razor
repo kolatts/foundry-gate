@@ -123,6 +123,19 @@ else
             <TemplateColumn Title="Budget" CellClass="fg-mono" Sortable="false">
                 <CellTemplate>@TierDisplay.FormatTokensExact(context.Item.AllocatedTokens)</CellTemplate>
             </TemplateColumn>
+            @if (_hasCostEstimates)
+            {
+                @* #177. Only once the fork has configured a RateCard: an always-empty "Est. cost"
+                   column would read as a failure to work it out rather than as "not priced". *@
+                <TemplateColumn Title="Est. cost" CellClass="fg-mono" Sortable="false">
+                    <HeaderTemplate>
+                        <MudTooltip Text="@TierDisplay.CostEstimateTooltip">Est. cost</MudTooltip>
+                    </HeaderTemplate>
+                    <CellTemplate>
+                        <span data-testid="@($"quota-cost-{context.Item.UserId}")">@TierDisplay.FormatCost(context.Item.EstimatedCost)</span>
+                    </CellTemplate>
+                </TemplateColumn>
+            }
             <TemplateColumn Title="Share of budget" Sortable="false">
                 <CellTemplate>
                     @if (context.Item.PercentUsed is null)
@@ -212,6 +225,12 @@ else
     private bool _loading;
     private bool _accessDenied;
 
+    /// <summary>
+    /// Whether the last page carried any estimated cost — i.e. whether the fork has a
+    /// <c>RateCard</c> configured (#177). The column is hidden until it does.
+    /// </summary>
+    private bool _hasCostEstimates;
+
     private bool HasFilter =>
         _isHardStopped is not null
         || _isOverBudget is not null
@@ -267,7 +286,9 @@ else
             var query = new QuotaAllocationQuery(_isHardStopped, _isOverBudget, _tier, _search, _isActive);
             var result = await Api.GetQuotaAllocationsAsync(query, new PagedRequest(state.Page + 1, state.PageSize), cancellationToken);
 
-            return result.ToGridData(OnForbidden, Snackbar, "Couldn't load quota allocations.");
+            var data = result.ToGridData(OnForbidden, Snackbar, "Couldn't load quota allocations.");
+            _hasCostEstimates = data.Items.Any(a => a.EstimatedCost is not null);
+            return data;
         }
         finally
         {
