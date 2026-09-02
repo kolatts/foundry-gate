@@ -257,7 +257,11 @@ Badges on the diagram mark which is which.
 The database stage is the one with moving parts: the runner's IP is whitelisted on the SQL
 server, the workflow waits for firewall propagation and probes port 1433, then the
 `FoundryGate.Database` dacpac is deployed with DacFx (data-loss blocked unless a reviewed
-`allow-data-loss` override is passed) and reference data is seeded. Bicep re-runs pass
+`allow-data-loss` override is passed) and reference data is seeded. Two steps then close
+the loop that Bicep cannot: the API and Functions managed identities get their contained
+database users (`db grant-identities` — an Entra-only SQL server cannot grant a managed
+identity access through ARM), and the runner's own firewall rule is removed again, along
+with any left behind by a cancelled earlier run. Bicep re-runs pass
 `createModelDeployments=false` because Anthropic model deployments are create-once under
 ARM. That makes the ownership split explicit: Claude deployments belong to the
 infrastructure deploy end to end (created once, never re-PUT, never deleted from the app),

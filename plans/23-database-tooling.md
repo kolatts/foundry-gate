@@ -121,7 +121,7 @@ services.Deploy(dacpac, databaseName, upgradeExisting: true, options: new DacDep
     BlockOnPossibleDataLoss = true,
     GenerateSmartDefaults = true,
     DropObjectsNotInSource = dropObjects,   // --drop flag
-    ExcludeObjectTypes = [ObjectType.Users]
+    ExcludeObjectTypes = [ObjectType.Users, ObjectType.RoleMembership]  // both: db grant-identities owns them
 });
 ```
 Supports both SQL auth (connection string with `User ID`) and Entra/Managed Identity (via `DefaultAzureCredential` token provider injected into `DacServices`).
@@ -150,7 +150,13 @@ split; `ip setup` stub added — see the Status update note):
 - `src/FoundryGate.Cli/Commands/Local/LocalCommand.cs`
 - `src/FoundryGate.Cli/Commands/Local/Setup/SetupCommand.cs`
 - `src/FoundryGate.Cli/Commands/Ip/IpCommand.cs`
-- `src/FoundryGate.Cli/Commands/Ip/Setup/SetupCommand.cs` (stub — #96)
+- `src/FoundryGate.Cli/Commands/Ip/Setup/SetupCommand.cs` + `IpSetupRunner.cs` (#96 — was a stub)
+- `src/FoundryGate.Cli/Commands/Ip/Cleanup/CleanupCommand.cs` + `IpCleanupRunner.cs` (#96)
+- `src/FoundryGate.Cli/Commands/Ip/FirewallRuleNaming.cs`, `IPublicIpProvider.cs` (#96)
+- `src/FoundryGate.Cli/Commands/Db/GrantIdentities/*` (#106)
+- `src/FoundryGate.Cli/Helpers/FoundryGateAzureResources.cs` (infra naming convention mirror),
+  `IAzureSqlServerClient.cs` + `ArmAzureSqlServerClient.cs`, `AzureSqlServerResolver.cs`,
+  `CliTokenCredential.cs` (#96/#106)
 - `src/FoundryGate.Cli/Helpers/CliDbContextFactory.cs`
 - `.github/workflows/_deploy-database.yml` (#79)
 
@@ -253,7 +259,27 @@ A separate `db-deploy.yml` workflow (reusable, `workflow_call`) downloads the da
       dropped from `Groups.GroupId`, `ON DELETE CASCADE` removed from
       `FK_QuotaAllocations_Users_UserId`) and the single aggregate assertion reported exactly five
       bullets naming each; reverted, 82/82 green.
-- [x] `foundrygate ip setup` is a documented stub (issues #96 tracks the real implementation) that
-      prints guidance and exits 1 rather than doing anything; the reusable
-      `.github/workflows/_deploy-database.yml` (#79) calls it with `continue-on-error: true` and a
-      comment pointing at #96.
+- [x] `foundrygate ip setup` — implemented for real (#96, superseding the stub #78 shipped): detects
+      the public IPv4 (ipify → ifconfig.me, `--ip` override), resolves the server by listing
+      `rg-foundrygate-{env}` for the single `sql-foundrygate-{env}-*` match (`--server`/
+      `--resource-group` override), and idempotently creates/updates a `gha-{run id}-{UTC minute}`
+      (CI) or `fg-dev-{machine}-{user}` (developer) rule through `Azure.ResourceManager.Sql` behind
+      an `IAzureSqlServerClient` seam. `ip cleanup --older-than <hours>` prunes stale `gha-*` rules
+      (+ the current run's own). `_deploy-database.yml` calls both — `continue-on-error` and the
+      stub comment are gone; `ip cleanup` runs `if: always()` last. Unit-tested with a fake ARM
+      client (naming, prefix resolution incl. zero/ambiguous matches, no-write idempotency,
+      confirmation, cleanup classification). Live Azure validation is tracked in #142 (companion
+      to #105).
+- [x] `foundrygate db grant-identities` (#106): post-seed step creating the contained users for
+      `id-foundrygate-api-{env}` / `id-foundrygate-func-{env}` — idempotent `IF NOT EXISTS ...
+      CREATE USER ... WITH SID = <client id>, TYPE = E` from the deployment outputs
+      `apiIdentityClientId` / `functionsIdentityClientId`, which needs no directory lookup +
+      `IS_ROLEMEMBER`-guarded `ALTER ROLE db_datareader/db_datawriter ADD MEMBER`; no `db_ddladmin`
+      (the dacpac owns schema). `FROM EXTERNAL PROVIDER` needs Directory Readers on the SQL logical
+      server's own identity, which `modules/sql.bicep` does not declare, so the command refuses that
+      path (and `_deploy-database.yml` fails the step with an actionable message) unless
+      `--allow-external-provider` / the `allow-external-provider` input opts into it (PR #143 review). Generated T-SQL and role list are unit-tested, and the batches were
+      executed against docker SQL Server 2022 (role grants applied, identical re-run a clean no-op;
+      the Azure-only `EXTERNAL PROVIDER`/`TYPE = E` branches compile-checked with `SET NOEXEC ON`) —
+      which caught that `EXEC(<expr>)` rejects function calls, hence `sp_executesql`. `--dry-run`
+      prints the batches. Live Azure SQL validation: #142.
