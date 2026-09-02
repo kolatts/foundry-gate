@@ -1,0 +1,212 @@
+name: Infra Destroy
+
+# Tears down an ENTIRE environment (#70): the resource group rg-foundrygate-{env} and everything
+# in it. workflow_dispatch only — never triggered by a push. Three independent guards:
+#   1. typed confirmation `DESTROY-dev` / `DESTROY-production` checked before anything logs in;
+#   2. a read-only listing of what is about to be deleted, in the job summary;
+#   3. the `dev-destroy` / `prod-destroy` GitHub Environments (required reviewer + wait timer;
+#      prod-destroy additionally deploys only from protected branches).
+#
+# Model deployments are never deleted individually — the whole group goes. Because Anthropic
+# (Claude) deployments are create-once under ARM (CLAUDE.md), the NEXT infra run for this
+# environment must be a day-0 run with create-model-deployments=true (infra-deploy.yml /
+# deploy-all.yml dispatch input) — otherwise the recreated Foundry accounts have no models.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to destroy."
+        required: true
+        type: choice
+        options: [dev, production]
+      confirmation:
+        description: "Type DESTROY-dev or DESTROY-production (must match the environment above)."
+        required: true
+        type: string
+      purge-soft-deleted:
+        description: "dev only: after the group is gone, purge the soft-deleted APIM and Key Vault so the names can be reused immediately. Ignored for production (its Key Vault has purge protection)."
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+# Shares the per-environment deploy lock: a destroy never races a deploy of the same environment.
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  FG_ENV: ${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  RESOURCE_GROUP: rg-foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  DEPLOYMENT_NAME: foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+
+jobs:
+  validate-confirmation:
+    name: Validate confirmation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check typed confirmation
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          EXPECTED: DESTROY-${{ inputs.environment }}
+        run: |
+          if [ "$CONFIRMATION" != "$EXPECTED" ]; then
+            echo "::error title=Confirmation mismatch::Expected '${EXPECTED}', got '${CONFIRMATION}'. Nothing was deleted."
+            exit 1
+          fi
+          echo "Confirmation accepted for ${EXPECTED}"
+
+  list-resources:
+    name: List resources (${{ inputs.environment }})
+    needs: validate-confirmation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Read-only; uses the normal deploy environment so the destroy environments stay purely gates.
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      exists: ${{ steps.list.outputs.exists }}
+      apim-name: ${{ steps.list.outputs.apim-name }}
+      key-vault-name: ${{ steps.list.outputs.key-vault-name }}
+      location: ${{ steps.list.outputs.location }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+
+      - name: List what will be deleted
+        id: list
+        run: |
+          if [ "$(az group exists --name "$RESOURCE_GROUP" -o tsv)" != "true" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Resource group ${RESOURCE_GROUP} does not exist — nothing to destroy."
+            echo "Resource group \`${RESOURCE_GROUP}\` does not exist. Nothing to destroy." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+
+          az resource list --resource-group "$RESOURCE_GROUP" \
+            --query "sort_by([].{Name:name, Type:type, Location:location}, &Type)" -o table | tee resources.txt
+
+          # Soft-deleted services that block name reuse after the group is gone.
+          {
+            echo "apim-name=$(az resource list -g "$RESOURCE_GROUP" --resource-type Microsoft.ApiManagement/service --query '[0].name' -o tsv)"
+            echo "key-vault-name=$(az resource list -g "$RESOURCE_GROUP" --resource-type Microsoft.KeyVault/vaults --query '[0].name' -o tsv)"
+            echo "location=$(az group show --name "$RESOURCE_GROUP" --query location -o tsv)"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## About to delete resource group \`${RESOURCE_GROUP}\` (${{ inputs.environment }})"
+            echo ""
+            echo "**$(tail -n +3 resources.txt | grep -c . || true) resources**, requested by @${GITHUB_ACTOR}. The delete waits for the \`${{ inputs.environment == 'production' && 'prod-destroy' || 'dev-destroy' }}\` environment approval."
+            echo ""
+            echo '```text'
+            cat resources.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload resource list
+        if: steps.list.outputs.exists == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: destroyed-resources-${{ env.FG_ENV }}
+          path: resources.txt
+          retention-days: 90
+
+  destroy:
+    name: Destroy ${{ inputs.environment }}
+    needs: [validate-confirmation, list-resources]
+    if: needs.list-resources.outputs.exists == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The gate: required reviewer(s) + wait timer configured on these two GitHub Environments.
+    environment: ${{ inputs.environment == 'production' && 'prod-destroy' || 'dev-destroy' }}
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # The destroy environments carry their own copies of the OIDC variables (same values as
+      # dev / production) so the federated credential subject `environment:dev-destroy` etc.
+      # can be scoped separately in Entra.
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment == 'production' && 'prod-destroy' || 'dev-destroy' }}
+
+      - name: Delete resource group
+        run: |
+          echo "Deleting ${RESOURCE_GROUP} ..."
+          az group delete --name "$RESOURCE_GROUP" --yes --only-show-errors
+          echo "::notice::Resource group ${RESOURCE_GROUP} deleted."
+
+      - name: Verify
+        run: |
+          if [ "$(az group exists --name "$RESOURCE_GROUP" -o tsv)" = "true" ]; then
+            echo "::error::${RESOURCE_GROUP} still exists after delete."
+            exit 1
+          fi
+
+      - name: Remove the subscription deployment record
+        run: |
+          # The code-deploy workflows read resource names from this deployment's outputs; with the
+          # group gone those outputs would point at nothing. Removing it makes the next
+          # api/functions/ui deploy fail with "run infra first" instead of a confusing 404.
+          az deployment sub delete --name "$DEPLOYMENT_NAME" --only-show-errors || true
+
+      - name: Purge soft-deleted APIM and Key Vault (dev only)
+        if: inputs.environment != 'production' && inputs.purge-soft-deleted
+        env:
+          APIM_NAME: ${{ needs.list-resources.outputs.apim-name }}
+          KEY_VAULT_NAME: ${{ needs.list-resources.outputs.key-vault-name }}
+          LOCATION: ${{ needs.list-resources.outputs.location }}
+        run: |
+          if [ -n "$APIM_NAME" ]; then
+            echo "Purging soft-deleted APIM ${APIM_NAME} in ${LOCATION} ..."
+            az apim deletedservice purge --service-name "$APIM_NAME" --location "$LOCATION" --only-show-errors || echo "::warning::APIM purge failed or not needed"
+          fi
+          if [ -n "$KEY_VAULT_NAME" ]; then
+            echo "Purging soft-deleted Key Vault ${KEY_VAULT_NAME} ..."
+            az keyvault purge --name "$KEY_VAULT_NAME" --location "$LOCATION" --only-show-errors || echo "::warning::Key Vault purge failed or not needed"
+          fi
+
+      - name: Summary
+        env:
+          APIM_NAME: ${{ needs.list-resources.outputs.apim-name }}
+          KEY_VAULT_NAME: ${{ needs.list-resources.outputs.key-vault-name }}
+        run: |
+          {
+            echo "## Destroyed \`${RESOURCE_GROUP}\` (${{ inputs.environment }})"
+            echo ""
+            echo "- When: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "- By: @${GITHUB_ACTOR} (run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+            echo "- Resource list: artifact \`destroyed-resources-${FG_ENV}\`"
+            echo ""
+            echo "### Before you recreate this environment"
+            echo ""
+            echo "1. **Claude model deployments are create-once** (CLAUDE.md). The Foundry accounts are gone, so the next infra run for \`${FG_ENV}\` must be a day-0 run: dispatch \`deploy-all.yml\` or \`infra-deploy.yml\` with **create-model-deployments = true** — exactly once."
+            if [ "${{ inputs.environment }}" = "production" ]; then
+              echo "2. **Key Vault \`${KEY_VAULT_NAME}\` is soft-deleted with purge protection ON** — it cannot be purged and the name is reserved for the retention period (90 days). Recreating production before then needs a different \`nameSuffix\` in \`infra/parameters/prod.bicepparam\`."
+              echo "3. **APIM \`${APIM_NAME}\` is soft-deleted**; purge it before recreating: \`az apim deletedservice purge --service-name ${APIM_NAME} --location <location>\`."
+            else
+              echo "2. Soft-deleted APIM/Key Vault purge: ${{ inputs.purge-soft-deleted && 'attempted above (see step log)' || 'skipped — purge manually before recreating, or the names collide' }}."
+            fi
+            echo "4. Entra objects are untouched (app registrations, SQL admin group membership, federated credentials) — nothing to redo in #109 for those."
+          } >> "$GITHUB_STEP_SUMMARY"

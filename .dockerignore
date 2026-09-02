@@ -1,0 +1,23 @@
+# Docker build context for src/FoundryGate.Api/Dockerfile (built from the repo root).
+# Keep the context small: only the projects the API references are COPYed anyway.
+.git
+.github
+.claude
+**/bin/
+**/obj/
+**/TestResults/
+**/publish/
+artifacts/
+docs-site/
+content/
+infra/
+plans/
+scripts/
+*.md
+*.png
+docker-compose.yml
+.azurite/
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/appsettings.Secrets.json
+**/local.settings.json

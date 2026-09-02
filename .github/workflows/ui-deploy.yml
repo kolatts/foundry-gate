@@ -1,0 +1,42 @@
+name: UI Deploy
+
+# Targeted UI pipeline for FoundryGate.Web (#73) — never triggers on infra/**.
+#   workflow_dispatch (environment) -> publish + deploy
+#
+# There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, the single
+# ordered chain. This file is the "redeploy just the UI" button.
+#
+# There is also NO `pull_request` trigger any more. Static Web Apps PR previews need the SWA
+# deployment token (`az staticwebapp secrets list`) under an identity with write access to the
+# dev environment. A `pull_request` run executes the PR branch's own copy of these files, so
+# any PR could have printed that token or driven `az` against dev. The `dev` Environment is now
+# restricted to protected branches and PR-track Azure work is limited to the read-only
+# `dev-plan` Environment (Bicep what-if). Restoring previews behind a safe design is #155.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  ui:
+    name: UI
+    uses: ./.github/workflows/_deploy-ui.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}

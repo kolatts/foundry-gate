@@ -1,0 +1,76 @@
+name: Build and smoke-test the API image
+description: >-
+  Builds src/FoundryGate.Api/Dockerfile with the version build args and proves the resulting
+  image answers GET /health with 200 on port 8080 before anything is pushed anywhere. One copy
+  of the build + smoke loop, shared by the PR-only image check in api-deploy.yml and the real
+  build-and-push job in _deploy-api.yml. The caller must have checked the repo out and computed
+  the version (.github/actions/version) first.
+
+inputs:
+  image-tag:
+    description: "Local tag to build, e.g. 0.3.7-abc1234 (from .github/actions/version)."
+    required: true
+  version:
+    description: "SemVer passed to the Dockerfile as VERSION."
+    required: true
+  assembly-version:
+    description: "MajorMinorPatch passed to the Dockerfile as ASSEMBLY_VERSION."
+    required: true
+  repository:
+    description: "Local image repository name."
+    required: false
+    default: foundrygate-api
+  smoke-timeout-seconds:
+    description: "How long to wait for /health to answer 200."
+    required: false
+    default: "30"
+
+outputs:
+  image:
+    description: "The local image reference that was built ({repository}:{image-tag})."
+    value: ${{ steps.build.outputs.image }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build image
+      id: build
+      shell: bash
+      env:
+        IMAGE_REPOSITORY: ${{ inputs.repository }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+        VERSION: ${{ inputs.version }}
+        ASSEMBLY_VERSION: ${{ inputs.assembly-version }}
+      run: |
+        set -euo pipefail
+        image="${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+        docker build \
+          --file src/FoundryGate.Api/Dockerfile \
+          --build-arg "VERSION=${VERSION}" \
+          --build-arg "ASSEMBLY_VERSION=${ASSEMBLY_VERSION}" \
+          --tag "$image" \
+          .
+        echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+    - name: Smoke-test /health
+      shell: bash
+      env:
+        IMAGE: ${{ steps.build.outputs.image }}
+        TIMEOUT: ${{ inputs.smoke-timeout-seconds }}
+      run: |
+        set -uo pipefail
+        container="api-smoke-$$"
+        cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+        trap cleanup EXIT
+        docker run -d --name "$container" -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=local "$IMAGE"
+        for i in $(seq 1 "$TIMEOUT"); do
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || true)"
+          if [ "$code" = "200" ]; then
+            echo "/health -> 200 after ${i}s"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "::error::/health did not return 200 within ${TIMEOUT}s for ${IMAGE}"
+        docker logs "$container" || true
+        exit 1

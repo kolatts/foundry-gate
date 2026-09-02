@@ -242,15 +242,23 @@ subscription if a previous deprovision left one behind — and issues a new key.
 
 ---
 
-## Deploy pipeline (designed shape)
+## Deploy pipeline
 
 This is the pipeline FoundryGate is built around, as fixed in `CONVENTIONS.md` §CI/CD —
 GitHub Actions with OIDC federated credentials and no long-lived Azure secrets. **What
-runs today** on `main`: the pull-request track (`ci.yml`: build, tests, format;
-`claude-review.yml`) and the reusable database-deploy workflow file. **What is being
-implemented** under epic #67: the merge-to-main deploy chain — infra, database, app
-deploys, post-deploy tests — behind GitHub Environment gates (`dev`, then `production`).
-Badges on the diagram mark which is which.
+runs today** on every pull request: `ci.yml` (build, tests, format), `claude-review.yml`, and —
+by path — `actionlint.yml`, the Docker image build and a Bicep what-if under a read-only
+identity. **What exists on `main`** for the merge path: one workflow, `deploy-all.yml`, which
+runs the whole ordered chain (infra → database → API → Functions ∥ UI → post-deploy tests →
+summary) against dev. The single-component workflows deliberately have no `push` trigger —
+they share a per-environment concurrency lock, and three of them racing meant one deploy was
+silently cancelled. They stay as `workflow_dispatch` buttons for redeploying one component.
+Gating it all: five GitHub Environments (`dev`, `dev-plan`, `production`, `dev-destroy`,
+`prod-destroy`); `dev` is restricted to protected branches, so nothing a pull request can run
+reaches it. **What has not happened yet**: a run against Azure. That needs the owner-side OIDC
+setup (#109) and is the live validation tracked in #105. Badges on the diagram mark the
+difference; the [CI/CD reference](/foundry-gate/reference/ci-cd/) lists every workflow, trigger
+and variable.
 
 <DeployPipeline />
 
@@ -263,10 +271,14 @@ database users (`db grant-identities` — an Entra-only SQL server cannot grant 
 identity access through ARM), and the runner's own firewall rule is removed again, along
 with any left behind by a cancelled earlier run. Bicep re-runs pass
 `createModelDeployments=false` because Anthropic model deployments are create-once under
-ARM. That makes the ownership split explicit: Claude deployments belong to the
-infrastructure deploy end to end (created once, never re-PUT, never deleted from the app),
-while the API and admin UI list everything and manage OpenAI-format deployments
+ARM, and always pass the image the API is currently running so a re-run never resets it.
+That makes the ownership split explicit: Claude deployments belong to the infrastructure
+deploy end to end (created once, never re-PUT, never deleted from the app), while the API
+and admin UI list everything and manage OpenAI-format deployments
 (`/api/v1/foundry/deployments`, see the [API reference](/foundry-gate/reference/api/#foundry)).
+Code deploys read resource names from the infra deployment's outputs rather than from
+GitHub variables — the only variables are the three OIDC identifiers and the Entra client
+ids.
 
 ---
 

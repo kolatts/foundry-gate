@@ -51,7 +51,8 @@ local.settings.json
 .azurite/
 
 # ─── Docker ──────────────────────────────────────────────────
-.dockerignore
+# .dockerignore is intentionally tracked: it defines the build context for
+# src/FoundryGate.Api/Dockerfile, which the api-deploy workflow builds from the repo root.
 
 # ─── OS ──────────────────────────────────────────────────────
 .DS_Store

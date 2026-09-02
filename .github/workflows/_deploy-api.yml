@@ -1,0 +1,227 @@
+name: Deploy API (Reusable)
+
+# Reusable workflow_call (#71): build the FoundryGate.Api container image, push it to the
+# environment's ACR with the OIDC identity (no registry password — admin user is disabled in
+# infra/modules/container-registry.bicep), roll the Container App to it and verify the new
+# revision answers /health.
+#
+# Schema before code: callers run _prepare-database.yml + _deploy-database.yml BEFORE this
+# workflow (see api-deploy.yml / deploy-all.yml) so the API never starts against an older schema.
+#
+# Bootstrap: on day 0 the infra deploy leaves the Container App on the public placeholder image
+# in "bootstrap mode" (port 80, /health-only probes — infra/modules/container-app.bicep). A plain
+# `az containerapp update --image` would switch the image but not the ingress port or probes, so
+# when the app is still in that mode this workflow re-runs the infra deployment with
+# FG_API_IMAGE=<new image> instead — Bicep then flips port/probes and the image together.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name: dev | production."
+        required: true
+        type: string
+    outputs:
+      image:
+        description: "Fully-qualified image reference that was deployed."
+        value: ${{ jobs.build-push.outputs.image }}
+      api-base-url:
+        description: "https://<container app fqdn>"
+        value: ${{ jobs.deploy.outputs.api-base-url }}
+
+concurrency:
+  group: api-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  FG_ENV: ${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  DEPLOYMENT_NAME: foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  IMAGE_REPOSITORY: foundrygate-api
+
+jobs:
+  build-push:
+    name: API - Build and push image (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+      image-tag: ${{ steps.version.outputs.image-tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version
+        id: version
+        uses: ./.github/actions/version
+
+      # Shared with api-deploy.yml's PR-only image check: one copy of the build + /health smoke.
+      - name: Build and smoke-test the image
+        uses: ./.github/actions/build-api-image
+        with:
+          image-tag: ${{ steps.version.outputs.image-tag }}
+          version: ${{ steps.version.outputs.semver }}
+          assembly-version: ${{ steps.version.outputs.major-minor-patch }}
+          repository: ${{ env.IMAGE_REPOSITORY }}
+
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+
+      - name: Resolve infra outputs
+        id: infra
+        run: bash .github/scripts/infra/export-outputs.sh "$DEPLOYMENT_NAME"
+
+      # `az acr login` exchanges the OIDC identity's ARM token for a registry token — the CI
+      # principal needs AcrPush on the registry (#109).
+      - name: Push to ACR
+        id: push
+        env:
+          LOGIN_SERVER: ${{ steps.infra.outputs.container-registry-login-server }}
+          REGISTRY_NAME: ${{ steps.infra.outputs.container-registry-name }}
+          IMAGE_TAG: ${{ steps.version.outputs.image-tag }}
+          SEMVER: ${{ steps.version.outputs.semver }}
+        run: |
+          if [ -z "$LOGIN_SERVER" ]; then
+            echo "::error::Infra outputs have no containerRegistryLoginServer — was the control plane deployed (deployControlPlane=true)?"
+            exit 1
+          fi
+          az acr login --name "$REGISTRY_NAME" --only-show-errors
+          image="${LOGIN_SERVER}/${IMAGE_REPOSITORY}:${IMAGE_TAG}"
+          docker tag "${IMAGE_REPOSITORY}:${IMAGE_TAG}" "$image"
+          docker tag "${IMAGE_REPOSITORY}:${IMAGE_TAG}" "${LOGIN_SERVER}/${IMAGE_REPOSITORY}:${SEMVER}"
+          docker push "$image"
+          docker push "${LOGIN_SERVER}/${IMAGE_REPOSITORY}:${SEMVER}"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "Pushed \`${image}\` (also tagged \`${SEMVER}\`)" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: API - Deploy to Container Apps (${{ inputs.environment }})
+    needs: build-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.verify.outputs.api-base-url }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      api-base-url: ${{ steps.verify.outputs.api-base-url }}
+    env:
+      IMAGE: ${{ needs.build-push.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+
+      - name: Resolve infra outputs
+        id: infra
+        run: bash .github/scripts/infra/export-outputs.sh "$DEPLOYMENT_NAME"
+
+      - name: Detect bootstrap mode
+        id: mode
+        run: |
+          current=$(az containerapp show --name "$FG_CONTAINER_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" \
+            --query 'properties.template.containers[0].image' -o tsv)
+          echo "Current image: ${current}"
+          if [ "$current" = "mcr.microsoft.com/k8se/quickstart:latest" ] || [ "$FG_CONTAINER_APP_IS_BOOTSTRAP_IMAGE" = "true" ]; then
+            echo "bootstrap=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Container App is in bootstrap mode — replacing the placeholder via an infra re-run so port 8080 and the /health/ready probes are switched on together with the image."
+          else
+            echo "bootstrap=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Roll Container App to new image
+        if: steps.mode.outputs.bootstrap != 'true'
+        run: |
+          az containerapp update \
+            --name "$FG_CONTAINER_APP_NAME" \
+            --resource-group "$FG_RESOURCE_GROUP" \
+            --image "$IMAGE" \
+            --only-show-errors --output none
+
+      - name: Replace bootstrap placeholder (infra re-run with FG_API_IMAGE)
+        if: steps.mode.outputs.bootstrap == 'true'
+        env:
+          FG_API_IMAGE: ${{ env.IMAGE }}
+          FG_ENTRA_API_CLIENT_ID: ${{ vars.FG_ENTRA_API_CLIENT_ID }}
+          FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}
+          FG_SQL_ADMIN_GROUP_NAME: ${{ vars.FG_SQL_ADMIN_GROUP_NAME }}
+        run: |
+          # createModelDeployments is always false here: an API deploy must never PUT the
+          # create-once Anthropic model deployments (CLAUDE.md / fable-refactor-log E-007).
+          bash .github/scripts/infra/deploy.sh "$FG_ENV" "$DEPLOYMENT_NAME" \
+            "${{ vars.AZURE_LOCATION || 'eastus2' }}" false
+
+      - name: Verify new revision and /health
+        id: verify
+        run: |
+          echo "Waiting for the latest revision to become healthy ..."
+          # $IMAGE (env) is the image we deployed; $current_* is what the revision reports.
+          name="unknown"; current_image="unknown"; health="unknown"; running="unknown"
+          for i in $(seq 1 30); do
+            # -o json + jq, not tsv + `read`: properties.healthState is empty on a freshly
+            # created revision and the default IFS collapses the consecutive tabs, shifting
+            # every field left, so the loop could never match and a healthy deploy failed
+            # after the full five minutes.
+            revision="$(az containerapp revision list \
+              --name "$FG_CONTAINER_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" \
+              --query "sort_by([?properties.active], &properties.createdTime)[-1]" -o json)"
+            name="$(jq -r '.name // "unknown"' <<<"$revision")"
+            current_image="$(jq -r '.properties.template.containers[0].image // "unknown"' <<<"$revision")"
+            health="$(jq -r '.properties.healthState // "unknown"' <<<"$revision")"
+            running="$(jq -r '.properties.runningState // "unknown"' <<<"$revision")"
+            echo "attempt $i: revision=${name} image=${current_image} health=${health} running=${running}"
+            if [ "$current_image" = "$IMAGE" ] && [ "$health" = "Healthy" ] && { [ "$running" = "Running" ] || [ "$running" = "RunningAtMaxScale" ]; }; then
+              break
+            fi
+            sleep 10
+          done
+          if [ "$current_image" != "$IMAGE" ] || [ "$health" != "Healthy" ]; then
+            echo "::error::Latest active revision did not become Healthy on ${IMAGE} within 5 minutes (health=${health}, running=${running})."
+            exit 1
+          fi
+
+          fqdn=$(az containerapp show --name "$FG_CONTAINER_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          base="https://${fqdn}"
+          echo "api-base-url=${base}" >> "$GITHUB_OUTPUT"
+
+          for i in $(seq 1 30); do
+            code=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "${base}/health" || true)
+            echo "attempt $i: GET ${base}/health -> ${code}"
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::${base}/health did not return 200."
+            exit 1
+          fi
+          ready=$(curl -s -m 15 -o /dev/null -w '%{http_code}' "${base}/health/ready" || true)
+          if [ "$ready" != "200" ]; then
+            echo "::warning::${base}/health/ready returned ${ready} — the database contained user for the API identity may be missing (#106)."
+          fi
+
+          {
+            echo "## API deployed — ${FG_ENV}"
+            echo ""
+            echo "- Image: \`${IMAGE}\`"
+            echo "- Revision: \`${name}\` (${health}/${running})"
+            echo "- URL: ${base} — /health ${code}, /health/ready ${ready}"
+            echo "- Mode: ${{ steps.mode.outputs.bootstrap == 'true' && 'bootstrap placeholder replaced via infra re-run' || 'az containerapp update --image' }}"
+          } >> "$GITHUB_STEP_SUMMARY"

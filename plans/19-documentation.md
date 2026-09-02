@@ -128,7 +128,7 @@ Provide download instructions in a `docs-site/public/fonts/README.md`: Inter fro
 **5. Favicon:**  
 Export the gate-portal glyph from the logo as `docs-site/public/favicon.svg` — a minimal single-color SVG of the square-frame-with-converging-lines mark at 32×32, stroke: `--fg-azure-neon`, fill: none.
 
-**6. Deploy workflow (`docs.yml`):**  
+**6. Deploy workflow (`docs-deploy.yml`):**  
 Path triggers: `docs-site/**` and `content/**` (changes to brand source files should trigger a rebuild). Font files are fetched via an `npm run fetch-fonts` script (or Fontsource npm packages) before build.
 
 Files expected to be created or modified:
@@ -143,7 +143,7 @@ Files expected to be created or modified:
 - `docs-site/src/styles/typography.css`
 - `docs-site/src/styles/starlight-theme.css`
 - `docs-site/src/content/docs/index.mdx`
-- `.github/workflows/docs.yml` (add `content/**` to path triggers)
+- `.github/workflows/docs-deploy.yml` (add `content/**` to path triggers)
 
 ### Add motion and subtle animation layer (`docs-site/src/styles/motion.css`) (#59-motion)
 > Implemented as part of sub-issue #59 — add after the base theme is working.
@@ -253,7 +253,7 @@ Files expected to be created or modified:
 
 ## Verification
 - [ ] `npm run build` in `docs-site/` produces `dist/` with no errors or warnings
-- [ ] Site is accessible at `kolatts.github.io/foundry-gate` after `docs.yml` runs
+- [ ] Site is accessible at `kolatts.github.io/foundry-gate` after `docs-deploy.yml` runs
 - [ ] Logo renders in Starlight header (`replacesTitle: true` hides the text title)
 - [ ] Sidebar uses the `--fg-azure` accent color, not Starlight's default purple
 - [ ] Code blocks render in Monaspace Argon

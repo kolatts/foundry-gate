@@ -1,0 +1,214 @@
+name: Deploy All
+
+# THE deploy workflow (#75). A push to `main` that touches anything deployable runs this and
+# only this — the ordered, full-stack chain. The single-component wrappers
+# (api-/functions-/ui-/infra-deploy.yml) have no `push` trigger precisely so that a change to
+# `src/FoundryGate.Domain/**` or `Directory.Packages.props` cannot start three workflows that
+# then cancel each other out of the shared per-environment concurrency group.
+#
+#   infra ─► prepare-database ─► database ─► api ─┬─► functions ─┬─► postdeployment tests ─► summary
+#                                                 └─► ui ────────┘
+#
+# `functions` and `ui` wait for `api` rather than fanning out beside it: on a day-0 (bootstrap)
+# run the api stage re-runs the whole subscription deployment to swap the placeholder image, and
+# an infra re-run restarting the Function App mid-upload is a real flake. GitHub Actions has no
+# conditional `needs:`, so the dependency is unconditional; the cost is a few minutes, the
+# benefit is that the day-0 path — the one this file exists for — cannot race itself.
+#
+#   push to main (deployable paths) -> the whole chain against dev
+#   workflow_dispatch               -> the whole chain against the chosen environment
+#
+# A production run stops at the `production` reviewer gate — once per stage (GitHub approves
+# pending jobs, not whole runs; see docs reference/ci-cd and #141).
+# Docs are not part of this chain: GitHub Pages deploys from docs-deploy.yml on push to main
+# and has no Azure dependency.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "src/**"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - "global.json"
+      - "NuGet.config"
+      - ".github/workflows/deploy-all.yml"
+      - ".github/workflows/_deploy-api.yml"
+      - ".github/workflows/_deploy-database.yml"
+      - ".github/workflows/_deploy-functions.yml"
+      - ".github/workflows/_deploy-infra.yml"
+      - ".github/workflows/_deploy-ui.yml"
+      - ".github/workflows/_postdeployment-tests.yml"
+      - ".github/workflows/_prepare-database.yml"
+      - ".github/scripts/**"
+      - ".github/actions/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+      create-model-deployments:
+        description: "Day-0 ONLY for a brand-new environment (or right after infra-destroy): pass createModelDeployments=true. Anthropic deployments are create-once — never re-run with this on."
+        required: false
+        type: boolean
+        default: false
+      run-seed-test:
+        description: "Seed Bogus demo data after the schema deploy (ignored for production)."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+# One lock per environment, shared with every dispatch of the single-component wrappers, so two
+# runs never mutate one environment at once. Never cancelled: a half-applied deploy is worse than
+# a queued one.
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  infra:
+    name: Infra
+    uses: ./.github/workflows/_deploy-infra.yml
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      mode: deploy
+      create-model-deployments: ${{ github.event_name == 'workflow_dispatch' && inputs.create-model-deployments || false }}
+
+  prepare-database:
+    name: Database
+    needs: infra
+    uses: ./.github/workflows/_prepare-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+  database:
+    name: Database
+    needs: prepare-database
+    uses: ./.github/workflows/_deploy-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
+      sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
+      sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
+      run-seed-test: ${{ github.event_name == 'workflow_dispatch' && inputs.run-seed-test || false }}
+      # Create the contained SQL users WITH SID from the identities' client ids, so Azure SQL
+      # never has to look them up in Entra (which would need Directory Readers on the server
+      # identity) - #143.
+      api-identity-client-id: ${{ needs.prepare-database.outputs.api-identity-client-id }}
+      functions-identity-client-id: ${{ needs.prepare-database.outputs.functions-identity-client-id }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
+      AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
+      AZURE_SUBSCRIPTION_ID: ${{ needs.prepare-database.outputs.azure-subscription-id }}
+
+  api:
+    name: API
+    needs: database
+    uses: ./.github/workflows/_deploy-api.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+  functions:
+    name: Functions
+    needs: [database, api]
+    uses: ./.github/workflows/_deploy-functions.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+  ui:
+    name: UI
+    needs: [database, api]
+    uses: ./.github/workflows/_deploy-ui.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+  postdeployment-tests:
+    name: Postdeployment tests
+    needs: [api, functions, ui]
+    uses: ./.github/workflows/_postdeployment-tests.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+
+  summary:
+    name: Summary
+    needs: [infra, prepare-database, database, api, functions, ui, postdeployment-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Write deployment summary
+        env:
+          TARGET_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+          CREATE_MODEL_DEPLOYMENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.create-model-deployments || false }}
+          TRIGGER: ${{ github.event_name }}
+          API_URL: ${{ needs.api.outputs.api-base-url }}
+          UI_HOST: ${{ needs.ui.outputs.static-web-app-hostname }}
+          FUNC_HOST: ${{ needs.functions.outputs.function-app-hostname }}
+          IMAGE: ${{ needs.api.outputs.image }}
+          TESTS: ${{ needs.postdeployment-tests.outputs.summary }}
+        run: |
+          {
+            echo "# Deploy All — ${TARGET_ENVIRONMENT}"
+            echo ""
+            echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
+            echo ""
+            echo "| Stage | Result |"
+            echo "|---|---|"
+            echo "| Infra | ${{ needs.infra.result }} |"
+            echo "| Database (prepare) | ${{ needs.prepare-database.result }} |"
+            echo "| Database (dacpac + seed) | ${{ needs.database.result }} |"
+            echo "| API | ${{ needs.api.result }} |"
+            echo "| Functions | ${{ needs.functions.result }} |"
+            echo "| UI | ${{ needs.ui.result }} |"
+            echo "| Postdeployment tests | ${{ needs.postdeployment-tests.result }} — ${TESTS:-n/a} (not gating, #139) |"
+            echo ""
+            echo "| Endpoint | URL |"
+            echo "|---|---|"
+            echo "| API | ${API_URL:-n/a} |"
+            echo "| API health | ${API_URL:+${API_URL}/health} |"
+            echo "| UI | ${UI_HOST:+https://${UI_HOST}} |"
+            echo "| Functions | ${FUNC_HOST:+https://${FUNC_HOST}} |"
+            echo "| Image | \`${IMAGE:-n/a}\` |"
+            echo ""
+            echo "Infra outputs (registry, SQL server, Key Vault, APIM) are in the Infra job's summary."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail the run if any deploy stage failed
+        if: >-
+          needs.infra.result != 'success' || needs.prepare-database.result != 'success' ||
+          needs.database.result != 'success' || needs.api.result != 'success' ||
+          needs.functions.result != 'success' || needs.ui.result != 'success'
+        run: |
+          echo "::error::At least one deploy stage did not succeed — see the table above."
+          exit 1
