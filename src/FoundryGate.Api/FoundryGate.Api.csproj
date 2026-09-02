@@ -18,6 +18,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\FoundryGate.Core\FoundryGate.Core.csproj" />
     <ProjectReference Include="..\FoundryGate.Data\FoundryGate.Data.csproj" />
     <ProjectReference Include="..\FoundryGate.Domain\FoundryGate.Domain.csproj" />
   </ItemGroup>

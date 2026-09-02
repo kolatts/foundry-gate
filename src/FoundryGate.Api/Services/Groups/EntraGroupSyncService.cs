@@ -2,7 +2,7 @@ using System.Globalization;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Identity;
-using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Quota;
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;

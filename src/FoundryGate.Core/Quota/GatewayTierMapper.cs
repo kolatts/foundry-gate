@@ -1,7 +1,7 @@
 using System.Globalization;
-using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
 
-namespace FoundryGate.Api.Services.Quota;
+namespace FoundryGate.Core.Quota;
 
 /// <summary>
 /// The rule that a developer's monthly budget <em>is</em> a gateway tier (D-013): every numeric quota

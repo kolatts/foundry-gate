@@ -5,8 +5,9 @@ using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Quota;
 using Imagile.Framework.Configuration.Exceptions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
-namespace FoundryGate.Api.Services.Quota;
+namespace FoundryGate.Core.Quota;
 
 /// <summary>
 /// Default <see cref="IQuotaResolutionService"/>. Scoped: shares the request's <see cref="AppDbContext"/>

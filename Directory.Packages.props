@@ -16,6 +16,11 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.11" />
 
+    <!-- Core: services shared by the Api and Functions hosts (#119). Abstractions only — Core
+         carries no ASP.NET Core and no host-specific SDK. -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+
     <!-- Cli -->
     <PackageVersion Include="System.CommandLine" Version="2.0.0-rc.2.25502.107" />
     <PackageVersion Include="Microsoft.SqlServer.DacFx" Version="170.2.70" />

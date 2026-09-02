@@ -4,6 +4,7 @@ using Azure.ResourceManager;
 using Azure.ResourceManager.CognitiveServices;
 using Azure.ResourceManager.CognitiveServices.Models;
 using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
 using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Foundry.Contracts;
 

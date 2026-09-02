@@ -1,3 +1,4 @@
+using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Requests.Contracts;
 
@@ -23,14 +24,14 @@ namespace FoundryGate.Api.Services.Requests;
 /// </para>
 /// <para>
 /// <b>Approval is the write path.</b> It sets the subject's <c>User.IsUnlimited</c> /
-/// <c>User.MonthlyTokenQuota</c>, then re-runs <see cref="Quota.IQuotaResolutionService"/> for the
+/// <c>User.MonthlyTokenQuota</c>, then re-runs <see cref="IQuotaResolutionService"/> for the
 /// current period so the new budget (and the gateway tier behind it) is live before the response is
 /// written — no cron job, no lag. Every mutation commits with its audit row.
 /// </para>
 /// <para>
 /// <b>Both quota rules are re-checked at approval, against live resolution.</b> A stored
 /// <c>RequestedQuota</c> is only applied if it is <em>still</em> a configured tier and <em>still</em> an
-/// increase over what <see cref="Quota.IQuotaResolutionService.PreviewAsync"/> says the subject's budget
+/// increase over what <see cref="IQuotaResolutionService.PreviewAsync"/> says the subject's budget
 /// is now — otherwise approving a request filed before an admin raised them (or before a group did) would
 /// silently lower it. Both submission and approval measure against that live answer rather than the
 /// stored <c>QuotaAllocation</c> row, which only reflects the last resolution.

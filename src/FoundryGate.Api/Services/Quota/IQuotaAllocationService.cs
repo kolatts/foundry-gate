@@ -52,6 +52,9 @@ public interface IQuotaAllocationService
     /// touched row gets <c>IsHardStopped = false</c> and <c>ResetDate = now</c>. Exactly one audit row
     /// (<c>AuditActions.QuotaAllocationReset</c>, attributed to the calling admin) per run, committed
     /// atomically with the rows. Running it twice in a month yields the same row count.
+    /// The work itself is <c>FoundryGate.Core.Quota.IQuotaResetService</c>, shared with the scheduled
+    /// monthly Function (#38/#119); this method only names the actor and the audit action.
     /// </summary>
+    /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (→ 403; call <c>GET /users/me</c> first) — checked before anything reaches the gateway.</exception>
     Task<QuotaResetResult> ResetAsync(CancellationToken cancellationToken);
 }

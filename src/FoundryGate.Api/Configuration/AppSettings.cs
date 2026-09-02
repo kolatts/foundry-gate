@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using FoundryGate.Core.Configuration;
 
 namespace FoundryGate.Api.Configuration;
 
@@ -38,7 +39,8 @@ public class AppSettings
     /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108 — optional as
     /// a whole; absent locally; <c>/foundry/*</c> and <c>/keys/*</c> need it) plus the always-required
     /// quota <see cref="GatewayOptions.Tiers"/> (<c>Gateway:Tiers</c>, shipped in <c>appsettings.json</c>;
-    /// issue #32 / D-013). See <see cref="GatewayOptions"/>.</summary>
+    /// issue #32 / D-013). The type lives in <c>FoundryGate.Core</c> because the Functions host binds
+    /// the same section (#119). See <see cref="GatewayOptions"/>.</summary>
     [Required]
     public GatewayOptions Gateway { get; set; } = new();
 

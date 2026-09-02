@@ -3,7 +3,7 @@ using Azure.Core;
 using Azure.ResourceManager;
 using Azure.ResourceManager.ApiManagement;
 using Azure.ResourceManager.ApiManagement.Models;
-using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
 
 namespace FoundryGate.Api.Services.Keys;
 

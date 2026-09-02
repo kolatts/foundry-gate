@@ -1,6 +1,6 @@
 using FoundryGate.Data.Entities;
 
-namespace FoundryGate.Api.Services.Quota;
+namespace FoundryGate.Core.Quota;
 
 /// <summary>
 /// The seam between quota resolution and the gateway: puts a developer's APIM subscription on the
@@ -19,8 +19,11 @@ namespace FoundryGate.Api.Services.Quota;
 /// be idempotent: a retry, or a call for a subscription already on the target product, is a no-op.
 /// </para>
 /// <para>
-/// The real implementation (<c>ApimGatewayTierSync</c>, #118) lands with the users/lifecycle wave
-/// alongside the APIM key service; until then <see cref="NullGatewayTierSync"/> is registered.
+/// The seam, and its no-op implementation <see cref="NullGatewayTierSync"/>, live in Core because
+/// quota resolution does; the real implementation (<c>FoundryGate.Api.Services.Quota
+/// .ApimGatewayTierSync</c>, #118) stays in the Api, which is where the APIM key service it delegates
+/// to lives. A host without that key service (the Functions jobs) registers
+/// <see cref="NullGatewayTierSync"/> — see its remarks for why that is safe there.
 /// </para>
 /// </remarks>
 public interface IGatewayTierSync
