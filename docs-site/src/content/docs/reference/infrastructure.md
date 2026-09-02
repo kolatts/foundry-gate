@@ -196,6 +196,31 @@ A related invariant sits on the other side of the pipeline: `db deploy` excludes
 `Users` **and** `RoleMembership` from the DacFx comparison, so a `--drop-objects` deploy
 removes neither these users nor their `db_datareader`/`db_datawriter` memberships.
 
+### Keeping the checked-in schema in sync: `db compare`
+
+`FoundryGate.Data`'s EF entities are the schema source of truth; `FoundryGate.Database`'s
+`dbo/Tables/*.sql` are hand-authored to match them, and `SchemaParityTests` (Predeployment,
+cross-platform) is the CI alarm when they drift. `foundrygate db compare
+[--connection-string <cs>] [--apply] [--check]` is the Windows-only developer convenience for
+the other side of that loop — actually regenerating the `.sql` files instead of just failing a
+test:
+
+- Source = a live SQL Server database (default: the local docker instance `foundrygate local
+  setup` keeps current via `EnsureCreated` against the current EF model); target =
+  `FoundryGate.Database`'s `.sqlproj`. Only table shape is compared — DacFx's own logins,
+  permissions, and every other non-table object type are excluded, so the command can never
+  propose touching anything outside `dbo/Tables`.
+- With no flags, or with `--check`: prints the differences and exits non-zero if any exist
+  (usable as a local pre-commit gate). No differences means no files are ever touched.
+- `--apply` additionally regenerates the affected table files via DacFx's own
+  `PublishChangesToProject` — the same engine SqlPackage/SSDT's schema-compare tooling uses,
+  which is why the checked-in files already look like its output — then exits 0 on success.
+- Not a CI gate: `SchemaParityTests` remains the cross-platform backstop. On macOS/Linux,
+  `db compare` fails fast with a message pointing at that test instead.
+
+([#103](https://github.com/kolatts/foundry-gate/issues/103), deferred from
+[#100](https://github.com/kolatts/foundry-gate/issues/100))
+
 The Graph roles go on the API identity's service principal (`id-foundrygate-api-{env}`) as
 app-role assignments on the Microsoft Graph service principal (appId
 `00000003-0000-0000-c000-000000000000`); `az ad app permission` does not apply to managed
