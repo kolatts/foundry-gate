@@ -308,6 +308,10 @@ public sealed class QuotaRequestService(
 
         var period = BillingPeriod.Current(timeProvider);
 
+        // The fast path, and the friendly one: it is what a serial double-submit hits, and it refuses
+        // before PreviewAsync's read. It is NOT the guard — two concurrent submissions can both pass it,
+        // which is what IX_QuotaIncreaseRequests_PendingPerUserPeriod is for (#147); the insert below
+        // translates that index's violation into this same 409.
         if (await dbContext.QuotaIncreaseRequests.AnyAsync(
             r => r.UserId == subject.UserId
                 && r.PeriodYear == period.Year
@@ -315,8 +319,7 @@ public sealed class QuotaRequestService(
                 && r.StatusType == QuotaRequestStatusType.Pending,
             cancellationToken))
         {
-            throw new ConflictException(
-                $"User {subject.UserId} already has a pending quota increase request for {period}. It must be approved or rejected before another can be submitted.");
+            throw new ConflictException(AlreadyPending(subject.UserId, period));
         }
 
         // Live resolution, not the stored allocation row: the row is whatever the last resolution wrote,
@@ -362,7 +365,7 @@ public sealed class QuotaRequestService(
         // them. One transaction is the cheaper price.)
         await using var transaction = await BeginTransactionIfNoneAsync(cancellationToken);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await InsertAsync(subject.UserId, period, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.QuotaIncreaseSubmitted,
@@ -387,6 +390,55 @@ public sealed class QuotaRequestService(
 
         return await GetProjectedAsync(entity.QuotaIncreaseRequestId, cancellationToken);
     }
+
+    /// <summary>
+    /// Identifiers a violation of the pending-per-period index carries, per provider: SQL Server names
+    /// the index ("Cannot insert duplicate key row … with unique index
+    /// 'IX_QuotaIncreaseRequests_PendingPerUserPeriod'"), SQLite names the columns ("UNIQUE constraint
+    /// failed: QuotaIncreaseRequests.UserId, …"). Matching the identifiers rather than re-querying keeps
+    /// the 409 honest whichever provider is underneath; the <c>GroupService</c> name/Entra-link indexes
+    /// are the precedent. <c>UserId</c> is enough to pick this index out on SQLite — the table's only
+    /// other unique index is on <c>QuotaIncreaseRequestUnique</c>.
+    /// </summary>
+    private static readonly string[] PendingPerUserPeriodIndexMarkers =
+        ["IX_QuotaIncreaseRequests_PendingPerUserPeriod", "QuotaIncreaseRequests.UserId"];
+
+    /// <summary>
+    /// Inserts the pending request, turning the filtered unique index's violation into the same
+    /// <c>409</c> the read-then-write check above produces serially (#147). Two concurrent submissions
+    /// from one developer — a double-clicked button, a retrying client — used to leave two pending rows
+    /// for one period, showing the same person twice in the reviewer queue and stranding whichever one
+    /// nobody approved. Precedent for adopting the database's answer rather than re-querying:
+    /// <c>QuotaAllocationService</c>'s "lost the race" path and <c>GroupService.SaveGroupAsync</c>.
+    /// </summary>
+    private async Task InsertAsync(int userId, BillingPeriod period, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (Mentions(exception, PendingPerUserPeriodIndexMarkers))
+        {
+            throw new ConflictException(AlreadyPending(userId, period), exception);
+        }
+    }
+
+    /// <summary>True when any exception in the chain names one of <paramref name="markers"/>.</summary>
+    private static bool Mentions(Exception exception, string[] markers)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (Array.Exists(markers, marker => current.Message.Contains(marker, StringComparison.Ordinal)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string AlreadyPending(int userId, BillingPeriod period) =>
+        $"User {userId} already has a pending quota increase request for {period}. It must be approved or rejected before another can be submitted.";
 
     /// <summary>
     /// A transaction for this unit of work, or <see langword="null"/> when the caller already owns one —

@@ -222,6 +222,58 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task SubmitAsync_turns_a_concurrent_duplicate_into_the_same_409_the_pre_check_gives()
+    {
+        // #147: the AnyAsync above is the fast path, not the guard — two submissions racing each other
+        // both pass it. The competing row is inserted from a second context in the window between the
+        // check and our INSERT, which is the only way to reach the filtered unique index from here; the
+        // service must answer with the same ConflictException a serial double-submit gets, not a 500.
+        await SeedReferenceDataAsync();
+        var me = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var body = new SubmitQuotaIncreaseRequest { RequestedQuota = TestGatewayTiers.PowerCap, Justification = Justification };
+
+        var raced = false;
+        CommandInterceptor.BeforeExecuting = sql =>
+        {
+            if (raced || !sql.Contains("INSERT INTO \"QuotaIncreaseRequests\"", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            raced = true;
+            using var winner = CreateVerificationContext();
+            winner.QuotaIncreaseRequests.Add(new QuotaIncreaseRequest
+            {
+                UserId = me.UserId,
+                RequestedByUserId = me.UserId,
+                PeriodYear = Period.Year,
+                PeriodMonth = Period.Month,
+                CurrentQuota = TestGatewayTiers.StandardCap,
+                RequestedQuota = TestGatewayTiers.PowerCap,
+                Justification = Justification,
+                StatusType = QuotaRequestStatusType.Pending,
+            });
+            winner.SaveChanges();
+        };
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            CreateService(me.EntraObjectId).SubmitAsync(body, CancellationToken.None));
+
+        CommandInterceptor.BeforeExecuting = _ => { };
+        Assert.Contains("already has a pending quota increase request for 2026-09", exception.Message, StringComparison.Ordinal);
+        Assert.True(raced);
+
+        // Nothing of the refused submission committed — no request row, and no audit row claiming one was
+        // filed. (The competing row is gone too: the harness's second context shares this one's
+        // connection, so its insert joined the service's transaction and rolled back with it. That is a
+        // property of the harness, not of the service — QuotaIncreaseRequestIndexTests proves the
+        // constraint itself across two independently-saving contexts.)
+        await using var verify = CreateVerificationContext();
+        Assert.Empty(await verify.QuotaIncreaseRequests.AsNoTracking().Where(r => r.UserId == me.UserId).ToListAsync());
+        Assert.Empty(await verify.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaIncreaseSubmitted).ToListAsync());
+    }
+
+    [Fact]
     public async Task SubmitAsync_allows_a_new_request_once_the_previous_one_was_decided()
     {
         await SeedReferenceDataAsync();

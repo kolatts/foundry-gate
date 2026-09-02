@@ -54,7 +54,11 @@ public interface IQuotaRequestService
     /// </summary>
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (→ 403; call <c>GET /users/me</c> first), or their account is deactivated (→ 403).</exception>
     /// <exception cref="ArgumentException"><c>RequestedQuota</c> is not a configured tier cap, or is not an increase over the caller's current quota (→ 400).</exception>
-    /// <exception cref="Domain.Exceptions.ConflictException">The caller already has a pending request for this period (→ 409).</exception>
+    /// <exception cref="Domain.Exceptions.ConflictException">
+    /// The caller already has a pending request for this period (→ 409). Backed by the filtered unique
+    /// index <c>IX_QuotaIncreaseRequests_PendingPerUserPeriod</c> (#147), so two concurrent submissions
+    /// get the same answer as two sequential ones — exactly one row survives.
+    /// </exception>
     Task<QuotaIncreaseRequestResponse> SubmitAsync(SubmitQuotaIncreaseRequest request, CancellationToken cancellationToken);
 
     /// <summary>
@@ -64,7 +68,10 @@ public interface IQuotaRequestService
     /// </summary>
     /// <exception cref="KeyNotFoundException">No such user (→ 404).</exception>
     /// <exception cref="ArgumentException">As <see cref="SubmitAsync"/>, evaluated for the subject user (→ 400).</exception>
-    /// <exception cref="Domain.Exceptions.ConflictException">The subject already has a pending request for this period, or is deactivated (→ 409).</exception>
+    /// <exception cref="Domain.Exceptions.ConflictException">
+    /// The subject already has a pending request for this period, or is deactivated (→ 409). The
+    /// duplicate case is constraint-backed; see <see cref="SubmitAsync"/>.
+    /// </exception>
     Task<QuotaIncreaseRequestResponse> SubmitForUserAsync(int userId, SubmitQuotaIncreaseRequest request, CancellationToken cancellationToken);
 
     /// <summary>

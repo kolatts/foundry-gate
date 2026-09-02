@@ -291,8 +291,12 @@ appears on their first `GET /quota/allocations/me` of the month, as it always di
 
 **One open request per user per period.** A second submission while one is still `Pending` in the
 same UTC calendar month is `409`; a decided (approved or rejected) request frees the slot at once, so
-a rejected developer can re-ask with a better justification. The check is not yet backed by a database
-constraint, so two simultaneous submissions can both land ([#147](https://github.com/kolatts/foundry-gate/issues/147)).
+a rejected developer can re-ask with a better justification. The rule is backed by a **filtered unique
+index** on `(userId, periodYear, periodMonth) WHERE status = Pending`
+([#147](https://github.com/kolatts/foundry-gate/issues/147)), so two simultaneous submissions — a
+double-clicked button, a retrying client — get the same `409` as two sequential ones instead of both
+landing and showing the same person twice in the reviewer queue. The filter is what keeps a *decided*
+request from blocking the rest of the month.
 
 Every submission writes `quota.requested`; approval writes `quota.approved` with the before/after
 quota, the quota and level resolution reported at review time, the tier product and whether the gateway
