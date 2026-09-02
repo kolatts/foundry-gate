@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using FoundryGate.Domain.Config;
 using FoundryGate.Domain.Constants;
 
 namespace FoundryGate.Core.Configuration;
@@ -118,6 +119,30 @@ public class GatewayOptions : IValidatableObject
     public List<GatewayTier> Tiers { get; set; } = [];
 
     /// <summary>
+    /// The gateway's model alias map, flattened one row per (tier, alias) — the same
+    /// <c>productModelAliases</c> object <c>infra/modules/ai-gateway.bicep</c> turns into policy
+    /// (<c>infra/policies/model-alias-fragment.xml</c>), emitted to both hosts by
+    /// <c>infra/modules/control-plane.bicep</c> as <c>Gateway__ModelAliases__{i}__Tier</c> /
+    /// <c>__Alias</c> / <c>__DeploymentName</c> / <c>__Provider</c> (#153). One source, two consumers.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why flattened rather than nested by tier.</b> The map genuinely differs per product — the
+    /// allowlist <em>is</em> the alias map (#86), so an alias the caller's tier does not list is a
+    /// <c>403 model_not_permitted</c> at the gateway. Handing every developer the union would tell a
+    /// Standard developer they can use <c>opus</c> and let them find out at the first request, which
+    /// is worse than telling them nothing. <c>GET /users/me</c> therefore filters with
+    /// <see cref="AliasesForTier"/>.
+    /// </para>
+    /// <para>
+    /// Empty when infra has not emitted it — a fork on an older deploy, or the local shape — in which
+    /// case <c>GET /users/me</c> returns an empty alias list exactly as it did before and developers
+    /// read model names from the CLI setup docs.
+    /// </para>
+    /// </remarks>
+    public List<GatewayModelAlias> ModelAliases { get; set; } = [];
+
+    /// <summary>
     /// <see langword="true"/> when APIM subscription-key management can address the management plane:
     /// subscription, resource group and APIM service name are all present.
     /// </summary>
@@ -132,6 +157,19 @@ public class GatewayOptions : IValidatableObject
     /// Functions identity's Log Analytics Reader assignment is what authorizes it.
     /// </summary>
     public bool IsUsageReconciliationConfigured => !string.IsNullOrWhiteSpace(LogAnalyticsWorkspaceId);
+
+    /// <summary>
+    /// The aliases <paramref name="tierProductId"/>'s product permits, ordered by alias — what a
+    /// developer on that tier may put in <c>ANTHROPIC_DEFAULT_*_MODEL</c> / Codex's <c>model</c>.
+    /// Empty for an unknown tier or an unconfigured map, never null.
+    /// </summary>
+    /// <param name="tierProductId">A <see cref="GatewayTiers"/> product id.</param>
+    public IReadOnlyList<GatewayModelAlias> AliasesForTier(string tierProductId) =>
+        string.IsNullOrWhiteSpace(tierProductId)
+            ? []
+            : [.. ModelAliases
+                .Where(alias => string.Equals(alias.Tier, tierProductId, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(alias => alias.Alias, StringComparer.OrdinalIgnoreCase)];
 
     /// <summary>
     /// <see langword="true"/> when Foundry deployment management can address ARM: subscription,
@@ -163,6 +201,11 @@ public class GatewayOptions : IValidatableObject
         }
 
         foreach (var result in ValidateTiers())
+        {
+            yield return result;
+        }
+
+        foreach (var result in ValidateModelAliases())
         {
             yield return result;
         }
@@ -296,6 +339,59 @@ public class GatewayOptions : IValidatableObject
                 [nameof(Tiers)]);
         }
     }
+
+    /// <summary>
+    /// Item-level rules for <see cref="ModelAliases"/>. <c>ValidateRecursively()</c> stops at the list,
+    /// so — exactly as for <see cref="Tiers"/> — the checks live here or a blank alias would ship a row
+    /// that promises a developer a model name of <c>""</c>.
+    /// </summary>
+    private IEnumerable<ValidationResult> ValidateModelAliases()
+    {
+        for (var i = 0; i < ModelAliases.Count; i++)
+        {
+            var alias = ModelAliases[i];
+            var member = $"{nameof(ModelAliases)}[{i}]";
+
+            if (string.IsNullOrWhiteSpace(alias.Tier))
+            {
+                yield return new ValidationResult($"{member}.{nameof(GatewayModelAlias.Tier)} is required.", [member]);
+            }
+            else if (!GatewayTiers.All.Contains(alias.Tier, StringComparer.OrdinalIgnoreCase))
+            {
+                // A typo here is silent otherwise: the row simply never matches a caller's tier, and the
+                // developer is told their gateway has no models rather than that it is misconfigured.
+                yield return new ValidationResult(
+                    $"{member}.{nameof(GatewayModelAlias.Tier)} = '{alias.Tier}' is not a gateway tier product. Valid ids: {string.Join(", ", GatewayTiers.All)}.",
+                    [member]);
+            }
+
+            if (string.IsNullOrWhiteSpace(alias.Alias))
+            {
+                yield return new ValidationResult($"{member}.{nameof(GatewayModelAlias.Alias)} is required.", [member]);
+            }
+
+            if (string.IsNullOrWhiteSpace(alias.DeploymentName))
+            {
+                yield return new ValidationResult($"{member}.{nameof(GatewayModelAlias.DeploymentName)} is required.", [member]);
+            }
+        }
+
+        var duplicates = ModelAliases
+            .Where(alias => !string.IsNullOrWhiteSpace(alias.Tier) && !string.IsNullOrWhiteSpace(alias.Alias))
+            .GroupBy(alias => $"{alias.Tier.ToLowerInvariant()}/{alias.Alias.ToLowerInvariant()}", StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key)
+            .ToList();
+        if (duplicates.Count > 0)
+        {
+            // The gateway's own map is an object keyed by alias, so two rows for one tier+alias cannot
+            // have come from it — something flattened the map wrong, and which deployment wins would be
+            // decided by list order.
+            yield return new ValidationResult(
+                $"{nameof(ModelAliases)} lists the same tier/alias more than once: {string.Join(", ", duplicates)}.",
+                [nameof(ModelAliases)]);
+        }
+    }
 }
 
 /// <summary>One quota tier: an APIM product id, its display name, and the monthly cap its <c>llm-token-limit</c> policy enforces (<c>Gateway:Tiers[i]</c>).</summary>
@@ -320,4 +416,47 @@ public class GatewayTier
 
     /// <summary>True when this is the unlimited tier (<see cref="MonthlyTokenQuota"/> = 0).</summary>
     public bool IsUnlimited => MonthlyTokenQuota == 0;
+}
+
+/// <summary>
+/// One row of the gateway's model alias map (<c>Gateway:ModelAliases[i]</c>): the alias
+/// <see cref="Alias"/> resolves, for developers on tier product <see cref="Tier"/>, to the Foundry
+/// deployment <see cref="DeploymentName"/> behind the <see cref="Provider"/> front door.
+/// </summary>
+/// <remarks>
+/// Flattened from <c>infra/main.bicep</c>'s <c>productModelAliases</c>
+/// (<c>{ tier: { alias: { deployment, pool, provider } } }</c>), one row per tier/alias pair —
+/// <c>pool</c> is not carried because it is a routing detail of the data plane and means nothing to
+/// a developer configuring a CLI. Deployments rotate underneath by editing the bicep, which is why
+/// the CLI panel tells developers to pin the <em>alias</em> rather than
+/// <see cref="DeploymentName"/> (shown for transparency and debugging only).
+/// </remarks>
+public class GatewayModelAlias
+{
+    /// <summary>
+    /// The quota tier product this alias is permitted on — one of <see cref="GatewayTiers.All"/>. The
+    /// alias map is also the allowlist (#86): an alias a tier does not list is a
+    /// <c>403 model_not_permitted</c> at the gateway.
+    /// </summary>
+    [Required]
+    [StringLength(64)]
+    public string Tier { get; set; } = string.Empty;
+
+    /// <summary>The virtual model name a developer's CLI pins, e.g. <c>sonnet</c>.</summary>
+    [Required]
+    [StringLength(ValidationConstants.FoundryDeploymentNameMaxLength)]
+    public string Alias { get; set; } = string.Empty;
+
+    /// <summary>The Foundry deployment it currently resolves to, e.g. <c>claude-sonnet-4-5</c>.</summary>
+    [Required]
+    [StringLength(ValidationConstants.FoundryDeploymentNameMaxLength)]
+    public string DeploymentName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Which front door the alias belongs to, so a client is told the right base path and auth header
+    /// style. Bound case-insensitively from bicep's lower-case <c>provider</c>
+    /// (<c>anthropic</c> / <c>openai</c>); an unrecognized value fails the binder at startup, which is
+    /// the right moment to find out.
+    /// </summary>
+    public ModelProviderType Provider { get; set; }
 }

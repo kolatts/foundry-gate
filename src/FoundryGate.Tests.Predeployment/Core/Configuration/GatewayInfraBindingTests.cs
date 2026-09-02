@@ -184,6 +184,11 @@ public class GatewayInfraBindingTests
             var declaration = WithoutComments(ModuleDeclaration(module));
             Assert.Contains("sharedAppConfig", declaration, StringComparison.Ordinal);
             Assert.Contains("foundryAccountConfig", declaration, StringComparison.Ordinal);
+
+            // Every block the hosts are handed, not just the two that existed when this test was
+            // written — otherwise a later change that wires a new block to one host slips through
+            // (#211 review). modelAliasConfig is the alias map (#153).
+            Assert.Contains("modelAliasConfig", declaration, StringComparison.Ordinal);
         }
     }
 
@@ -284,7 +289,7 @@ public class GatewayInfraBindingTests
             if (!setting.IsCollection)
             {
                 Assert.Equal(
-                    Convert.ChangeType(Generated(property.PropertyType, setting.Member, index: 0), property.PropertyType, CultureInfo.InvariantCulture),
+                    Expected(property.PropertyType, Generated(property.PropertyType, setting.Member, index: 0)),
                     bound);
                 continue;
             }
@@ -308,7 +313,7 @@ public class GatewayInfraBindingTests
                 {
                     var fieldProperty = FieldPropertyFor(setting, elementType, field);
                     Assert.Equal(
-                        Convert.ChangeType(Generated(fieldProperty.PropertyType, $"{setting.Member}.{field}", index), fieldProperty.PropertyType, CultureInfo.InvariantCulture),
+                        Expected(fieldProperty.PropertyType, Generated(fieldProperty.PropertyType, $"{setting.Member}.{field}", index)),
                         fieldProperty.GetValue(items[index]));
                 }
             }
@@ -353,8 +358,22 @@ public class GatewayInfraBindingTests
     }
 
     /// <summary>
-    /// A distinct, type-appropriate value for one key — a sentinel naming the member for strings, and a
-    /// deterministic number or flag for the primitives a tier table uses.
+    /// <see cref="Generated"/>'s string turned back into the value the binder should have produced.
+    /// <c>Convert.ChangeType</c> cannot do enums, so those are parsed by name.
+    /// </summary>
+    private static object Expected(Type type, string generated)
+    {
+        var target = Nullable.GetUnderlyingType(type) ?? type;
+
+        return target.IsEnum
+            ? Enum.Parse(target, generated)
+            : Convert.ChangeType(generated, target, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// A distinct, type-appropriate value for one key — a sentinel naming the member for strings, a
+    /// deterministic number or flag for the primitives a tier table uses, and a real member name for an
+    /// enum.
     /// </summary>
     private static string Generated(Type type, string label, int index)
     {
@@ -363,6 +382,16 @@ public class GatewayInfraBindingTests
         if (target == typeof(string))
         {
             return $"{label}#{index}";
+        }
+
+        if (target.IsEnum)
+        {
+            // A sentinel string does not parse as an enum, so the binder would silently leave the
+            // property at its default and this test would pass while proving nothing. Rotating through
+            // the declared names keeps the value distinct per index and still round-trips — which is
+            // what makes Gateway__ModelAliases__{i}__Provider actually verified (#153/#211).
+            var names = Enum.GetNames(target);
+            return names[index % names.Length];
         }
 
         if (target == typeof(bool))

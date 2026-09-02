@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using Azure;
-using FoundryGate.Api.Services.Keys;
+using FoundryGate.Core.Gateway;
 
 namespace FoundryGate.Tests.Predeployment.Support;
 
@@ -51,6 +51,9 @@ public sealed class FakeApimManagementClient : IApimManagementClient
     /// </summary>
     public Exception? ThrowOnRegenerateSecondaryKey { get; set; }
 
+    /// <summary>When set, <see cref="UpdateScopeAsync"/> throws it instead of re-scoping — simulates ARM refusing a tier move (a missing role, a 429, a 5xx).</summary>
+    public Exception? ThrowOnUpdateScope { get; set; }
+
     /// <summary>When set, <see cref="DeleteSubscriptionAsync"/> throws it instead of deleting — simulates ARM refusing a deprovision.</summary>
     public Exception? ThrowOnDelete { get; set; }
 
@@ -88,6 +91,15 @@ public sealed class FakeApimManagementClient : IApimManagementClient
             var entry = new Entry(displayName, productId, NewKey(), NewKey());
             _subscriptions[subscriptionName] = entry;
             return new ApimSubscriptionKeys(entry.PrimaryKey, entry.SecondaryKey);
+        }
+    }
+
+    /// <summary>Moves a subscription to another product behind the caller's back — simulates a move whose database record never committed.</summary>
+    public void SetProduct(string subscriptionName, string productId)
+    {
+        lock (_gate)
+        {
+            _subscriptions[subscriptionName].ProductId = productId;
         }
     }
 
@@ -223,6 +235,12 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         lock (_gate)
         {
             _calls.Add($"UpdateScope:{subscriptionName}:{productId}");
+
+            if (ThrowOnUpdateScope is { } exception)
+            {
+                throw exception;
+            }
+
             Require(subscriptionName).ProductId = productId;
             AfterMutation?.Invoke();
             return Task.CompletedTask;

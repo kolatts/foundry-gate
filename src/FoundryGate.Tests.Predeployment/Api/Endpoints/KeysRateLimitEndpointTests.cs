@@ -16,10 +16,10 @@ namespace FoundryGate.Tests.Predeployment.Api.Endpoints;
 /// <remarks>
 /// <b>These read the wall clock, not <c>factory.TimeProvider</c></b> (#184 review nit).
 /// <c>System.Threading.RateLimiting</c>'s built-in limiters own their replenishment timer and expose no
-/// seam to drive it, and the middleware does not offer one either — so a test can only stay inside the
-/// window rather than move it. A handful of in-process requests against an in-memory host is far inside
-/// a 60-second window, but it is a latent flake, and the durable fix is the window/permit configuration
-/// in #181: once the limits are options, these tests can shorten the window instead of racing it.
+/// seam to drive it, and the middleware does not offer one either — so a test cannot move the window.
+/// Since #181 it can <em>choose</em> one: the permit counts and window are <c>Security:RateLimits</c>,
+/// so these tests read the values the host is enforcing rather than restating them, and
+/// <see cref="KeysRateLimitWindowTests"/> configures a one-second window to prove it really turns over.
 /// </remarks>
 public class KeysRateLimitEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestFactory>
 {
@@ -27,11 +27,11 @@ public class KeysRateLimitEndpointTests(ApiTestFactory factory) : IClassFixture<
 
     private const string KeysPath = "/api/v1/keys";
 
-    /// <summary>Mirrors <c>RateLimiterExtensions.RevealsPerWindow</c>.</summary>
-    private const int RevealsPerWindow = 5;
+    /// <summary>What the host is actually enforcing (<c>Security:RateLimits:Reveal:PermitLimit</c>), not a copy of it.</summary>
+    private int RevealsPerWindow => factory.RateLimits.Reveal.PermitLimit;
 
-    /// <summary>Mirrors <c>RateLimiterExtensions.RotationsPerWindow</c>.</summary>
-    private const int RotationsPerWindow = 3;
+    /// <summary>What the host is actually enforcing (<c>Security:RateLimits:Rotate:PermitLimit</c>).</summary>
+    private int RotationsPerWindow => factory.RateLimits.Rotate.PermitLimit;
 
     [Fact]
     public async Task Reveal_is_capped_per_user_and_the_refusal_is_a_ProblemDetails_429_with_Retry_After()
@@ -63,6 +63,8 @@ public class KeysRateLimitEndpointTests(ApiTestFactory factory) : IClassFixture<
     [Fact]
     public async Task Rotate_is_capped_per_user_more_tightly_than_reveal()
     {
+        Assert.True(RotationsPerWindow < RevealsPerWindow, "Rotation is a write the gateway feels, so its cap must stay the tighter of the two.");
+
         using var developerClient = await ProvisionedDeveloperAsync();
 
         for (var i = 0; i < RotationsPerWindow; i++)

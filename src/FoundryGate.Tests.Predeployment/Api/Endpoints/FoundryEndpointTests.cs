@@ -28,6 +28,7 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
     [InlineData("GET", DeploymentsPath + "/" + ApiTestFactory.PrimaryFoundryAccount + "/anything")]
     [InlineData("POST", DeploymentsPath)]
     [InlineData("DELETE", DeploymentsPath + "/" + ApiTestFactory.PrimaryFoundryAccount + "/anything")]
+    [InlineData("PATCH", DeploymentsPath + "/" + ApiTestFactory.PrimaryFoundryAccount + "/anything/capacity")]
     [InlineData("GET", ModelsPath)]
     public async Task Anonymous_request_returns_401(string method, string path)
     {
@@ -44,6 +45,7 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
     [InlineData("GET", DeploymentsPath + "/" + ApiTestFactory.PrimaryFoundryAccount + "/anything")]
     [InlineData("POST", DeploymentsPath)]
     [InlineData("DELETE", DeploymentsPath + "/" + ApiTestFactory.PrimaryFoundryAccount + "/anything")]
+    [InlineData("PATCH", DeploymentsPath + "/" + ApiTestFactory.PrimaryFoundryAccount + "/anything/capacity")]
     public async Task Non_admin_on_a_deployments_route_returns_403(string method, string path)
     {
         using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: false);
@@ -284,6 +286,69 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.DoesNotContain(factory.FoundryClient.DeleteCalls, c => c.DeploymentName == name);
+    }
+
+    [Fact]
+    public async Task Admin_capacity_patch_returns_200_with_the_resized_deployment_and_writes_the_audit_row()
+    {
+        var admin = await factory.SeedUserAsync(displayName: "Admin Ada");
+        using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
+        var name = Marker();
+        factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, name, capacity: 10);
+
+        var response = await client.PatchAsJsonAsync(
+            new Uri($"{DeploymentsPath}/{ApiTestFactory.PrimaryFoundryAccount}/{name}/capacity", UriKind.Relative),
+            new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 },
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var updated = await response.Content.ReadFromJsonAsync<FoundryDeploymentResponse>(JsonOptions);
+        Assert.Equal(25, updated?.Capacity);
+        Assert.Equal("gpt-4.1-mini", updated?.ModelName); // the PATCH body cannot carry the model, so it cannot change it
+        Assert.Contains((ApiTestFactory.PrimaryFoundryAccount, name, "GlobalStandard", 25), factory.FoundryClient.CapacityCalls);
+        Assert.DoesNotContain(factory.FoundryClient.CreateCalls, c => c.DeploymentName == name); // never a re-PUT
+
+        await using var dbContext = factory.CreateDbContext();
+        var audit = await dbContext.AuditLogs.AsNoTracking()
+            .SingleAsync(a => a.Action == AuditActions.FoundryDeploymentCapacityChanged && a.TargetId == $"{ApiTestFactory.PrimaryFoundryAccount}/{name}");
+        Assert.Equal(admin.UserId, audit.ActorUserId);
+        Assert.Contains("\"before\":10", audit.Details, StringComparison.Ordinal);
+        Assert.Contains("\"after\":25", audit.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Capacity_patch_of_an_Anthropic_deployment_returns_400_pointing_at_the_live_check_and_changes_nothing()
+    {
+        var admin = await factory.SeedUserAsync(displayName: "Admin Ada");
+        using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
+        var name = Marker();
+        factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, name, "Anthropic", "claude-haiku-4-5", "20251001", capacity: 5);
+
+        var response = await client.PatchAsJsonAsync(
+            new Uri($"{DeploymentsPath}/{ApiTestFactory.PrimaryFoundryAccount}/{name}/capacity", UriKind.Relative),
+            new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 },
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ApiError>(JsonOptions);
+        Assert.Contains("#205", problem?.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain(factory.FoundryClient.CapacityCalls, c => c.DeploymentName == name);
+    }
+
+    [Fact]
+    public async Task Capacity_patch_of_a_missing_deployment_returns_404()
+    {
+        var admin = await factory.SeedUserAsync(displayName: "Admin Ada");
+        using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
+        var name = Marker();
+
+        var response = await client.PatchAsJsonAsync(
+            new Uri($"{DeploymentsPath}/{ApiTestFactory.PrimaryFoundryAccount}/{name}/capacity", UriKind.Relative),
+            new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 },
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.DoesNotContain(factory.FoundryClient.CapacityCalls, c => c.DeploymentName == name);
     }
 
     [Fact]

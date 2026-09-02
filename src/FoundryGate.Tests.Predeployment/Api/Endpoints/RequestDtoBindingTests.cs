@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Foundry.Contracts;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Requests.Contracts;
 using FoundryGate.Domain.Users.Contracts;
@@ -46,6 +47,7 @@ public class RequestDtoBindingTests(ApiTestFactory factory) : IClassFixture<ApiT
         { "POST", "/api/v1/requests", """{"requestedQuota":2000000,"justification":"short"}""", nameof(SubmitQuotaIncreaseRequest.Justification) },
         { "POST", $"/api/v1/requests/{MissingId}/approve", $$"""{"reviewNotes":"{{new string('x', ValidationConstants.ReviewNotesMaxLength + 1)}}"}""", nameof(ReviewQuotaIncreaseRequest.ReviewNotes) },
         { "POST", $"/api/v1/requests/{MissingId}/reject", $$"""{"reviewNotes":"{{new string('x', ValidationConstants.ReviewNotesMaxLength + 1)}}"}""", nameof(ReviewQuotaIncreaseRequest.ReviewNotes) },
+        { "PATCH", "/api/v1/foundry/deployments/nowhere/nothing/capacity", """{"capacity":0}""", nameof(UpdateFoundryDeploymentCapacityRequest.Capacity) },
     };
 
     [Theory]

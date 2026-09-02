@@ -168,17 +168,19 @@ public class UserServiceTests : InMemoryDatabaseTest
             audit,
             writer,
             accessor,
+            TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
+        var tierSync = new ApimGatewayTierSync(_apim, writer, new CurrentUserGatewayTierSyncActor(accessor), NullLogger<ApimGatewayTierSync>.Instance);
         var quotaResolution = new QuotaResolutionService(
             Context,
             tierMapper,
-            new ApimGatewayTierSync(keys, NullLogger<ApimGatewayTierSync>.Instance),
+            tierSync,
             NullLogger<QuotaResolutionService>.Instance);
         var quotaAllocations = new QuotaAllocationService(
             Context,
             quotaResolution,
-            new QuotaResetService(Context, quotaResolution, new QuotaRequestExpiry(Context, writer, _timeProvider, NullLogger<QuotaRequestExpiry>.Instance), writer, _timeProvider, NullLogger<QuotaResetService>.Instance),
+            new QuotaResetService(Context, quotaResolution, tierSync, new QuotaRequestExpiry(Context, writer, _timeProvider, NullLogger<QuotaRequestExpiry>.Instance), writer, _timeProvider, NullLogger<QuotaResetService>.Instance),
             tierMapper,
             accessor,
             _timeProvider,
@@ -454,6 +456,7 @@ public class UserServiceTests : InMemoryDatabaseTest
             new AuditService(Context, writer, accessor),
             writer,
             accessor,
+            TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
     }

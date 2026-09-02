@@ -1,8 +1,8 @@
-using FoundryGate.Api.Services.Keys;
 using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Tests.Predeployment.Support;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services.Keys;
+namespace FoundryGate.Tests.Predeployment.Core.Gateway;
 
 /// <summary>
 /// What can be tested of the ARM client without Azure: construction guards and the scope → product

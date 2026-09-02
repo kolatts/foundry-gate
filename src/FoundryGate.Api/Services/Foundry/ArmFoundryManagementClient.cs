@@ -137,9 +137,10 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
                 .CreateOrUpdateAsync(WaitUntil.Started, request.DeploymentName, data, cancellationToken)
                 .ConfigureAwait(false);
 
-            // HasValue is true only once the long-running operation has completed with a result — i.e.
-            // ARM finished synchronously (common for OpenAI). While it is still Accepted/Creating the
-            // operation has no value yet, so the current state is read back instead of awaited.
+            // HasValue would be true only if the long-running operation had completed with a result.
+            // Under WaitUntil.Started it is false even for a synchronous 200 (observed on the wire in
+            // the #211 review), so in practice the read-back below is always the path taken; the branch
+            // stays because it is what the SDK contract promises and costs nothing.
             if (operation.HasValue)
             {
                 return Map(request.AccountName, operation.Value.Data);
@@ -157,9 +158,60 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
                 ex);
         }
 
-        return await GetDeploymentAsync(request.AccountName, request.DeploymentName, cancellationToken).ConfigureAwait(false)
+        // ---- past the commit point: ARM has accepted the create. CancellationToken.None, not the
+        // caller's: a client that hangs up in this gap would otherwise throw before the service's audit
+        // row is written, which is the accepted-but-unaudited case the commit-point rule exists to
+        // prevent (#211 review).
+        return await GetDeploymentAsync(request.AccountName, request.DeploymentName, CancellationToken.None).ConfigureAwait(false)
             ?? throw new InvalidOperationException(
                 $"Deployment '{request.DeploymentName}' in account '{request.AccountName}' was accepted by Azure but could not be read back.");
+    }
+
+    /// <inheritdoc />
+    public async Task<FoundryDeploymentResponse> UpdateCapacityAsync(string accountName, string deploymentName, string skuName, int capacity, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(deploymentName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(skuName);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+
+        var deployment = armClient.GetCognitiveServicesAccountDeploymentResource(
+            CognitiveServicesAccountDeploymentResource.CreateResourceIdentifier(
+                RequiredSubscriptionId, RequiredResourceGroup, accountName, deploymentName));
+
+        // PatchResourceTagsAndSku is the body of Deployments_Update — a PATCH carrying { sku, tags }
+        // and nothing else. Same WaitUntil.Started reasoning as create: ARM may report Updating for a
+        // while and an HTTP request must not block on it.
+        var patch = new PatchResourceTagsAndSku
+        {
+            Sku = new CognitiveServicesSku(skuName) { Capacity = capacity },
+        };
+
+        try
+        {
+            var operation = await deployment.UpdateAsync(WaitUntil.Started, patch, cancellationToken).ConfigureAwait(false);
+
+            // As in CreateDeploymentAsync: false in practice under WaitUntil.Started, kept for the
+            // contract.
+            if (operation.HasValue)
+            {
+                return Map(accountName, operation.Value.Data);
+            }
+        }
+        catch (RequestFailedException ex) when (IsAccountMissing(ex))
+        {
+            throw new FoundryAccountNotFoundException(accountName, ex);
+        }
+        catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
+        {
+            throw new KeyNotFoundException($"Deployment '{deploymentName}' was not found in Foundry account '{accountName}'.");
+        }
+
+        // Same commit point as the create above: ARM has taken the PATCH, so the read-back that turns it
+        // into a response must not be abandoned by the caller's token (#211 review).
+        return await GetDeploymentAsync(accountName, deploymentName, CancellationToken.None).ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                $"Deployment '{deploymentName}' in account '{accountName}' was resized by Azure but could not be read back.");
     }
 
     /// <inheritdoc />

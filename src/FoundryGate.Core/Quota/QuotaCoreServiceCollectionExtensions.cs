@@ -25,10 +25,11 @@ public static class QuotaCoreServiceCollectionExtensions
     /// <c>Gateway</c> section off it, so Core would have to know about a host's settings class to do it.
     /// </item>
     /// <item>
-    /// <see cref="IGatewayTierSync"/> — which implementation is right is a host question: the Api picks
-    /// <c>ApimGatewayTierSync</c> or <see cref="NullGatewayTierSync"/> depending on whether a gateway is
-    /// configured, and the Functions host always takes the null one (it runs no request-time tier change,
-    /// and a reset cannot produce one).
+    /// <see cref="IGatewayTierSync"/> — the implementation is the same one in both hosts since #194
+    /// (<see cref="ApimGatewayTierSync"/> when <c>GatewayOptions.IsApimConfigured</c>, otherwise
+    /// <see cref="NullGatewayTierSync"/>), but <em>what it composes</em> is a host question: the
+    /// management client's credential and the <see cref="IGatewayTierSyncActor"/> that decides whether
+    /// the audit row belongs to a caller or to the system.
     /// </item>
     /// </list>
     /// <c>AddFoundryGateData</c>'s <c>TimeProvider</c> and <c>IAuditWriter</c> are the other

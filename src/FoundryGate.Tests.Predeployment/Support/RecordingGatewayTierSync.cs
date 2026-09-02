@@ -11,6 +11,9 @@ public sealed class RecordingGatewayTierSync : IGatewayTierSync
 {
     public List<(int UserId, string TierProductId)> Calls { get; } = [];
 
+    /// <summary>The same calls with the previous tier the caller passed (#211 review) — what tells a genuine no-op from an unrecorded move.</summary>
+    public List<(int UserId, string TierProductId, string? PreviousTierProductId)> Records { get; } = [];
+
     /// <summary>
     /// When set, the call for this user throws instead of recording — the seam a caller reaches
     /// <em>after</em> it has already staged database changes, which is how a test can prove those
@@ -26,7 +29,7 @@ public sealed class RecordingGatewayTierSync : IGatewayTierSync
     public Action? AfterSync { get; set; }
 
     /// <inheritdoc />
-    public Task SyncAsync(User user, string tierProductId, CancellationToken cancellationToken)
+    public Task SyncAsync(User user, string tierProductId, string? previousTierProductId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
 
@@ -36,6 +39,7 @@ public sealed class RecordingGatewayTierSync : IGatewayTierSync
         }
 
         Calls.Add((user.UserId, tierProductId));
+        Records.Add((user.UserId, tierProductId, previousTierProductId));
         AfterSync?.Invoke();
         return Task.CompletedTask;
     }

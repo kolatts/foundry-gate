@@ -1,7 +1,9 @@
 using System.Globalization;
+using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -33,6 +35,7 @@ public sealed class ApimKeyService(
     IAuditService audit,
     IAuditWriter auditWriter,
     ICurrentUserAccessor currentUser,
+    RevealAnomalyOptions revealAnomaly,
     TimeProvider timeProvider,
     ILogger<ApimKeyService> logger) : IApimKeyService
 {
@@ -320,47 +323,6 @@ public sealed class ApimKeyService(
     }
 
     /// <inheritdoc />
-    public async Task MoveToProductAsync(User user, string tierProductId, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        var productId = NormalizeTier(tierProductId);
-        RequireKey(user);
-        await EnsureActorAsync(cancellationToken);
-
-        var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
-        var current = await apim.GetSubscriptionAsync(subscriptionName, cancellationToken)
-            ?? throw SubscriptionMissing(user, new ApimSubscriptionNotFoundException(subscriptionName));
-
-        if (string.Equals(current.ProductId, productId, StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        try
-        {
-            await apim.UpdateScopeAsync(subscriptionName, productId, cancellationToken);
-        }
-        catch (ApimSubscriptionNotFoundException exception)
-        {
-            throw SubscriptionMissing(user, exception);
-        }
-
-        // Added, not saved (#156 review): this method is called from inside quota resolution, which runs
-        // in the middle of its caller's unit of work. Saving here would commit that caller's
-        // half-finished mutation — a quota written to the database with no audit row describing it — so
-        // the row joins the caller's change tracker and commits with everything else. CancellationToken.None
-        // because APIM has already been re-scoped; the caller's save must run on None for the same reason.
-        await audit.LogAsync(
-            AuditActions.KeyTierChanged,
-            AuditTargetTypes.ApiKey,
-            TargetId(user),
-            new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, before = current.ProductId, after = productId },
-            CancellationToken.None);
-
-        logger.LogInformation("Moved APIM subscription {SubscriptionName} for user {UserId} from product {Before} to {After}.", subscriptionName, user.UserId, current.ProductId, productId);
-    }
-
-    /// <inheritdoc />
     public ApiKeyResponse GetMasked(User user)
     {
         ArgumentNullException.ThrowIfNull(user);
@@ -390,6 +352,7 @@ public sealed class ApimKeyService(
             TargetId(user),
             new { apimSubscriptionId = user.ApimSubscriptionId },
             cancellationToken);
+        await DetectRevealAnomalyAsync(user, cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation("Revealed APIM key for user {UserId}.", user.UserId);
@@ -529,6 +492,80 @@ public sealed class ApimKeyService(
             // invisible.
             logger.LogError(auditException, "Could not record the key.rotation-failed audit row for user {UserId}; the log line above is the only trail.", user.UserId);
         }
+    }
+
+    /// <summary>
+    /// The reveal anomaly signal (#180). The rate limiter on <c>POST /keys/me/reveal</c> stops a
+    /// <em>fast</em> drain; it does nothing about a patient one — four reveals a minute, every minute,
+    /// is well inside the cap and is not something a human does. So the reveal that crosses
+    /// <c>Security:RevealAnomaly:Threshold</c> inside the rolling window logs a Warning and adds a
+    /// <c>key.reveal-anomaly</c> row, which commits with the <c>key.revealed</c> row it describes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Counted per key, not per person.</b> The rows are matched on <c>TargetId</c> — the user whose
+    /// credential is being read — because the thing worth noticing is a credential being drained, and
+    /// that stays true whoever holds the token. Today the only reveal route is <c>/keys/me</c>, so the
+    /// actor and the target are always the same user; the actor goes in the details either way.
+    /// </para>
+    /// <para>
+    /// <b>Once per window.</b> Without the second query a drain past the threshold would write an
+    /// anomaly row for every subsequent reveal, which turns a signal into noise and buries the reveals
+    /// themselves in the trail. The window is rolling, so a drain that continues past it is reported
+    /// again — which is the right behaviour: it is still happening.
+    /// </para>
+    /// <para>
+    /// The current reveal counts. Its row is on the change tracker and not yet in the table, so the
+    /// query's answer is one short by construction; the alternative — saving first — would split the
+    /// reveal and its anomaly across two transactions.
+    /// </para>
+    /// <para>
+    /// <b>One query, one index.</b> Both questions — how many reveals, and has this window already been
+    /// reported — are answered by a single grouped count, and <c>AuditLog</c> carries a composite
+    /// <c>(Action, TargetType, TargetId, OccurredDate)</c> index so each is an index-only seek rather
+    /// than a range scan of every audit row written in the window (#211 review).
+    /// </para>
+    /// </remarks>
+    private async Task DetectRevealAnomalyAsync(User user, CancellationToken cancellationToken)
+    {
+        var since = timeProvider.GetUtcNow() - revealAnomaly.Window;
+        var targetId = TargetId(user);
+
+        // One round trip for both questions: how many reveals this key has had in the window, and
+        // whether the window already carries an anomaly row. Grouping by action lets the composite
+        // (Action, TargetType, TargetId, OccurredDate) index seek each of the two narrow ranges and
+        // count them without touching the table.
+        var windowCounts = await dbContext.AuditLogs.AsNoTracking()
+            .Where(row => (row.Action == AuditActions.KeyRevealed || row.Action == AuditActions.KeyRevealAnomaly)
+                && row.TargetType == AuditTargetTypes.ApiKey
+                && row.TargetId == targetId
+                && row.OccurredDate >= since)
+            .GroupBy(row => row.Action)
+            .Select(group => new { Action = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.Action, row => row.Count, StringComparer.Ordinal, cancellationToken);
+
+        // The reveal being served counts: its row is on the change tracker, not in the table yet.
+        var revealCount = 1 + windowCounts.GetValueOrDefault(AuditActions.KeyRevealed);
+        var alreadyReported = windowCounts.GetValueOrDefault(AuditActions.KeyRevealAnomaly) > 0;
+
+        if (revealCount < revealAnomaly.Threshold || alreadyReported)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "User {UserId}'s APIM key has been revealed {RevealCount} times in the last {WindowMinutes} minute(s), at or past the configured threshold of {Threshold} (Security:RevealAnomaly). A rate limiter does not catch a drain this patient; check whether the developer's access token is compromised.",
+            user.UserId,
+            revealCount,
+            revealAnomaly.WindowMinutes,
+            revealAnomaly.Threshold);
+
+        _ = await audit.LogAsync(
+            AuditActions.KeyRevealAnomaly,
+            AuditTargetTypes.ApiKey,
+            targetId,
+            new { revealCount, threshold = revealAnomaly.Threshold, windowMinutes = revealAnomaly.WindowMinutes },
+            cancellationToken);
     }
 
     /// <summary>

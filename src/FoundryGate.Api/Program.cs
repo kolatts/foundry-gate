@@ -80,7 +80,7 @@ builder.Services.AddFoundryGateHealthChecks();
 
 // Per-user rate limiting for the two routes that hand a developer their own gateway credential
 // (#136). Policies only — nothing is limited globally; an action opts in with [EnableRateLimiting].
-builder.Services.AddFoundryGateRateLimiter();
+builder.Services.AddFoundryGateRateLimiter(appSettings.Security.RateLimits);
 
 // Controllers: every controller lives under /api/v1 (spec §4). Applying auth as a global MVC
 // filter — rather than per-controller — means every controller added by a later issue is

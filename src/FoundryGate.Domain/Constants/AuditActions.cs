@@ -79,6 +79,14 @@ public static class AuditActions
     /// <summary>A developer revealing their own full key (spec &#167;11: "reveal action fetches directly, not stored in browser").</summary>
     public const string KeyRevealed = "key.revealed";
 
+    /// <summary>
+    /// More <see cref="KeyRevealed"/> rows for one key inside the configured window than a person
+    /// plausibly produces (<c>Security:RevealAnomaly</c>, #180). Written once per window alongside the
+    /// reveal that crossed the line, so a patient drain — which stays inside the rate limiter — leaves
+    /// a mark in the trail rather than only in the logs.
+    /// </summary>
+    public const string KeyRevealAnomaly = "key.reveal-anomaly";
+
     /// <summary>The APIM subscription behind a key was re-scoped to another quota-tier product (#82: a tier change moves the subscription between tier products).</summary>
     public const string KeyTierChanged = "key.tier-changed";
 
@@ -98,6 +106,13 @@ public static class AuditActions
 
     public const string FoundryDeploymentCreated = "foundry.deployment.created";
     public const string FoundryDeploymentDeleted = "foundry.deployment.deleted";
+
+    /// <summary>
+    /// <c>PATCH /foundry/deployments/{account}/{name}/capacity</c> — a live TPM rebalance (#130).
+    /// Details carry <c>{ before, after }</c> capacities. Named for what changed rather than
+    /// "resized", matching <see cref="KeyTierChanged"/>; the deployment itself is untouched.
+    /// </summary>
+    public const string FoundryDeploymentCapacityChanged = "foundry.deployment.capacity-changed";
 
     // -- Config (spec 4.6) --
 

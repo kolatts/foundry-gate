@@ -442,7 +442,7 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
         var auditWriter = new AuditWriter(Context, _clock);
         resolution ??= new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance);
-        var reset = new QuotaResetService(Context, resolution, new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance), auditWriter, _clock, NullLogger<QuotaResetService>.Instance);
+        var reset = new QuotaResetService(Context, resolution, _tierSync, new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance), auditWriter, _clock, NullLogger<QuotaResetService>.Instance);
 
         return new QuotaAllocationService(
             Context,
@@ -501,9 +501,9 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         public Task<QuotaPreview> PreviewAsync(int userId, CancellationToken cancellationToken) =>
             inner.PreviewAsync(userId, cancellationToken);
 
-        public async Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(IReadOnlyCollection<int> userIds, BillingPeriod period, CancellationToken cancellationToken)
+        public async Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(IReadOnlyCollection<int> userIds, BillingPeriod period, GatewayTierSyncMode gatewaySync, CancellationToken cancellationToken)
         {
-            var results = await inner.ResolveManyAsync(userIds, period, cancellationToken);
+            var results = await inner.ResolveManyAsync(userIds, period, gatewaySync, cancellationToken);
 
             var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connectionString).Options;
             await using var other = new AppDbContext(options);

@@ -51,6 +51,9 @@ param apimName string
 param apimGatewayUrl string
 param foundryAccountNames array
 
+@description('The same per-tier alias map the gateway module turns into policy ({ <tier>: { <alias>: { deployment, pool, provider } } }). Flattened onto both hosts as Gateway__ModelAliases__{i}__* so GET /users/me can hand a developer the model names their tier actually permits (#153).')
+param productModelAliases object = {}
+
 // ---- SQL ------------------------------------------------------------------------
 // NOTE: parameters here are pass-throughs and deliberately carry NO defaults. main.bicep
 // declares every default (and every @allowed list) once and passes all of them
@@ -217,6 +220,28 @@ var foundryAccountConfig = [
   for (name, i) in foundryAccountNames: { name: 'Gateway__FoundryAccountNames__${i}', value: name }
 ]
 
+// The alias map, flattened to one row per (tier, alias) so it survives the trip through
+// environment variables — ASP.NET Core's binder reads Gateway__ModelAliases__{i}__X as
+// Gateway:ModelAliases[i].X. The tier travels with each row because the map is also the
+// allowlist (#86): what a developer may name depends on the product their subscription sits
+// on, and `GET /users/me` filters to it rather than promising everyone every model (#153).
+// `pool` is deliberately not carried — it is data-plane routing, not something a CLI needs.
+// `items()` sorts by key, and lambdas (not for-expressions, which Bicep only allows as the whole
+// value of a declaration) are what can nest — so the flattening is map-of-map, then flatten.
+var modelAliasRows = flatten(map(items(productModelAliases), tier => map(items(tier.value), alias => {
+  tier: tier.key
+  alias: alias.key
+  deployment: alias.value.deployment
+  provider: alias.value.provider
+})))
+
+var modelAliasConfig = flatten(map(range(0, length(modelAliasRows)), i => [
+  { name: 'Gateway__ModelAliases__${i}__Tier', value: modelAliasRows[i].tier }
+  { name: 'Gateway__ModelAliases__${i}__Alias', value: modelAliasRows[i].alias }
+  { name: 'Gateway__ModelAliases__${i}__DeploymentName', value: modelAliasRows[i].deployment }
+  { name: 'Gateway__ModelAliases__${i}__Provider', value: modelAliasRows[i].provider }
+]))
+
 module containerApp 'container-app.bicep' = {
   name: 'foundrygate-cp-containerapp'
   params: {
@@ -247,7 +272,8 @@ module containerApp 'container-app.bicep' = {
         { name: 'Cors__AllowedOrigins__0', value: 'https://${staticWebApp.outputs.defaultHostname}' }
       ],
       sharedAppConfig,
-      foundryAccountConfig
+      foundryAccountConfig,
+      modelAliasConfig
     )
   }
   dependsOn: [rbac]
@@ -275,7 +301,8 @@ module functionApp 'function-app.bicep' = {
         { name: 'AZURE_CLIENT_ID', value: identities.outputs.functionsIdentityClientId }
       ],
       sharedAppConfig,
-      foundryAccountConfig
+      foundryAccountConfig,
+      modelAliasConfig
     )
   }
   dependsOn: [rbac]
@@ -308,3 +335,6 @@ output apiIdentityPrincipalId string = identities.outputs.apiIdentityPrincipalId
 output functionsIdentityName string = identities.outputs.functionsIdentityName
 output functionsIdentityClientId string = identities.outputs.functionsIdentityClientId
 output functionsIdentityPrincipalId string = identities.outputs.functionsIdentityPrincipalId
+
+@description('The gateway alias map as the control plane receives it — one row per (tier, alias), matching the Gateway__ModelAliases__{i}__* settings on both hosts (#153).')
+output modelAliasRows array = modelAliasRows

@@ -1,5 +1,6 @@
 using Azure.Core;
 using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Gateway;
 using FoundryGate.Domain.Common;
 using Imagile.Framework.Configuration.Exceptions;
 

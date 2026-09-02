@@ -30,11 +30,15 @@ namespace FoundryGate.Functions.Services.Quota;
 /// as the allocations, so there is no separate state to keep honest.
 /// </para>
 /// <para>
-/// <b>What it never does.</b> No APIM call. The gateway's <c>llm-token-limit</c> monthly window is a
-/// UTC-truncated calendar month that resets itself (#10 direction update), so there is no counter to
-/// clear; enforcement does not depend on this job having run. A tier that <em>does</em> move during a
-/// reset — the <c>DefaultMonthlyTokenQuota</c> case — is reported by
-/// <see cref="WarningGatewayTierSync"/> and counted in the run's audit row.
+/// <b>What it never does for its own sake.</b> The gateway's <c>llm-token-limit</c> monthly window is
+/// a UTC-truncated calendar month that resets itself (#10 direction update), so there is no counter
+/// to clear and enforcement does not depend on this job having run — a plain reset makes no APIM
+/// call. A tier that <em>does</em> move during a reset (the <c>DefaultMonthlyTokenQuota</c> case)
+/// is the exception: since #194 this host re-scopes that developer's subscription for real through
+/// <see cref="ApimGatewayTierSync"/>, writing a <c>key.tier-changed</c> row that commits with the
+/// run, and the moves are still counted in the run's own audit row (<c>tierChangeCount</c>).
+/// A failed move therefore fails the run, which is the correct trade: the alternative is a database
+/// that claims a budget the gateway is not enforcing.
 /// </para>
 /// </remarks>
 public sealed class MonthlyResetJob(
@@ -95,9 +99,11 @@ public sealed class MonthlyResetJob(
         var outcome = await quotaReset.ResetAsync(QuotaResetTrigger.Scheduled(), cancellationToken);
 
         logger.LogInformation(
-            "Monthly quota reset for {Period}: {UsersResetCount} active users. The gateway's own monthly window resets itself, so no APIM state was touched.",
+            "Monthly quota reset for {Period}: {UsersResetCount} active users, {TierChangeCount} tier change(s) moved at the gateway, {TierChangeFailureCount} refused.",
             outcome.Period,
-            outcome.UsersResetCount);
+            outcome.UsersResetCount,
+            outcome.TierSyncCount,
+            outcome.TierSyncFailureCount);
 
         if (today != configuredDay)
         {
