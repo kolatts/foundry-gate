@@ -160,7 +160,8 @@ All scoped to the individual resource, never the resource group; names are
 | Functions | Key Vault Secrets User | Key Vault | |
 | Functions | Log Analytics Reader | workspace | reconciliation reads `ApiManagementGatewayLlmLog` |
 | Functions | API Management Service Contributor | APIM instance | re-scope a developer's subscription when the monthly reset resolves a new tier — see the note below |
-| Functions | Storage Blob Data Owner | storage | host state + Flex deployment container + the monthly reset's lock lease (`foundrygate-locks`) |
+| Functions | Storage Blob Data Owner | storage | host state + Flex deployment container + the scheduled jobs' lock leases (`foundrygate-locks`: one blob per job) |
+| Functions | Microsoft Graph `Application.Read.All`, `User.Read.All`, `GroupMember.ReadBasic.All` | Graph service principal | the nightly directory sync ([#151](https://github.com/kolatts/foundry-gate/issues/151)) — **not Bicep-able**, see [Graph application roles](#role-assignments) below |
 | Functions | Storage Queue Data Contributor | storage | queue triggers/outputs |
 | Functions | Storage Table Data Contributor | storage | table bindings |
 | APIM (system-assigned) | Cognitive Services User | each Foundry account | gateway → model backends, no account keys |
@@ -202,7 +203,7 @@ Not expressible in Bicep. Two of these the deploy pipeline now does itself throu
 | **Runner / developer firewall rules** on the SQL server | **Automated**: `foundrygate ip setup --env {env}` and `ip cleanup` — see [Firewall model](#firewall-model-for-azure-sql). ([#96](https://github.com/kolatts/foundry-gate/issues/96)) |
 | The CI/OIDC principal must be a **member of the SQL Entra admin group** or the dacpac deploy, the seeders and `db grant-identities` cannot connect (there is no password fallback by design). It also needs **SQL Server Contributor** (or Contributor) on the resource group for the firewall-rule writes. | Operator (#109) |
 | Runtime creation of **Claude** deployments needs Marketplace/SaaS permissions beyond Cognitive Services Contributor | Operator ([#107](https://github.com/kolatts/foundry-gate/issues/107)) |
-| **Microsoft Graph application roles** for the Entra sync on the API identity's service principal — no client secret; details below | Operator ([#110](https://github.com/kolatts/foundry-gate/issues/110)) |
+| **Microsoft Graph application roles** for the Entra sync on **both** the API and Functions identities' service principals — no client secret; details below | Operator ([#110](https://github.com/kolatts/foundry-gate/issues/110), [#120](https://github.com/kolatts/foundry-gate/issues/120)) |
 
 ### Why the client ids, not `FROM EXTERNAL PROVIDER`
 
@@ -254,11 +255,15 @@ test:
 ([#103](https://github.com/kolatts/foundry-gate/issues/103), deferred from
 [#100](https://github.com/kolatts/foundry-gate/issues/100))
 
-The Graph roles go on the API identity's service principal (`id-foundrygate-api-{env}`) as
-app-role assignments on the Microsoft Graph service principal (appId
-`00000003-0000-0000-c000-000000000000`); `az ad app permission` does not apply to managed
-identities, and no separate admin-consent step is needed. Least privilege per the Graph
-reference for each call the API makes:
+The Graph roles go on **both** control-plane identities' service principals —
+`id-foundrygate-api-{env}` **and** `id-foundrygate-func-{env}` — as app-role assignments on the
+Microsoft Graph service principal (appId `00000003-0000-0000-c000-000000000000`); `az ad app
+permission` does not apply to managed identities, and no separate admin-consent step is needed. The
+Functions identity needs the same three because the nightly `EntraSyncFunction`
+([#151](https://github.com/kolatts/foundry-gate/issues/151)) runs the same reconciliation the API's
+`POST /users/sync` and `POST /groups/sync-entra` do, calling Graph as its own identity. Grant them to
+the Api identity only and `Entra__Enabled=true` gives you a job that fails every night with
+`Authorization_RequestDenied`. Least privilege per the Graph reference for each call:
 
 | Graph app role | Used for |
 |---|---|
@@ -332,6 +337,7 @@ is the single per-host table. A predeployment test (`GatewayInfraBindingTests`) 
 | `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl`, `Gateway__KeyEncryptionKeyUri`, `Gateway__FoundryAccountNames__{i}` | gateway addressing for the APIM key service, Foundry deployment service and reconciliation ([#108](https://github.com/kolatts/foundry-gate/issues/108)) |
 | `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | the workspace **GUID** (`customerId` — what `LogsQueryClient.QueryWorkspaceAsync` and `/v1/workspaces/{id}/query` mean by "workspace id") / the ARM resource id (`QueryResourceAsync`, management plane) |
 | `Gateway__Tiers__{i}__ProductId` / `__DisplayName` / `__MonthlyTokenQuota` | the quota tier table, projected from the same `quotaTiers` parameter that creates the APIM products and renders their `llm-token-limit` policies ([#201](https://github.com/kolatts/foundry-gate/issues/201)) |
+| `Entra__ApplicationClientId` | the app registration whose service principal carries the developer assignments, on **both** hosts (the Functions worker binds no `AzureAd` section). `Entra__Enabled` is deliberately unset — turning directory sync on is an owner step, because it needs Graph application roles no Bicep can grant |
 | `Gateway__ModelAliases__{i}__Tier` / `__Alias` / `__DeploymentName` / `__Provider` | the model alias map, flattened from `productModelAliases` ([#153](https://github.com/kolatts/foundry-gate/issues/153)) |
 | `AzureWebJobsStorage__accountName` / `__credential=managedidentity` / `__clientId` (Functions) | identity-based host storage — also where the scheduled jobs take their lock leases, so they needed no setting of their own |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` (Functions) | host telemetry |

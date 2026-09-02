@@ -1,7 +1,7 @@
-using FoundryGate.Api.Services.Entra;
+using FoundryGate.Core.Entra;
 using FoundryGate.Domain.Exceptions;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services.Entra;
+namespace FoundryGate.Tests.Predeployment.Core.Entra;
 
 /// <summary>
 /// The <c>Entra:Enabled = false</c> implementation must fail every call with the 503-mapped

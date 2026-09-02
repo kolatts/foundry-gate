@@ -1,4 +1,5 @@
 using FoundryGate.Api.Services.Groups;
+using FoundryGate.Core.Entra;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Groups.Contracts;

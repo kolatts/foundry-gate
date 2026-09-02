@@ -217,6 +217,13 @@ var sharedAppConfig = [
   { name: 'Gateway__LogAnalyticsWorkspaceId', value: workspaceCustomerId }
   { name: 'Gateway__LogAnalyticsWorkspaceResourceId', value: workspaceId }
   { name: 'Gateway__KeyEncryptionKeyUri', value: keyVault.outputs.keyEncryptionKeyUri }
+  // Which app registration's service principal carries the user assignments that define "who is a
+  // FoundryGate developer". On the Api this is the same value as AzureAd__ClientId below, but the
+  // directory client is shared with the Functions host since #151 and that host binds no AzureAd
+  // section at all — nothing there serves a request, so there is no token to validate. Entra__Enabled
+  // stays unset (default false) on purpose: turning directory sync on is an owner step, because it
+  // requires Graph application roles on the identities that no Bicep can grant (#109/#120).
+  { name: 'Entra__ApplicationClientId', value: entraApiClientId }
 ]
 
 var foundryAccountConfig = [

@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 
-namespace FoundryGate.Api.Configuration;
+namespace FoundryGate.Core.Configuration;
 
 /// <summary>
 /// Microsoft Graph directory access for the Entra sync features (issues #40, #41, #110) — the
@@ -31,12 +31,27 @@ public class EntraOptions : IValidatableObject
     /// <summary>
     /// Object id of the <em>service principal</em> (enterprise application) whose app-role
     /// assignments define "who is a FoundryGate user". Optional: when absent the service principal
-    /// backing <c>AzureAd:ClientId</c> is resolved once via
+    /// backing <see cref="ApplicationClientId"/> is resolved once via
     /// <c>GET /servicePrincipals(appId='{clientId}')</c> and cached for the process lifetime. Set it
     /// explicitly only when developers are assigned to a <em>different</em> enterprise application
     /// than the API's own registration. Must be a GUID when present.
     /// </summary>
     public string? ServicePrincipalObjectId { get; set; }
+
+    /// <summary>
+    /// Client (application) id of the FoundryGate app registration whose service principal carries the
+    /// user assignments — the app registration <c>AzureAd:ClientId</c> also names.
+    /// </summary>
+    /// <remarks>
+    /// It is on <em>this</em> section rather than read from <c>AzureAd</c> because since #151 the
+    /// directory client lives in Core and both hosts construct it, and the Functions worker has no
+    /// <c>AzureAd</c> section at all — nothing there serves a request, so there is no token to
+    /// validate. Infra sets <c>Entra__ApplicationClientId</c> on both hosts from the same
+    /// <c>entraApiClientId</c> parameter that fills <c>AzureAd__ClientId</c> on the Api, and the Api's
+    /// own registration falls back to <c>AzureAd:ClientId</c> when this is blank, so a fork on an
+    /// older deployment keeps working. Only read when <see cref="ServicePrincipalObjectId"/> is absent.
+    /// </remarks>
+    public string? ApplicationClientId { get; set; }
 
     /// <summary>
     /// Graph endpoint including the API version. Forks in sovereign clouds override this (e.g.
@@ -72,5 +87,11 @@ public class EntraOptions : IValidatableObject
                 $"{nameof(ServicePrincipalObjectId)} must be the service principal's object id (a GUID) when set.",
                 [nameof(ServicePrincipalObjectId)]);
         }
+
+        // NOT validated here: that one of ApplicationClientId / ServicePrincipalObjectId is present.
+        // The Api fills ApplicationClientId from AzureAd:ClientId when its own registration builds the
+        // directory client, which happens after ValidateRecursively() has run — so the rule would fire
+        // on a perfectly good Api. It belongs to the host that has no such fallback, and lives on the
+        // Functions AppSettings.
     }
 }

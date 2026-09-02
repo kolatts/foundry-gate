@@ -1,6 +1,8 @@
 using Azure.Core;
 using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Entra;
+using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Entra;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace FoundryGate.Tests.Predeployment.Api.Services.Entra;

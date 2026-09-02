@@ -1,6 +1,6 @@
 using FoundryGate.Domain.Users.Contracts;
 
-namespace FoundryGate.Api.Services.Entra;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// Bulk Entra → <c>Users</c> reconciliation behind <c>POST /users/sync</c> (spec &#167;7.2, issue #40).
@@ -21,7 +21,7 @@ public interface IEntraUserSyncService
     /// and a previously departed user who reappears is <em>not</em> auto-reactivated (plan #21:
     /// "only if the user returns to Entra <em>and an admin re-activates</em>").</item>
     /// <item><b>In the table, not in Entra</b> → the full deprovision pipeline
-    /// (<c>IUserLifecycleService.DeprovisionAsync(EntraDeparture, …)</c>): APIM subscription deleted,
+    /// (<see cref="IDepartureHandler"/>, plan 21 Trigger B): APIM subscription deleted,
     /// <c>IsActive = false</c>, current allocation hard-stopped, pending increase requests rejected.
     /// Rows are never deleted (audit history). Users already inactive are not counted or touched again.</item>
     /// </list>
@@ -40,12 +40,13 @@ public interface IEntraUserSyncService
     /// <c>users.synced</c> audit row — commits in one database transaction this method owns. A
     /// departure's audit rows (<c>key.revoked</c>, <c>user.deactivated</c>) are system-attributed
     /// (<c>ActorUserId = null</c>) because the pipeline runs on the directory's word, not the calling
-    /// admin's; the <c>users.synced</c> row is still attributed to whoever triggered the run.
+    /// admin's; the <c>users.synced</c> row is attributed to whoever triggered the run, and carries no
+    /// actor at all when a schedule did (<see cref="IEntraSyncActor"/>, #151).
     /// </remarks>
     /// <returns>Counts of users added, updated and deactivated by this run.</returns>
     /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Entra sync is disabled on this host (<c>Entra:Enabled</c> is false) → 503.</exception>
     /// <exception cref="Domain.Exceptions.ConflictException">The directory returned <em>no</em> assigned users while active users exist locally → 409; refusing to deactivate everyone on what is almost certainly a misconfiguration.</exception>
-    /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (and is not among the assigned users being imported) → 403.</exception>
+    /// <exception cref="UnauthorizedAccessException">On a host whose <see cref="IEntraSyncActor"/> requires one, the caller has no <c>User</c> row (and is not among the assigned users being imported) → 403.</exception>
     Task<UserSyncResult> SyncUsersAsync(CancellationToken cancellationToken);
 
     /// <summary>

@@ -62,12 +62,14 @@ public class AppSettings : IValidatableObject
     /// <summary>
     /// Validates the sections whose option classes live in <c>FoundryGate.Core</c>:
     /// <c>ValidateRecursively()</c> only recurses into types from the root object's own assembly, so
-    /// <see cref="Gateway"/> has to be handed to it explicitly (see
-    /// <see cref="CoreOptionsValidation"/>). Everything declared in this assembly is still walked
-    /// automatically.
+    /// <see cref="Gateway"/> (#119) and <see cref="Entra"/> (#151, when the directory client and both
+    /// sync services moved so the Functions host could run them) each have to be handed to it
+    /// explicitly (see <see cref="CoreOptionsValidation"/>). Everything declared in this assembly is
+    /// still walked automatically.
     /// </summary>
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext) =>
-        CoreOptionsValidation.ValidateGateway(Gateway, nameof(Gateway));
+        CoreOptionsValidation.ValidateGateway(Gateway, nameof(Gateway))
+            .Concat(CoreOptionsValidation.ValidateEntra(Entra, nameof(Entra)));
 }
 
 /// <summary>

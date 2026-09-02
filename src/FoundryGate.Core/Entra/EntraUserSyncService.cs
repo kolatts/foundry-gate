@@ -1,16 +1,16 @@
 using System.Globalization;
 using System.Text.Json;
-using FoundryGate.Api.Services.Audit;
-using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Data;
+using FoundryGate.Data.Audit;
 using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Users.Contracts;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
-namespace FoundryGate.Api.Services.Entra;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// Default <see cref="IEntraUserSyncService"/>. Loads the whole <c>Users</c> table once (tracked —
@@ -19,18 +19,25 @@ namespace FoundryGate.Api.Services.Entra;
 /// the interface.
 /// </summary>
 /// <remarks>
-/// The run is wrapped in one database transaction so a departure — which now runs the full
-/// deprovision pipeline (<see cref="IUserLifecycleService"/>, plan 21 Trigger B: delete the APIM
-/// subscription, hard-stop the allocation, reject pending requests) and saves as it goes — commits
-/// with the adds and updates rather than ahead of them. The orchestrator and the key service both join
-/// an already-open transaction instead of starting their own, so this is the only <c>BeginTransaction</c>
-/// in the path.
+/// <para>
+/// A departure runs the full deprovision pipeline — plan 21 Trigger B: delete the APIM subscription,
+/// hard-stop the allocation, reject pending requests — through <see cref="IDepartureHandler"/>, one
+/// unit of work each, before any add or update is applied. The handler is a seam because Core cannot
+/// reach the Api's <c>IUserLifecycleService</c>; see <see cref="IDepartureHandler"/>.
+/// </para>
+/// <para>
+/// Lives in Core, not the Api (#151): both hosts run this sync — the Api's <c>POST /users/sync</c> and
+/// the nightly <c>EntraSyncFunction</c> — and "what a directory reconciliation does" must not fork
+/// between a button and a timer. The two host-shaped differences are one-method seams:
+/// <see cref="IEntraSyncActor"/> (whose audit row this is) and <see cref="IDepartureHandler"/>.
+/// </para>
 /// </remarks>
 public sealed class EntraUserSyncService(
     AppDbContext dbContext,
     IEntraDirectoryClient directory,
-    IUserLifecycleService lifecycle,
-    IAuditService audit,
+    IDepartureHandler departures,
+    IEntraSyncActor syncActor,
+    IAuditWriter audit,
     TimeProvider timeProvider,
     ILogger<EntraUserSyncService> logger) : IEntraUserSyncService
 {
@@ -125,7 +132,7 @@ public sealed class EntraUserSyncService(
                 user.LastSyncedDate = now;
                 try
                 {
-                    await lifecycle.DeprovisionAsync(DeprovisionTrigger.EntraDeparture, user.UserId, cancellationToken);
+                    await departures.HandleAsync(user, cancellationToken);
                     deactivated.Add(user);
                 }
                 catch (UpstreamDependencyException exception)
@@ -177,23 +184,29 @@ public sealed class EntraUserSyncService(
         // Audit before save, same context → commits atomically with the rows above (CONVENTIONS.md).
         // No single target: the whole table is the subject. Deactivated ids are known (saved rows);
         // added rows have no ids until save, so they are recorded by oid.
-        _ = await audit.LogAsync(
-            AuditActions.UsersSynced,
-            string.Empty,
-            string.Empty,
-            new
-            {
-                result.AddedCount,
-                result.UpdatedCount,
-                result.DeactivatedCount,
-                result.SkippedGroupAssignmentCount,
-                result.FailedCount,
-                DeactivatedUserIds = deactivated.Select(u => u.UserId).ToArray(),
-                AddedEntraObjectIds = addedOids.ToArray(),
-                DepartureDetectionSuspended = skippedGroups.Count > 0,
-                SkippedGroupAssignments = skippedGroups.Select(g => new { g.GroupObjectId, g.DisplayName }).ToArray(),
-            },
-            completionToken);
+        //
+        // The actor is resolved HERE, not at the top of the method, and that placement is load-bearing
+        // (it is exactly where IAuditService.LogAsync used to resolve it): the Api's accessor checks the
+        // change tracker first, so an admin whose own User row this very run just Added — their first
+        // sync of a tenant they are themselves assigned to — attributes the run to themselves instead of
+        // being refused by it. A scheduled run resolves to null and the row is system-attributed.
+        var details = new
+        {
+            result.AddedCount,
+            result.UpdatedCount,
+            result.DeactivatedCount,
+            result.SkippedGroupAssignmentCount,
+            result.FailedCount,
+            DeactivatedUserIds = deactivated.Select(u => u.UserId).ToArray(),
+            AddedEntraObjectIds = addedOids.ToArray(),
+            DepartureDetectionSuspended = skippedGroups.Count > 0,
+            SkippedGroupAssignments = skippedGroups.Select(g => new { g.GroupObjectId, g.DisplayName }).ToArray(),
+        };
+
+        var actor = await syncActor.ResolveActorAsync(completionToken);
+        _ = actor is null
+            ? audit.AddSystem(AuditActions.UsersSynced, string.Empty, string.Empty, details)
+            : audit.Add(actor, AuditActions.UsersSynced, string.Empty, string.Empty, details);
 
         // One save, so the adds/updates, the LastUserSync* rows and the users.synced row that describes
         // them commit together. No explicit transaction: SaveChangesAsync is already atomic, and the

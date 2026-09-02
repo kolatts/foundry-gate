@@ -29,7 +29,14 @@
   one real difference — who a gateway-driven audit row belongs to — is its own one-method
   seam, `IGatewayTierSyncActor` (the Api resolves the current caller, the Functions host
   answers "the system"). Prefer a narrow seam for the difference over a second
-  implementation of the whole thing — #194.
+  implementation of the whole thing — #194. The Entra area follows the same shape since #151:
+  both sync services live in `Core/Entra`, with `IEntraSyncActor` (whose audit row a run is) and
+  `IDepartureHandler` (what happens to someone the directory dropped) as the two seams. The
+  second of those is where the rule bends and it is worth knowing why: the Api's answer
+  delegates to `IUserLifecycleService`, which Core cannot reach, so the Functions answer
+  re-states the deprovision sequence rather than sharing it — a known debt with an issue
+  (#214), taken because the alternative was a nightly job that flagged departures while their
+  gateway keys kept working.
   (Amends the "no separate Services project" rule for the shared case only — #119;
   a service with exactly one host still belongs to that host.)
 - **Options classes in Core need an explicit validation hop.** The framework's

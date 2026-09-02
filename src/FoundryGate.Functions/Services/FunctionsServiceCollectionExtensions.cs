@@ -1,9 +1,12 @@
 using Azure.Core;
 using Azure.Monitor.Query;
+using FoundryGate.Core.Entra;
 using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
 using FoundryGate.Core.Requests;
 using FoundryGate.Functions.Configuration;
+using FoundryGate.Functions.Services.Entra;
+using FoundryGate.Functions.Services.Jobs;
 using FoundryGate.Functions.Services.Quota;
 using FoundryGate.Functions.Services.Usage;
 using Microsoft.Extensions.Azure;
@@ -27,7 +30,7 @@ public static class FunctionsServiceCollectionExtensions
     /// <param name="hostConfiguration">
     /// The raw host configuration, read only to discover the Functions storage account the host was
     /// already told about (<c>AzureWebJobsStorage__accountName</c>, or the local
-    /// <c>UseDevelopmentStorage=true</c> connection string), so the reset lock needs no new infra
+    /// <c>UseDevelopmentStorage=true</c> connection string), so the scheduled jobs' locks need no new infra
     /// setting of its own.
     /// </param>
     public static IServiceCollection AddFoundryGateFunctionsServices(
@@ -40,6 +43,7 @@ public static class FunctionsServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(hostConfiguration);
 
         services.AddSingleton(settings.Gateway);
+        services.AddSingleton(settings.Entra);
         services.AddSingleton(settings.Storage);
 
         // Quota resolution + the monthly reset, shared with the Api (#119), and — since #194 — the same
@@ -57,11 +61,20 @@ public static class FunctionsServiceCollectionExtensions
         // timer and the admin's POST /quota/reset cannot disagree about what expiry means.
         services.AddRequestsCore();
 
+        // The nightly directory sync (#151). Core owns both sync services and the Graph client; this
+        // host supplies the two seams that differ — the run has no human actor
+        // (SystemEntraSyncActor), and a departure is deprovisioned over Core's own APIM client rather
+        // than through the Api's lifecycle orchestrator (DeprovisioningDepartureHandler).
+        services.AddEntraCore();
+        services.AddScoped<IEntraSyncActor, SystemEntraSyncActor>();
+        services.AddScoped<IDepartureHandler, DeprovisioningDepartureHandler>();
+
         services.AddScoped<IMonthlyResetJob, MonthlyResetJob>();
         services.AddScoped<IUsageSyncJob, UsageSyncJob>();
         services.AddScoped<IUsageQueryClient, LogAnalyticsUsageQueryClient>();
+        services.AddScoped<IEntraSyncJob, EntraSyncJob>();
 
-        AddResetLock(services, settings.Storage, hostConfiguration);
+        AddJobLock(services, settings.Storage, hostConfiguration);
         AddLogsQueryClient(services);
 
         return services;
@@ -87,6 +100,12 @@ public static class FunctionsServiceCollectionExtensions
     {
         if (!settings.Gateway.IsApimConfigured)
         {
+            // The unconfigured client, not "no client at all" (the Api's KeysServiceCollectionExtensions
+            // shape): since #151 the departure handler also needs one, and a missing registration would
+            // be a startup failure on a host that is deliberately gateway-less rather than the
+            // FeatureNotConfiguredException the one call that could reach it deserves. Nothing actually
+            // calls it on such a host — a developer with no gateway has no APIM subscription to delete.
+            services.AddSingleton<IApimManagementClient>(new UnconfiguredApimManagementClient());
             services.AddScoped<IGatewayTierSync, NullGatewayTierSync>();
             return;
         }
@@ -98,19 +117,19 @@ public static class FunctionsServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers <see cref="BlobResetLock"/> when a blob endpoint can be worked out, otherwise
-    /// <see cref="NullResetLock"/>. Order of preference: explicit <c>Storage:AccountName</c> /
+    /// Registers <see cref="BlobJobLock"/> when a blob endpoint can be worked out, otherwise
+    /// <see cref="NullJobLock"/>. Order of preference: explicit <c>Storage:AccountName</c> /
     /// <c>Storage:ConnectionString</c>, then the host's own <c>AzureWebJobsStorage</c> settings, which
     /// infra already sets on every deployed Function App.
     /// </summary>
-    private static void AddResetLock(IServiceCollection services, StorageOptions storage, IConfiguration hostConfiguration)
+    private static void AddJobLock(IServiceCollection services, StorageOptions storage, IConfiguration hostConfiguration)
     {
         var accountName = FirstNonBlank(storage.AccountName, hostConfiguration["AzureWebJobsStorage:accountName"]);
         var connectionString = FirstNonBlank(storage.ConnectionString, hostConfiguration["AzureWebJobsStorage"]);
 
         if (accountName is null && connectionString is null)
         {
-            services.AddSingleton<IResetLock, NullResetLock>();
+            services.AddSingleton<IJobLock, NullJobLock>();
             return;
         }
 
@@ -130,7 +149,7 @@ public static class FunctionsServiceCollectionExtensions
             clients.UseCredential(serviceProvider => serviceProvider.GetRequiredService<TokenCredential>());
         });
 
-        services.AddSingleton<IResetLock, BlobResetLock>();
+        services.AddSingleton<IJobLock, BlobJobLock>();
     }
 
     /// <summary>

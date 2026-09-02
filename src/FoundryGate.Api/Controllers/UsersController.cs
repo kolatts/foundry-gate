@@ -1,5 +1,5 @@
-using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Users;
+using FoundryGate.Core.Entra;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Users.Contracts;

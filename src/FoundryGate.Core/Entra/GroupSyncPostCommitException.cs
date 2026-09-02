@@ -1,4 +1,4 @@
-namespace FoundryGate.Api.Services.Groups;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// One group's reconciliation moved a member's APIM tier — the gateway <b>accepted</b> it — and the

@@ -4,18 +4,22 @@ namespace FoundryGate.Api.Services.Groups;
 public static class GroupsServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the two scoped services behind <c>/api/v1/groups</c>: <see cref="IGroupService"/>
-    /// (CRUD + membership, #30/#31) and <see cref="IEntraGroupSyncService"/> (directory reconciliation,
-    /// #41). Both are scoped because they share the request's <c>AppDbContext</c> with quota resolution
-    /// and the audit writer — that shared context is what makes a group mutation, the allocations it
-    /// moves and its audit row one unit of work.
+    /// Registers <see cref="IGroupService"/> (CRUD + membership, #30/#31). Scoped, because it shares
+    /// the request's <c>AppDbContext</c> with quota resolution and the audit writer — that shared
+    /// context is what makes a group mutation, the allocations it moves and its audit row one unit of
+    /// work.
     /// </summary>
+    /// <remarks>
+    /// The directory reconciliation behind <c>POST /groups/sync-entra</c> (#41) is <em>not</em>
+    /// registered here any more: it moved to Core with the rest of the Entra area so the nightly
+    /// <c>EntraSyncFunction</c> can run the same code (#151), and comes in through
+    /// <c>AddEntraServices()</c> → <c>AddEntraCore()</c>.
+    /// </remarks>
     public static IServiceCollection AddGroupsServices(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddScoped<IGroupService, GroupService>();
-        services.AddScoped<IEntraGroupSyncService, EntraGroupSyncService>();
 
         return services;
     }

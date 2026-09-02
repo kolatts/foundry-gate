@@ -12,6 +12,7 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
 {
     private readonly Lock _gate = new();
     private readonly List<string> _entries = [];
+    private readonly List<(LogLevel Level, string Message)> _messages = [];
 
     /// <summary>Every recorded message and state value, in order.</summary>
     public IReadOnlyList<string> Entries
@@ -21,6 +22,24 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
             lock (_gate)
             {
                 return [.. _entries];
+            }
+        }
+    }
+
+    /// <summary>
+    /// The formatted messages only, each with the level it was written at, in order. Separate from
+    /// <see cref="Entries"/> — which flattens state values in so a secret shipped as a property is
+    /// still visible — because some assertions are about the <em>level</em>: a nightly job that no-ops
+    /// on a deliberately disabled feature must say so at Information, not Warning or Error, or the
+    /// alert it raises every night trains everyone to ignore this job (#151).
+    /// </summary>
+    public IReadOnlyList<(LogLevel Level, string Message)> Messages
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _messages];
             }
         }
     }
@@ -45,6 +64,14 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
         }
     }
 
+    private void RecordMessage(LogLevel level, string message)
+    {
+        lock (_gate)
+        {
+            _messages.Add((level, message));
+        }
+    }
+
     private sealed class CapturingLogger(CapturingLoggerProvider provider) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state)
@@ -54,7 +81,9 @@ public sealed class CapturingLoggerProvider : ILoggerProvider
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            provider.Record(formatter(state, exception));
+            var message = formatter(state, exception);
+            provider.Record(message);
+            provider.RecordMessage(logLevel, message);
 
             if (state is IReadOnlyList<KeyValuePair<string, object?>> properties)
             {

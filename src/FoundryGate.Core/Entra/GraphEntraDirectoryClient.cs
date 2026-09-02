@@ -1,11 +1,12 @@
 using System.Runtime.CompilerServices;
-using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.Graph.Models;
 using Microsoft.Graph.Models.ODataErrors;
 using GraphUser = Microsoft.Graph.Models.User;
 
-namespace FoundryGate.Api.Services.Entra;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// <see cref="IEntraDirectoryClient"/> over <see cref="GraphServiceClient"/> (Microsoft Graph v1.0).
@@ -44,7 +45,6 @@ namespace FoundryGate.Api.Services.Entra;
 public sealed class GraphEntraDirectoryClient(
     GraphServiceClient graph,
     EntraOptions entraOptions,
-    AzureAdOptions azureAdOptions,
     ILogger<GraphEntraDirectoryClient> logger) : IEntraDirectoryClient
 {
     /// <summary>
@@ -56,6 +56,13 @@ public sealed class GraphEntraDirectoryClient(
     /// <summary>Graph's maximum page size for directory collections.</summary>
     private const int MaxPageSize = 999;
 
+    /// <summary>
+    /// The one HTTP status this class reads off an <c>ODataError</c>. A literal rather than
+    /// <c>StatusCodes.Status404NotFound</c>: that constant is ASP.NET Core's, and this class moved to
+    /// Core precisely so the isolated Functions worker can use it (#151).
+    /// </summary>
+    private const int GraphNotFound = 404;
+
     /// <summary><c>appRoleAssignment.principalType</c> values (the third is <c>ServicePrincipal</c>).</summary>
     private const string UserPrincipalType = "User";
     private const string GroupPrincipalType = "Group";
@@ -65,6 +72,7 @@ public sealed class GraphEntraDirectoryClient(
     private static readonly string[] IdSelect = ["id"];
 
     private readonly SemaphoreSlim _servicePrincipalLock = new(1, 1);
+    private readonly string _applicationClientId = entraOptions.ApplicationClientId ?? string.Empty;
     private string? _servicePrincipalObjectId = string.IsNullOrWhiteSpace(entraOptions.ServicePrincipalObjectId) ? null : entraOptions.ServicePrincipalObjectId;
 
     /// <inheritdoc />
@@ -80,7 +88,7 @@ public sealed class GraphEntraDirectoryClient(
 
             return user is null ? null : Map(user);
         }
-        catch (ODataError error) when (error.ResponseStatusCode == StatusCodes.Status404NotFound)
+        catch (ODataError error) when (error.ResponseStatusCode == GraphNotFound)
         {
             return null;
         }
@@ -305,11 +313,11 @@ public sealed class GraphEntraDirectoryClient(
             ServicePrincipal? servicePrincipal;
             try
             {
-                servicePrincipal = await graph.ServicePrincipalsWithAppId(azureAdOptions.ClientId).GetAsync(
+                servicePrincipal = await graph.ServicePrincipalsWithAppId(_applicationClientId).GetAsync(
                     request => request.QueryParameters.Select = IdSelect,
                     cancellationToken);
             }
-            catch (ODataError error) when (error.ResponseStatusCode == StatusCodes.Status404NotFound)
+            catch (ODataError error) when (error.ResponseStatusCode == GraphNotFound)
             {
                 servicePrincipal = null;
             }
@@ -317,15 +325,15 @@ public sealed class GraphEntraDirectoryClient(
             if (string.IsNullOrEmpty(servicePrincipal?.Id))
             {
                 throw new InvalidOperationException(
-                    $"No Entra service principal exists for AzureAd:ClientId '{azureAdOptions.ClientId}' in this tenant, so the FoundryGate " +
-                    "user population cannot be enumerated. Check AzureAd:ClientId, or set Entra:ServicePrincipalObjectId to the object id " +
+                    $"No Entra service principal exists for Entra:ApplicationClientId (AzureAd:ClientId on the Api) '{_applicationClientId}' in this tenant, so the FoundryGate " +
+                    "user population cannot be enumerated. Check Entra:ApplicationClientId (the Api falls back to AzureAd:ClientId), or set Entra:ServicePrincipalObjectId to the object id " +
                     "of the enterprise application developers are assigned to.");
             }
 
             logger.LogInformation(
-                "Resolved FoundryGate service principal {ServicePrincipalObjectId} from AzureAd:ClientId {ClientId}.",
+                "Resolved FoundryGate service principal {ServicePrincipalObjectId} from Entra:ApplicationClientId {ClientId}.",
                 servicePrincipal.Id,
-                azureAdOptions.ClientId);
+                _applicationClientId);
 
             _servicePrincipalObjectId = servicePrincipal.Id;
             return servicePrincipal.Id;

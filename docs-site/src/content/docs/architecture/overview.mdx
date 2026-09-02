@@ -117,6 +117,8 @@ Admins link a FoundryGate group to an Entra group id. `POST /groups/{id}/sync-en
 
 Each departure is its own unit of work, deliberately: a subscription deletion cannot be rolled back, so batching several into one transaction would mean a single failed ARM call erasing the record of deletions that had already happened. A departure the gateway refuses is counted (`failedCount`), logged, and retried on the next run — the rest of the batch still lands.
 
+Neither sync waits for an admin to remember it: `EntraSyncFunction` runs both **nightly at 02:00 UTC**, users first and then every linked group, so joiners have accounts and leavers have lost their keys by morning. It is the same code, with the audit row attributed to no one instead of to an admin.
+
 Assignments granted to a **group** count as assignments to its people: each one is flattened to the group's transitive members (nested groups included) and merged with the directly assigned users, so assigning `SG_AI_Developers` to the enterprise application is a fully supported setup rather than a partial one. The one case that changes behaviour is a group the API cannot read — that run has an incomplete picture of who is assigned, so it adds and updates but deactivates nobody and says so (`skippedGroupAssignmentCount`).
 
 ---
@@ -243,6 +245,15 @@ changing that setting takes effect the next day rather than at the next deployme
   ]}
 />
 
+The third scheduled job is the **directory sync**: nightly at 02:00 UTC, `EntraSyncFunction`
+reconciles users from Microsoft Graph and then group memberships — in that order, because group
+sync skips directory members who have no FoundryGate account yet — so a fork's roster stops
+drifting from Entra between admin button presses. It is the same code an admin's
+`POST /users/sync` and `POST /groups/sync-entra` run, with no human actor on the audit row, and
+a developer the directory no longer lists is deprovisioned in full: their APIM subscription is
+deleted, not merely flagged. It does nothing at all — one Information line, no error — on a fork
+that has left `Entra:Enabled` off.
+
 ---
 
 ## APIM key lifecycle
@@ -342,8 +353,8 @@ ids.
 | `FoundryGate.Api` | REST API + services, Azure Container Apps, Entra auth, APIM management-plane calls |
 | `FoundryGate.Data` | EF Core entities, `AppDbContext`, seeding — schema ships as a dacpac, no EF migrations |
 | `FoundryGate.Domain` | Shared DTOs and enums — no framework deps |
-| `FoundryGate.Core` | Services more than one host needs — quota resolution, the monthly reset, the tier map. References Data + Domain; no ASP.NET Core, which is what lets the isolated Functions worker use it |
-| `FoundryGate.Functions` | Timer-triggered Azure Functions (monthly reset + usage reconciliation) |
+| `FoundryGate.Core` | Services more than one host needs — quota resolution, the monthly reset, the tier map, the Microsoft Graph directory client and both Entra sync services. References Data + Domain; no ASP.NET Core, which is what lets the isolated Functions worker use it |
+| `FoundryGate.Functions` | Timer-triggered Azure Functions (monthly reset, usage reconciliation, nightly Entra directory sync) |
 | `FoundryGate.Web` | Blazor WASM frontend (MudBlazor), Azure Static Web Apps — references Domain only |
 | `FoundryGate.Database` | SQL Server project (.sqlproj) — builds the dacpac for CI/CD |
 | `FoundryGate.Cli` | `foundrygate` dotnet tool — local setup, db deploy, db compare, seed |

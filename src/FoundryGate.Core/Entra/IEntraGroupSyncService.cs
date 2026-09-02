@@ -1,7 +1,7 @@
 using FoundryGate.Domain.Groups;
 using FoundryGate.Domain.Groups.Contracts;
 
-namespace FoundryGate.Api.Services.Groups;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// Pulls the membership of a FoundryGate <c>Group</c> from the Entra group it is linked to
@@ -29,13 +29,13 @@ namespace FoundryGate.Api.Services.Groups;
 /// Every <b>active</b> user whose membership changed is re-resolved for the current billing period
 /// (<c>IQuotaResolutionService.ResolveManyAsync</c>), which is what moves their APIM tier product when
 /// the group's policy differs from what they had. Inactive users are skipped for the same reason
-/// <see cref="IGroupService"/> skips them.
+/// <c>IGroupService</c> skips them.
 /// </para>
 /// <para>
 /// Members are read transitively (<c>transitiveMembers</c>): an Entra group that contains other groups
 /// grants FoundryGate membership to the people inside them, which is what an admin who nests
 /// <c>SG_AI_Developers</c> under <c>SG_Engineering</c> means. Non-user members (devices, service
-/// principals) are filtered out by <see cref="Entra.IEntraDirectoryClient"/>.
+/// principals) are filtered out by <see cref="IEntraDirectoryClient"/>.
 /// </para>
 /// </remarks>
 public interface IEntraGroupSyncService

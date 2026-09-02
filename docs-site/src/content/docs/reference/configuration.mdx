@@ -125,6 +125,10 @@ one nothing binds, or if a new `Gateway` member turns up with no declared source
 | `Azure__KeyVaultUrl` | Key Vault URI for `@KeyVault()` reference resolution; absent locally, which skips resolution |
 | `ConnectionStrings__FoundryGate` | Azure SQL connection string, `Authentication=Active Directory Default` (no password) |
 | `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` and for a local `func start` |
+| `Entra__Enabled` | `false` by default. Turns on Microsoft Graph-backed directory sync — the API's `POST /users/sync` and `POST /groups/sync-entra`, **and** the Functions host's nightly `EntraSyncFunction`. There is **no client secret**: Graph is called as each host's own identity — its user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` (see the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)). While `false`, the sync endpoints return `503` and the nightly job logs once at Information and does nothing |
+| `Entra__ApplicationClientId` | The app registration whose service principal carries the user assignments that define who is a FoundryGate developer. Infra sets it on both hosts from the same value as `AzureAd__ClientId`; it lives on this section because the Functions host binds no `AzureAd` section at all. The API defaults it from `AzureAd__ClientId` when it is blank, so an older deployment keeps working |
+| `Entra__ServicePrincipalObjectId` | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `Entra__ApplicationClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application |
+| `Entra__GraphBaseUrl` | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it) |
 
 ### Gateway addressing (`Gateway__*`, shared by both hosts)
 
@@ -159,12 +163,11 @@ actually consumes each value.
 | `Security__RateLimits__Reveal__PermitLimit` / `__WindowSeconds` | The `POST /keys/me/reveal` cap, per caller `oid`. Defaults to **5 per 60 seconds** — the values that shipped as constants ([#181](https://github.com/kolatts/foundry-gate/issues/181)). Validated at startup (`1–10000` permits, `1–3600` seconds) |
 | `Security__RateLimits__Rotate__PermitLimit` / `__WindowSeconds` | The `POST /keys/me/rotate` cap. Defaults to **3 per 60 seconds** — tighter than reveal, because a rotation is a write the gateway feels and breaks whatever the developer has configured |
 | `Security__RevealAnomaly__Threshold` / `__WindowMinutes` | The reveal anomaly signal ([#180](https://github.com/kolatts/foundry-gate/issues/180)): the reveal that pushes one key past **10** reveals inside a rolling **60** minutes logs a Warning and writes a `key.reveal-anomaly` audit row, once per window. The request still succeeds — a limiter catches a fast drain, this catches a patient one. No on/off switch; set the threshold unreachably high to silence it |
-| `Entra__Enabled` | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` (see the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)). While `false`, the sync endpoints return `400` |
-| `Entra__ServicePrincipalObjectId` | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application |
-| `Entra__GraphBaseUrl` | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it) |
 
 The Functions host has no `AzureAd`, `Cors` or `KeyProtection` section at all: nothing there serves a
-request, so there is no token to validate, and its jobs never read or write a developer's key.
+request, so there is no token to validate, and its jobs never read or write a developer's key. (It
+does bind `Entra__*` — the nightly directory sync runs there — which is why
+`Entra__ApplicationClientId` is on the shared list rather than read from `AzureAd__ClientId`.)
 
 ### Functions only
 
@@ -173,10 +176,10 @@ request, so there is no token to validate, and its jobs never read or write a de
 | `AZURE_FUNCTIONS_ENVIRONMENT` / `DOTNET_ENVIRONMENT` | — | `qa` or `prod` — the Functions host reads the first, the isolated worker's generic host the second |
 | `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage__credential=managedidentity` / `AzureWebJobsStorage__clientId` | — | Identity-based host storage. There is no storage connection string: shared-key access is disabled on the account |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | — | Functions host telemetry |
-| `Storage__AccountName` | *(unset)* | Storage account for the monthly reset's distributed lock. Left empty, the host uses the account it already knows from `AzureWebJobsStorage__accountName`, so no extra configuration is needed in Azure |
+| `Storage__AccountName` | *(unset)* | Storage account for the scheduled jobs' distributed locks — one blob lease per job (`quota-monthly-reset`, `entra-directory-sync`), so the two never block each other. Left empty, the host uses the account it already knows from `AzureWebJobsStorage__accountName`, so no extra configuration is needed in Azure |
 | `Storage__ConnectionString` | *(unset)* | Local Azurite only (`UseDevelopmentStorage=true`). A cloud connection string is refused at startup — the storage account does not accept shared keys |
-| `Storage__LockContainerName` | `foundrygate-locks` | Blob container holding the lock blob; created on demand |
-| `Storage__LockLeaseSeconds` | `60` | How long the reset's lease is held. It expires by itself, so a crashed run never needs unlocking |
+| `Storage__LockContainerName` | `foundrygate-locks` | Blob container holding the lock blobs; created on demand |
+| `Storage__LockLeaseSeconds` | `60` | How long a job's lease is held. It expires by itself, so a crashed run never needs unlocking |
 
 Locally, copy `src/FoundryGate.Functions/local.settings.template.json` to
 `local.settings.json` (gitignored) and point `ConnectionStrings__FoundryGate` at the

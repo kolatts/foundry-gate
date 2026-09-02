@@ -4,6 +4,7 @@ using FoundryGate.Core.Gateway;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
 using FoundryGate.Functions.Services;
+using FoundryGate.Functions.Services.Jobs;
 using FoundryGate.Functions.Services.Quota;
 using FoundryGate.Functions.Services.Usage;
 using FoundryGate.Tests.Predeployment.Support;
@@ -78,7 +79,7 @@ public class FunctionsServiceCollectionExtensionsTests
             ["AzureWebJobsStorage:accountName"] = "stfgdeve7k2",
         });
 
-        Assert.IsType<BlobResetLock>(provider.GetRequiredService<IResetLock>());
+        Assert.IsType<BlobJobLock>(provider.GetRequiredService<IJobLock>());
     }
 
     [Fact]
@@ -89,7 +90,7 @@ public class FunctionsServiceCollectionExtensionsTests
             ["AzureWebJobsStorage"] = "UseDevelopmentStorage=true",
         });
 
-        Assert.IsType<BlobResetLock>(provider.GetRequiredService<IResetLock>());
+        Assert.IsType<BlobJobLock>(provider.GetRequiredService<IJobLock>());
     }
 
     [Fact]
@@ -97,7 +98,7 @@ public class FunctionsServiceCollectionExtensionsTests
     {
         using var provider = BuildProvider();
 
-        Assert.IsType<NullResetLock>(provider.GetRequiredService<IResetLock>());
+        Assert.IsType<NullJobLock>(provider.GetRequiredService<IJobLock>());
     }
 
     private static ServiceProvider BuildProvider(

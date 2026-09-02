@@ -1,9 +1,8 @@
 using System.Security.Claims;
 using System.Text.Json;
-using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Entra;
-using FoundryGate.Api.Services.Groups;
 using FoundryGate.Api.Services.Identity;
+using FoundryGate.Core.Entra;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -19,7 +18,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Identity.Web;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services.Groups;
+namespace FoundryGate.Tests.Predeployment.Core.Entra;
 
 /// <summary>
 /// <see cref="EntraGroupSyncService"/> (#41) against a <see cref="FakeEntraDirectoryClient"/> on a real
@@ -470,17 +469,19 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
 
-        IAuditService audit = new AuditService(Context, new AuditWriter(Context, _clock), accessor);
+        IAuditWriter audit = new AuditWriter(Context, _clock);
         if (failTheAuditWrite)
         {
-            audit = new FailingAuditService(audit) { FailOn = action => action == AuditActions.GroupEntraSynced };
+            audit = new FailingAuditWriter(audit) { FailOn = action => action == AuditActions.GroupEntraSynced };
         }
 
         return new EntraGroupSyncService(
             Context,
             directory ?? _directory,
             new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance),
-            accessor,
+            // The Api's actor seam, wired to the real CurrentUserAccessor: the sync moved to Core in
+            // #151, but this class still asserts what an admin's POST /groups/sync-entra does.
+            new CurrentUserEntraSyncActor(accessor),
             audit,
             _clock,
             _logs.CreateLogger<EntraGroupSyncService>());

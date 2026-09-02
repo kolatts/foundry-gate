@@ -4,10 +4,10 @@ using Azure.Storage.Blobs.Specialized;
 using FoundryGate.Functions.Configuration;
 using Microsoft.Extensions.Logging;
 
-namespace FoundryGate.Functions.Services.Quota;
+namespace FoundryGate.Functions.Services.Jobs;
 
 /// <summary>
-/// <see cref="IResetLock"/> over a blob lease on the Functions storage account — the standard Azure
+/// <see cref="IJobLock"/> over a blob lease on the Functions storage account — the standard Azure
 /// primitive for "one replica at a time", and one FoundryGate already has the account and the
 /// identity-based access for (CONVENTIONS.md §Storage accounts: the host reaches storage with its
 /// user-assigned identity; shared-key access is off).
@@ -24,15 +24,15 @@ namespace FoundryGate.Functions.Services.Quota;
 /// </para>
 /// <para>
 /// Every storage failure is swallowed into "not acquired" plus a log line, per
-/// <see cref="IResetLock"/> — including credential failures, which are exactly what a not-yet-propagated
+/// <see cref="IJobLock"/> — including credential failures, which are exactly what a not-yet-propagated
 /// role assignment or an expired federated token looks like. The container is created on demand so a
 /// fresh fork needs no setup step.
 /// </para>
 /// </remarks>
-public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions options, ILogger<BlobResetLock> logger) : IResetLock
+public sealed class BlobJobLock(BlobServiceClient blobService, StorageOptions options, ILogger<BlobJobLock> logger) : IJobLock
 {
     /// <inheritdoc />
-    public async Task<IResetLockHandle> TryAcquireAsync(string lockName, CancellationToken cancellationToken)
+    public async Task<IJobLockHandle> TryAcquireAsync(string lockName, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(lockName);
 
@@ -81,7 +81,7 @@ public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions 
         {
             // Credential failures (an expired federated token, a role assignment that has not propagated
             // yet) surface as AuthenticationFailedException, not RequestFailedException, and would
-            // otherwise escape and fail the whole reset — the precise outcome IResetLock's
+            // otherwise escape and fail the whole reset — the precise outcome IJobLock's
             // "it does not throw" contract exists to prevent. Error, not Warning: unlike a 409 this is
             // something an operator has to fix. Cancellation is the host shutting us down, and must
             // still propagate.
@@ -95,7 +95,7 @@ public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions 
         }
     }
 
-    private sealed class LeaseHandle : IResetLockHandle
+    private sealed class LeaseHandle : IJobLockHandle
     {
         private readonly BlobLeaseClient _lease;
         private readonly string _lockName;
@@ -169,7 +169,7 @@ public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions 
         }
     }
 
-    private sealed class NotAcquired : IResetLockHandle
+    private sealed class NotAcquired : IJobLockHandle
     {
         public static readonly NotAcquired Instance = new();
 

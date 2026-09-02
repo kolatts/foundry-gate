@@ -16,8 +16,9 @@ const ariaLabel =
   'stream LLM logs and token metrics to Log Analytics and Application Insights. Control plane, out of ' +
   'the request path: Entra ID signs users in and is the source of users and groups; the Blazor UI on ' +
   'Azure Static Web Apps calls FoundryGate.Api on Azure Container Apps, which stores state in Azure SQL ' +
-  'through EF Core; FoundryGate.Functions run the monthly reset and usage reconciliation, reading ' +
-  'ApiManagementGatewayLlmLog from Log Analytics; Key Vault holds the APIM key-encryption key (no client secrets; Graph is called as the API identity). The API manages APIM ' +
+  'through EF Core; FoundryGate.Functions run the monthly reset, usage reconciliation (reading ' +
+  'ApiManagementGatewayLlmLog from Log Analytics) and a nightly Entra directory sync that reconciles users then groups from Microsoft Graph; ' +
+  'Key Vault holds the APIM key-encryption key (no client secrets; Graph is called as each host\'s own managed identity). The API manages APIM ' +
   'subscriptions through the Management API: create under a tier product, regenerate both keys, move tier, delete. ' +
   'FoundryGate.Functions reaches the same Management API for one operation only — moving a subscription to another tier product when a reset resolves a new tier. ' +
   'Legend: solid azure arrows are the real-time enforcement path on the request; dashed grey arrows are telemetry ' +
@@ -212,7 +213,8 @@ const ariaLabel =
         <div class="fgd-node__title">FoundryGate.Functions</div>
         <div class="fgd-node__sub">
           MonthlyReset — 00:01 UTC, on the configured reset day · UsageSync — reconciliation<br />
-          .NET isolated worker + storage account (runtime, reset lock) → Azure SQL via EF Core<br />
+          EntraSync — 02:00 UTC nightly: users then groups, from Microsoft Graph<br />
+          .NET isolated worker + storage account (runtime, job locks) → Azure SQL via EF Core<br />
           Moves a subscription's tier product when a reset resolves a new one
         </div>
       </div>

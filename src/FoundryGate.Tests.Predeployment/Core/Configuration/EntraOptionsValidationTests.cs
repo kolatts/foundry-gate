@@ -1,9 +1,10 @@
 using System.ComponentModel.DataAnnotations;
 using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
 using Imagile.Framework.Configuration.Exceptions;
 using Imagile.Framework.Configuration.Extensions;
 
-namespace FoundryGate.Tests.Predeployment.Api.Configuration;
+namespace FoundryGate.Tests.Predeployment.Core.Configuration;
 
 /// <summary>
 /// <see cref="EntraOptions"/> fail-fast rules: nothing is enforced while the feature is off; once on,

@@ -1,4 +1,4 @@
-namespace FoundryGate.Api.Services.Entra;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// What <see cref="IEntraDirectoryClient.ListAssignedUsersAsync"/> found on the FoundryGate service
