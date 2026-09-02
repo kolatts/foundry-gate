@@ -438,9 +438,23 @@ value rule, so a stale write with a bad value is the `409`, not the `400`: a cal
 row is out of date has to re-read it whatever they were trying to write. The timestamp is compared as
 an instant, so a client that normalizes to UTC still matches.
 
+**Changing `DefaultMonthlyTokenQuota` re-resolves the developers it governs.** That key is level 5 of
+the quota precedence chain, so the moment it changes, every **active** user who falls through to it —
+no `isUnlimited`, no user quota, no group that would win at levels 3–4 — plus anyone whose current
+allocation already reads `SystemDefault`, is re-resolved for the current period **in the same
+transaction**, which moves their APIM subscription to the new tier product
+([#193](https://github.com/kolatts/foundry-gate/issues/193)). Before this, the key changed and nobody
+moved: the allocation row said one thing, the gateway enforced another, and the first thing to notice
+was usually the scheduled monthly reset — which runs in the Functions host, has no APIM management
+client, and so could only log the divergence it was creating. A failed gateway move fails the whole
+edit, so the database never claims a default the gateway is not enforcing. Re-saving the key's existing
+value re-resolves nobody, and deactivated users are skipped (their key is revoked; there is nothing to
+move).
+
 Every accepted edit stamps `updatedByUserId` (the calling admin) and `updatedDate`, and writes one
-`config.updated` audit row with `{ key, before, after }` — in the same transaction as the change, so
-a value can never move without a trail. The calling admin must already have a FoundryGate user row
+`config.updated` audit row with `{ key, before, after, reresolvedUserCount, tierChangeCount }` — in the
+same transaction as the change, so a value can never move without a trail, and an admin who changed one
+value and moved 200 developers between products has an entry that says so. The calling admin must already have a FoundryGate user row
 (`GET /users/me` provisions one) or the write is `403`; reading `/config` needs no such row.
 
 **A deploy never reverts an edit.** `SystemConfiguration`'s value, timestamp and editor columns are

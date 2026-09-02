@@ -343,7 +343,14 @@ public sealed class QuotaResolutionService(
             return _systemDefault!.Value;
         }
 
-        var raw = await dbContext.SystemConfigurations.AsNoTracking()
+        // Change tracker first, database second — the same rule as FindExistingAsync and
+        // LoadGroupPoliciesAsync. `PUT /config` edits this very row and then re-resolves the users who
+        // fall through to it in the same unit of work (#193); a projection query cannot see a pending
+        // change at all, so without this the re-resolution would faithfully write the OLD default back
+        // onto every default-tier developer and the config edit would appear to do nothing.
+        var raw = dbContext.SystemConfigurations.Local
+                .FirstOrDefault(c => string.Equals(c.Key, SystemConfigurationKeys.DefaultMonthlyTokenQuota, StringComparison.Ordinal))?.Value
+            ?? await dbContext.SystemConfigurations.AsNoTracking()
             .Where(c => c.Key == SystemConfigurationKeys.DefaultMonthlyTokenQuota)
             .Select(c => c.Value)
             .SingleOrDefaultAsync(cancellationToken)

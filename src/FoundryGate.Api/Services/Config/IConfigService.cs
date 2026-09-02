@@ -22,8 +22,19 @@ public interface IConfigService
 
     /// <summary>
     /// Sets one key's value, stamping the calling admin and the current time, and writes one
-    /// <c>config.updated</c> audit row (details <c>{ key, before, after }</c>) in the same save.
+    /// <c>config.updated</c> audit row (details
+    /// <c>{ key, before, after, reresolvedUserCount, tierChangeCount }</c>) in the same save.
     /// </summary>
+    /// <remarks>
+    /// <b>Changing <c>DefaultMonthlyTokenQuota</c> re-resolves the developers it governs</b> (#193).
+    /// Level 5 of the precedence chain has just moved, so every active user who falls through to it —
+    /// and any whose current allocation already reads <c>SystemDefault</c> — is re-resolved for the
+    /// current period in the same unit of work, which moves their APIM subscription to the new tier
+    /// product. Without it the row said one thing and the gateway enforced another until something else
+    /// happened to touch each user, and the first thing to notice was usually the Functions host's
+    /// monthly reset, which cannot move a tier at all. Setting the key to the value it already has
+    /// re-resolves nobody.
+    /// </remarks>
     /// <param name="key">The configuration key; matched case-insensitively, as SQL Server's default collation would.</param>
     /// <param name="request">
     /// The new value, validated and normalized per key before it is stored, plus the optional
