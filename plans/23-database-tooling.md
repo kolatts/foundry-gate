@@ -121,7 +121,7 @@ services.Deploy(dacpac, databaseName, upgradeExisting: true, options: new DacDep
     BlockOnPossibleDataLoss = true,
     GenerateSmartDefaults = true,
     DropObjectsNotInSource = dropObjects,   // --drop flag
-    ExcludeObjectTypes = [ObjectType.Users]
+    ExcludeObjectTypes = [ObjectType.Users, ObjectType.RoleMembership]  // both: db grant-identities owns them
 });
 ```
 Supports both SQL auth (connection string with `User ID`) and Entra/Managed Identity (via `DefaultAzureCredential` token provider injected into `DacServices`).
@@ -272,10 +272,13 @@ A separate `db-deploy.yml` workflow (reusable, `workflow_call`) downloads the da
       to #105).
 - [x] `foundrygate db grant-identities` (#106): post-seed step creating the contained users for
       `id-foundrygate-api-{env}` / `id-foundrygate-func-{env}` — idempotent `IF NOT EXISTS ...
-      CREATE USER ... FROM EXTERNAL PROVIDER` (or `WITH SID ... TYPE = E` when
-      `--*-identity-client-id` is given, sidestepping the Directory Readers requirement) +
+      CREATE USER ... WITH SID = <client id>, TYPE = E` from the deployment outputs
+      `apiIdentityClientId` / `functionsIdentityClientId`, which needs no directory lookup +
       `IS_ROLEMEMBER`-guarded `ALTER ROLE db_datareader/db_datawriter ADD MEMBER`; no `db_ddladmin`
-      (the dacpac owns schema). Generated T-SQL and role list are unit-tested, and the batches were
+      (the dacpac owns schema). `FROM EXTERNAL PROVIDER` needs Directory Readers on the SQL logical
+      server's own identity, which `modules/sql.bicep` does not declare, so the command refuses that
+      path (and `_deploy-database.yml` fails the step with an actionable message) unless
+      `--allow-external-provider` / the `allow-external-provider` input opts into it (PR #143 review). Generated T-SQL and role list are unit-tested, and the batches were
       executed against docker SQL Server 2022 (role grants applied, identical re-run a clean no-op;
       the Azure-only `EXTERNAL PROVIDER`/`TYPE = E` branches compile-checked with `SET NOEXEC ON`) —
       which caught that `EXEC(<expr>)` rejects function calls, hence `sp_executesql`. `--dry-run`

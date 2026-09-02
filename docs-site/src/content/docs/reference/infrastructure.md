@@ -165,11 +165,36 @@ Not expressible in Bicep. Two of these the deploy pipeline now does itself throu
 
 | Step | Who does it |
 |---|---|
-| **Contained database users** for `id-foundrygate-api-{env}` and `id-foundrygate-func-{env}` — `CREATE USER ... FROM EXTERNAL PROVIDER` + `db_datareader`/`db_datawriter`, never `db_ddladmin` (the dacpac owns the schema) | **Automated**: `foundrygate db grant-identities --env {env}`, run by `_deploy-database.yml` after seeding. Idempotent T-SQL (`IF NOT EXISTS` / `IS_ROLEMEMBER` guards); identity names default from the naming convention (`--api-identity` / `--functions-identity` override). Pass `--api-identity-client-id` / `--functions-identity-client-id` (deployment outputs `apiIdentityClientId` / `functionsIdentityClientId`) to create the users `WITH SID` instead, which needs no Directory Readers permission when the executing principal is itself a service principal. `--dry-run` prints the T-SQL. ([#106](https://github.com/kolatts/foundry-gate/issues/106)) |
+| **Contained database users** for `id-foundrygate-api-{env}` and `id-foundrygate-func-{env}` — `CREATE USER ... WITH SID = <client id>, TYPE = E` + `db_datareader`/`db_datawriter`, never `db_ddladmin` (the dacpac owns the schema) | **Automated**: `foundrygate db grant-identities --env {env} --api-identity-client-id <guid> --functions-identity-client-id <guid>`, run by `_deploy-database.yml` after seeding. Idempotent T-SQL (`IF NOT EXISTS` / `IS_ROLEMEMBER` guards); identity names default from the naming convention (`--api-identity` / `--functions-identity` override). **The client ids are required** — see [Why the client ids, not `FROM EXTERNAL PROVIDER`](#why-the-client-ids-not-from-external-provider) below. `--dry-run` prints the T-SQL. ([#106](https://github.com/kolatts/foundry-gate/issues/106)) |
 | **Runner / developer firewall rules** on the SQL server | **Automated**: `foundrygate ip setup --env {env}` and `ip cleanup` — see [Firewall model](#firewall-model-for-azure-sql). ([#96](https://github.com/kolatts/foundry-gate/issues/96)) |
 | The CI/OIDC principal must be a **member of the SQL Entra admin group** or the dacpac deploy, the seeders and `db grant-identities` cannot connect (there is no password fallback by design). It also needs **SQL Server Contributor** (or Contributor) on the resource group for the firewall-rule writes. | Operator (#109) |
 | Runtime creation of **Claude** deployments needs Marketplace/SaaS permissions beyond Cognitive Services Contributor | Operator ([#107](https://github.com/kolatts/foundry-gate/issues/107)) |
 | **Microsoft Graph application roles** for the Entra sync on the API identity's service principal — no client secret; details below | Operator ([#110](https://github.com/kolatts/foundry-gate/issues/110)) |
+
+### Why the client ids, not `FROM EXTERNAL PROVIDER`
+
+The obvious way to give a managed identity a database user is
+`CREATE USER [id-foundrygate-api-{env}] FROM EXTERNAL PROVIDER`, and it is the wrong way
+here. That statement asks **Azure SQL** to resolve the identity's *name* in Entra, which
+requires the **logical server's own managed identity** to hold the Entra **Directory
+Readers** role. `modules/sql.bicep` gives the server no identity at all, so on FoundryGate's
+infrastructure as deployed the statement fails — and granting Directory Readers is a
+tenant-level, privileged change no deploy should assume.
+
+So `db grant-identities` takes the identities' **client ids** (the deployment outputs
+`apiIdentityClientId` / `functionsIdentityClientId`) and creates each user
+`WITH SID = <client id as varbinary(16)>, TYPE = E`. No directory lookup happens, nothing
+beyond SQL Entra admin membership is needed, and the result is the same contained user.
+
+- `_deploy-database.yml` requires the two client-id inputs and **fails the grant step with
+  an actionable message** when they are empty — it never silently falls back.
+- A fork whose SQL server *does* have a managed identity with Directory Readers can set the
+  workflow input `allow-external-provider: true` (CLI: `--allow-external-provider`) to take
+  the name-resolution path deliberately.
+
+A related invariant sits on the other side of the pipeline: `db deploy` excludes both
+`Users` **and** `RoleMembership` from the DacFx comparison, so a `--drop-objects` deploy
+removes neither these users nor their `db_datareader`/`db_datawriter` memberships.
 
 The Graph roles go on the API identity's service principal (`id-foundrygate-api-{env}`) as
 app-role assignments on the Microsoft Graph service principal (appId
@@ -225,7 +250,7 @@ empty strings when `deployControlPlane = false`.
 | `containerAppsEnvironmentName`, `containerAppName`, `containerAppFqdn` | api-deploy (`az containerapp update`), postdeployment tests |
 | `functionAppName`, `functionAppHostname`, `functionsStorageAccountName` | functions-deploy |
 | `staticWebAppName`, `staticWebAppHostname` | ui-deploy (deployment token lookup), CORS, Entra redirect URI |
-| `apiIdentityName` / `ClientId` / `PrincipalId`, `functionsIdentityName` / `ClientId` / `PrincipalId` | `_deploy-database.yml` (`api-identity-name` / `functions-identity-name`, `api-identity-client-id` / `functions-identity-client-id` → CLI `db grant-identities`), Graph permission grants |
+| `apiIdentityName` / `ClientId` / `PrincipalId`, `functionsIdentityName` / `ClientId` / `PrincipalId` | `_deploy-database.yml` (`api-identity-name` / `functions-identity-name`, and **required**: `api-identity-client-id` / `functions-identity-client-id` → CLI `db grant-identities`, which creates the contained users `WITH SID` — see [Why the client ids](#why-the-client-ids-not-from-external-provider)), Graph permission grants |
 
 ## Health probes and serverless auto-pause
 
