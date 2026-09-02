@@ -23,6 +23,15 @@ builder.Services.AddMsalAuthentication(options =>
 });
 builder.Services.AddCascadingAuthenticationState();
 
+// Pending-request count published by /dashboard and consumed by the nav badge (#54). Scoped
+// rather than singleton — see DashboardStateService's remarks.
+builder.Services.AddScoped<DashboardStateService>();
+
+// The sanctioned clock and time zone for components. CONVENTIONS.md bans naked DateTimeOffset.UtcNow
+// outside the Data layer's interceptor, and a component that reads TimeZoneInfo.Local directly can't
+// be tested against another zone — /audit converts the date picker's wall-clock dates through this.
+builder.Services.AddSingleton(TimeProvider.System);
+
 builder.Services.AddMudServices(config =>
 {
     config.SnackbarConfiguration.PositionClass = MudBlazor.Defaults.Classes.Position.BottomRight;

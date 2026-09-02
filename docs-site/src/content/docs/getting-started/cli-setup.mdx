@@ -17,11 +17,19 @@ From the "Configure your AI CLI" panel on your FoundryGate `/me` page:
 
 - Your **APIM subscription key**
 - Your **gateway URL** (e.g. `https://ai.yourcompany.com`)
-- The **deployment names** for the models you'll use (e.g. `claude-sonnet-5`,
-  `gpt-5-codex`)
+- The **model aliases** your tier allows (e.g. `sonnet`, `haiku`, `gpt`)
 
 <Aside>
 If you don't see a key on `/me`, ask your admin to provision one for your account.
+</Aside>
+
+<Aside type="caution" title="Put the alias in `model`, not the deployment name">
+The gateway's per-tier alias map is also its allowlist: `sonnet`, `haiku`, `gpt` and friends
+are the names it accepts in `model` / `ANTHROPIC_DEFAULT_*_MODEL`, and anything else — including
+the underlying Foundry deployment name — is refused with `403 model_not_permitted`
+(`infra/main.bicep`, `productModelAliases`). Aliases also let an admin rotate the deployment
+underneath you without you editing a single env var. `/me` lists the aliases you have, and the
+deployment each one currently resolves to for reference.
 </Aside>
 
 ---
@@ -38,19 +46,20 @@ curl https://<gateway-url>/anthropic/v1/messages \
   -H "x-api-key: <your-key>" \
   -H "anthropic-version: 2023-06-01" \
   -H "content-type: application/json" \
-  -d '{"model":"<claude-deployment-name>","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
+  -d '{"model":"<claude-alias>","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
 
 # OpenAI path (Responses API)
 curl https://<gateway-url>/openai/v1/responses \
   -H "api-key: <your-key>" \
   -H "content-type: application/json" \
-  -d '{"model":"<codex-deployment-name>","input":"ping"}'
+  -d '{"model":"<openai-alias>","input":"ping"}'
 ```
 
 Expected: a JSON response containing generated content. A `401` means the key is wrong
-or your account is deactivated; a `403` means your monthly token budget is spent (see
-[Manage your quota](#manage-your-quota)); a `429` means you're over your per-minute
-rate — wait and retry.
+or your account is deactivated; a `403` means either your monthly token budget is spent (see
+[Manage your quota](#manage-your-quota)) or the `model` you asked for isn't in your tier's alias
+map (`model_not_permitted` — check the alias list on `/me`); a `429` means you're over your
+per-minute rate — wait and retry.
 
 ---
 
@@ -67,12 +76,12 @@ rate — wait and retry.
   export ANTHROPIC_FOUNDRY_BASE_URL=https://<gateway-url>/anthropic
   export ANTHROPIC_FOUNDRY_API_KEY=<your-key>
 
-  # Pin models to your gateway's deployment names (shown on /me).
-  # Pinning matters: unpinned aliases resolve to defaults that may not
-  # exist as deployments on your gateway.
-  export ANTHROPIC_DEFAULT_SONNET_MODEL=<sonnet-deployment-name>
-  export ANTHROPIC_DEFAULT_OPUS_MODEL=<opus-deployment-name>
-  export ANTHROPIC_DEFAULT_HAIKU_MODEL=<haiku-deployment-name>
+  # Pin models to your gateway's aliases (shown on /me).
+  # Pinning matters: unpinned names resolve to Anthropic's defaults, which
+  # are not in your tier's alias map and come back 403 model_not_permitted.
+  export ANTHROPIC_DEFAULT_SONNET_MODEL=<sonnet-alias>
+  export ANTHROPIC_DEFAULT_OPUS_MODEL=<opus-alias>
+  export ANTHROPIC_DEFAULT_HAIKU_MODEL=<haiku-alias>
   ```
 
   Then run `claude` as normal. Prompt caching is enabled automatically — and cache
@@ -85,7 +94,7 @@ rate — wait and retry.
   Codex CLI supports Azure endpoints via `~/.codex/config.toml`:
 
   ```toml
-  model = "<codex-deployment-name>"     # e.g. gpt-5-codex — the DEPLOYMENT name
+  model = "<openai-alias>"     # e.g. gpt — the gateway ALIAS, not the deployment name
   model_provider = "azure"
 
   [model_providers.azure]
@@ -118,7 +127,7 @@ rate — wait and retry.
   | API shape | Anthropic Messages (`/v1/messages`) | OpenAI Responses / Chat Completions |
   | Auth header | `x-api-key: <your-key>` | `api-key: <your-key>` |
   | Extra header | `anthropic-version: 2023-06-01` | — |
-  | `model` field | Claude deployment name | GPT deployment name |
+  | `model` field | Claude alias from `/me` | OpenAI alias from `/me` |
 
   Anthropic's Foundry SDKs (`anthropic` Python with `AnthropicFoundry`,
   `@anthropic-ai/foundry-sdk`, `Anthropic.Foundry` for .NET) accept a base URL and

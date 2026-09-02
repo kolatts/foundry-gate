@@ -71,15 +71,18 @@ public class SystemConfiguration : IModifiedDate, IReferenceDataEntity<SystemCon
         set => UpdatedDate = value;
     }
 
-    /// <summary>The eight placeholder defaults forks must override via the admin config page (spec §3.1).</summary>
+    /// <summary>
+    /// The placeholder defaults forks override via the admin config page (spec §3.1) — one row per
+    /// key in <see cref="SystemConfigurationKeys.All"/>. Keys listed in
+    /// <see cref="SystemConfigurationKeys.Retired"/> are deliberately absent: the reference-data sync
+    /// deletes rows it knows about that the seed no longer lists, which is how a deployed fork loses
+    /// them (#164/#123).
+    /// </summary>
     public static IEnumerable<SystemConfiguration> GetSeedData() =>
     [
         new() { Key = SystemConfigurationKeys.DefaultMonthlyTokenQuota, Value = "5000000" }, // = the Standard tier cap (Gateway:Tiers / infra quotaTiers); a budget is always a tier (D-013)
         new() { Key = SystemConfigurationKeys.ApimResourceId, Value = string.Empty },
-        new() { Key = SystemConfigurationKeys.ApimGatewayUrl, Value = string.Empty },
-        new() { Key = SystemConfigurationKeys.ApimProductId, Value = "foundrygate" },
         new() { Key = SystemConfigurationKeys.FoundryResourceId, Value = string.Empty },
-        new() { Key = SystemConfigurationKeys.EntraTenantId, Value = string.Empty },
         new() { Key = SystemConfigurationKeys.EntraGroupSyncEnabled, Value = "false" },
         new() { Key = SystemConfigurationKeys.ResetDayOfMonth, Value = "1" }
     ];

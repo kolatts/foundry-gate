@@ -1,0 +1,221 @@
+@using FoundryGate.Domain.Keys.Contracts
+@inject IFoundryGateApiClient ApiClient
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+@* The developer's APIM subscription key (#49). Three states: not provisioned yet, masked, and
+   revealed-once. The plaintext exists ONLY in _revealedKey — a private field on this component
+   instance, cleared on hide and never written to localStorage, sessionStorage or a cookie
+   (spec §11: "reveal action fetches directly, not stored in browser"). *@
+
+<MudCard Elevation="2" data-testid="key-display">
+    <MudCardContent>
+        <MudText Typo="Typo.subtitle2" Class="fg-label mb-2">Your gateway key</MudText>
+
+        @if (!CurrentKey.IsProvisioned)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Icon="@Icons.Material.Filled.HourglassEmpty" data-testid="key-not-provisioned">
+                Your key is being set up. It's created automatically the first time your account is
+                provisioned against the gateway — check back shortly, or ask an admin if it doesn't
+                appear.
+            </MudAlert>
+        }
+        else
+        {
+            <MudTextField T="string"
+                          Value="@DisplayedKey"
+                          ReadOnly="true"
+                          Variant="Variant.Outlined"
+                          Class="fg-mono-raw"
+                          Label="@(_revealedKey is null ? "Masked" : "Full key — shown once")"
+                          data-testid="key-value" />
+
+            @if (_revealedKey is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2" Icon="@Icons.Material.Filled.VisibilityOff" data-testid="key-reveal-warning">
+                    This is the only place this value is shown. Copy it into your CLI configuration
+                    now — Foundry Gate can't display it again without another reveal, and it is never
+                    stored in your browser.
+                </MudAlert>
+            }
+
+            <MudStack Row="true" Spacing="2" Class="mt-3" Wrap="Wrap.Wrap">
+                @if (_revealedKey is null)
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Visibility"
+                               Disabled="@_busy"
+                               OnClick="RevealAsync"
+                               data-testid="key-reveal">
+                        Reveal
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.VisibilityOff"
+                               OnClick="HideAsync"
+                               data-testid="key-hide">
+                        Hide
+                    </MudButton>
+                    <MudButton Variant="Variant.Text"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.ContentCopy"
+                               OnClick="CopyAsync"
+                               data-testid="key-copy">
+                        Copy
+                    </MudButton>
+                }
+
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Warning"
+                           StartIcon="@Icons.Material.Filled.Autorenew"
+                           Disabled="@_busy"
+                           OnClick="@(() => _confirmRotateOpen = true)"
+                           data-testid="key-rotate">
+                    Rotate key
+                </MudButton>
+            </MudStack>
+        }
+    </MudCardContent>
+</MudCard>
+
+<MudDialog @bind-Visible="_confirmRotateOpen" data-testid="key-rotate-dialog">
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.Autorenew" Class="mr-2" />
+            Rotate your key?
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudText Typo="Typo.body2">
+            Rotating regenerates your gateway key immediately. Anything still using the old value —
+            your shell profile, another machine, a CI job — starts getting <code>401</code> until you
+            paste the new key in. The new value is shown once, right here.
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _confirmRotateOpen = false)" data-testid="key-rotate-cancel">Cancel</MudButton>
+        <MudButton Color="Color.Warning"
+                   Variant="Variant.Filled"
+                   Disabled="@_busy"
+                   OnClick="RotateAsync"
+                   data-testid="key-rotate-confirm">
+            Rotate key
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    /// <summary>The masked key from <c>GET /users/me</c> (or <c>GET /keys/me</c>).</summary>
+    [Parameter, EditorRequired]
+    public ApiKeyResponse Key { get; set; } = null!;
+
+    /// <summary>
+    /// Raised after a successful rotation with the new masked value, so the page holding the
+    /// profile can update its own copy without re-fetching.
+    /// </summary>
+    [Parameter]
+    public EventCallback<ApiKeyResponse> KeyChanged { get; set; }
+
+    /// <summary>
+    /// Raised whenever the plaintext key becomes available or is hidden again — the CLI setup panel
+    /// uses it to substitute the real value into its snippets while it is on screen. Carries
+    /// <see langword="null"/> when hidden.
+    /// </summary>
+    [Parameter]
+    public EventCallback<string?> RevealedKeyChanged { get; set; }
+
+    // The plaintext key. Component state only — see the file header comment.
+    private string? _revealedKey;
+
+    // The masked value a rotation just produced, held locally rather than written back onto the
+    // Key parameter (which the framework owns). Cleared once the parent's Key catches up.
+    private ApiKeyResponse? _rotatedKey;
+
+    private bool _busy;
+    private bool _confirmRotateOpen;
+
+    private ApiKeyResponse CurrentKey => _rotatedKey ?? Key;
+
+    private string DisplayedKey => _revealedKey ?? CurrentKey.MaskedKey ?? string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        // The parent handled KeyChanged and the parameter now agrees with what we rotated to;
+        // drop the local copy so there is one source of truth again.
+        if (_rotatedKey is not null && Key.MaskedKey == _rotatedKey.MaskedKey)
+        {
+            _rotatedKey = null;
+        }
+    }
+
+    private async Task RevealAsync()
+    {
+        _busy = true;
+        var result = await ApiClient.RevealMyKeyAsync();
+        _busy = false;
+
+        if (!result.IsSuccess || result.Value is null)
+        {
+            Snackbar.Add(result.Message ?? "Couldn't reveal your key.", Severity.Error);
+            return;
+        }
+
+        await SetRevealedAsync(result.Value.PlaintextKey);
+    }
+
+    private async Task RotateAsync()
+    {
+        _busy = true;
+        var result = await ApiClient.RotateMyKeyAsync();
+        _busy = false;
+        _confirmRotateOpen = false;
+
+        if (!result.IsSuccess || result.Value is null)
+        {
+            Snackbar.Add(result.Message ?? "Couldn't rotate your key.", Severity.Error);
+            return;
+        }
+
+        // Never assign to the [Parameter] itself: the framework overwrites it on the parent's next
+        // render, so the panel would flip back to the stale mask the moment anything else changed.
+        // The rotated value lives here until the parent's KeyChanged handler makes it the parameter.
+        _rotatedKey = new ApiKeyResponse(IsProvisioned: true, result.Value.MaskedKey, result.Value.ApimSubscriptionId);
+        await KeyChanged.InvokeAsync(_rotatedKey);
+        await SetRevealedAsync(result.Value.PlaintextKey);
+        Snackbar.Add("Your key was rotated. Copy the new value below — it's shown once.", Severity.Success);
+    }
+
+    private async Task CopyAsync()
+    {
+        if (_revealedKey is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _revealedKey);
+            Snackbar.Add("Key copied to your clipboard.", Severity.Success);
+        }
+        catch (JSException)
+        {
+            // Clipboard access is origin- and permission-gated; a refusal is the browser's answer,
+            // not an app failure. The value is on screen either way.
+            Snackbar.Add("Your browser blocked clipboard access — select the key and copy it manually.", Severity.Warning);
+        }
+    }
+
+    // Awaited, not discarded: this is what clears the plaintext out of the CLI snippets, and a
+    // dropped task is a plaintext key still on screen after the developer asked for it to be gone.
+    private Task HideAsync() => SetRevealedAsync(null);
+
+    private async Task SetRevealedAsync(string? value)
+    {
+        _revealedKey = value;
+        await RevealedKeyChanged.InvokeAsync(value);
+    }
+}

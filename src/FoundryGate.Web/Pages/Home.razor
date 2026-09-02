@@ -1,55 +1,22 @@
 @page "/"
-@using FoundryGate.Domain.Users.Contracts
-@inject IFoundryGateApiClient ApiClient
+@inject NavigationManager Navigation
+
+@* The front door. Anonymous visitors get the sign-in pitch; anyone signed in is sent straight to
+   the page they came for — /dashboard for an admin, /me for a developer — rather than a summary
+   that only duplicates half of /me. *@
 
 <PageTitle>Foundry Gate</PageTitle>
 
 <AuthorizeView>
-    <Authorized Context="authContext">
-        <MudText Typo="Typo.h4" Class="mb-4">
-            Hello, @(_profile?.DisplayName ?? authContext.User.FindFirst("name")?.Value ?? authContext.User.Identity?.Name ?? "there")
-        </MudText>
-
-        <MudCard Elevation="2" Style="max-width: 420px;">
-            <MudCardContent>
-                <MudText Typo="Typo.subtitle2" Class="fg-label mb-2">This month's usage</MudText>
-
-                @if (_loading)
-                {
-                    <MudProgressCircular Indeterminate="true" Size="Size.Small" />
-                }
-                else if (_profile is not null)
-                {
-                    @if (_profile.Quota.IsUnlimited)
-                    {
-                        <MudChip T="string" Color="Color.Success" Icon="@Icons.Material.Filled.AllInclusive">Unlimited</MudChip>
-                    }
-                    else
-                    {
-                        <MudProgressLinear Color="@GaugeColor(_profile.Quota.PercentUsed)" Value="@(_profile.Quota.PercentUsed ?? 0)" Class="my-2" Rounded="true" Size="Size.Large" />
-                        <MudText Typo="Typo.body2" Class="fg-mono">
-                            @_profile.Quota.TokensUsed.ToString("N0") / @(_profile.Quota.AllocatedTokens?.ToString("N0") ?? "—") tokens
-                        </MudText>
-                    }
-                }
-                else if (_status == ApiCallStatus.Unauthorized)
-                {
-                    <MudAlert Severity="Severity.Warning" Dense="true" Icon="@Icons.Material.Filled.LockClock">
-                        Your session has expired.
-                        <MudLink Href="authentication/login" Underline="Underline.Always">Sign in again</MudLink>
-                        to see your quota.
-                    </MudAlert>
-                }
-                else
-                {
-                    <MudAlert Severity="Severity.Info" Dense="true" Icon="@Icons.Material.Filled.CloudOff">@_statusMessage</MudAlert>
-                }
-            </MudCardContent>
-        </MudCard>
+    <Authorized>
+        <MudContainer MaxWidth="MaxWidth.Small" Class="d-flex flex-column align-center justify-center ga-4" Style="min-height: 40vh;">
+            <MudProgressCircular Indeterminate="true" data-testid="home-redirecting" />
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">Taking you to your account&#8230;</MudText>
+        </MudContainer>
     </Authorized>
     <NotAuthorized>
         <MudContainer MaxWidth="MaxWidth.Small" Class="d-flex flex-column align-center justify-center ga-4" Style="min-height: 60vh; text-align: center;">
-            <MudText Typo="Typo.h3">Foundry Gate</MudText>
+            <MudText Typo="Typo.h3" HtmlTag="h1">Foundry Gate</MudText>
             <MudText Typo="Typo.body1" Class="mud-text-secondary">
                 Give every developer their own AI budget. Sign in with your organization
                 account to see your quota, your API key, and your request history.
@@ -63,41 +30,19 @@
     [CascadingParameter]
     private Task<AuthenticationState>? AuthenticationStateTask { get; set; }
 
-    private UserProfileResponse? _profile;
-    private bool _loading = true;
-    private string _statusMessage = string.Empty;
-    private ApiCallStatus _status = ApiCallStatus.Success;
-
     protected override async Task OnInitializedAsync()
     {
         var authState = AuthenticationStateTask is null ? null : await AuthenticationStateTask;
         if (authState?.User.Identity?.IsAuthenticated != true)
         {
-            // Anonymous visitors see the landing page above and never need the API call.
-            _loading = false;
             return;
         }
 
-        // The API doesn't exist yet at the time this shell ships (#48 scaffold-only) — a
-        // 401/404/unreachable result here is expected, not exceptional, and must render a
-        // friendly message rather than crash the shell.
-        var result = await ApiClient.GetMeAsync();
-        _loading = false;
-        if (result.IsSuccess)
-        {
-            _profile = result.Value;
-        }
-        else
-        {
-            _status = result.Status;
-            _statusMessage = result.Message ?? "Foundry Gate's API isn't available right now.";
-        }
+        // replace: true so the browser's Back button leaves the app rather than bouncing the user
+        // through this redirect again.
+        Navigation.NavigateTo(
+            authState.User.IsInRole(RoleNames.Admin) ? "dashboard" : "me",
+            forceLoad: false,
+            replace: true);
     }
-
-    private static Color GaugeColor(double? percentUsed) => percentUsed switch
-    {
-        >= 100 => Color.Error,
-        >= 80 => Color.Warning,
-        _ => Color.Success,
-    };
 }
