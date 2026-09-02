@@ -13,6 +13,7 @@ using FoundryGate.Domain.Quota;
 using FoundryGate.Domain.Requests;
 using FoundryGate.Domain.Requests.Contracts;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace FoundryGate.Api.Services.Requests;
 
@@ -62,8 +63,7 @@ public sealed class QuotaRequestService(
         var caller = await currentUser.GetRequiredUserAsync(cancellationToken);
 
         // Same answer as GET /quota/allocations/me gives a deactivated developer (403, not 404): the
-        // caller is known but not entitled — and submitting would mint them an allocation and, once
-        // #118 lands, a tier sync onto a product.
+        // caller is known but not entitled — a budget they cannot spend is not worth an admin's review.
         if (!caller.IsActive)
         {
             throw new UnauthorizedAccessException(
@@ -167,11 +167,25 @@ public sealed class QuotaRequestService(
                 $"User {subject.UserId} is deactivated; approving would issue a budget to an account that cannot use it. Re-activate them first (POST /users/{subject.UserId}/activate) or reject the request.");
         }
 
-        // Re-guarded at the write path, not just at submission: the tier table is configuration and
-        // may have changed since the request was filed (CONVENTIONS.md "Quota values are tiers").
+        // Both write-path guards run against the world as it is *now*, not as it was when the request
+        // was filed. The tier table is configuration and can change; the subject's own quota is far more
+        // volatile than that (PUT /users/{id}/quota, group membership, group quota), and applying a
+        // stale RequestedQuota unconditionally would silently *lower* a budget that has since gone up.
         tierMapper.EnsureValidQuota(entity.RequestedQuota, nameof(entity.RequestedQuota));
 
+        var current = await quotaResolution.PreviewAsync(subject.UserId, cancellationToken);
+        if (!IsIncrease(current.Quota, entity.RequestedQuota))
+        {
+            throw new ConflictException(NoLongerAnIncrease(subject.UserId, current.Quota, entity.RequestedQuota));
+        }
+
         var before = new { subject.IsUnlimited, subject.MonthlyTokenQuota };
+
+        // Claim the row before the gateway is touched, inside the transaction, so a concurrent reviewer
+        // cannot also decide it (and an ARM failure below rolls the claim back).
+        var reviewedDate = timeProvider.GetUtcNow();
+        await using var transaction = await BeginTransactionIfNoneAsync(cancellationToken);
+        await ClaimAsync(entity, QuotaRequestStatusType.Approved, reviewer, review.ReviewNotes, reviewedDate, cancellationToken);
 
         if (entity.RequestedQuota is { } approvedQuota)
         {
@@ -184,13 +198,14 @@ public sealed class QuotaRequestService(
             subject.MonthlyTokenQuota = null;
         }
 
-        Decide(entity, QuotaRequestStatusType.Approved, reviewer, review.ReviewNotes);
-
         // Immediately live: upserts this period's allocation and (via the resolution service) moves the
         // subscription to the new tier product before anything is committed, so a failed gateway move
         // fails the approval rather than leaving the database claiming a budget nobody enforces.
         var resolution = await quotaResolution.ResolveAsync(subject.UserId, BillingPeriod.Current(timeProvider), cancellationToken);
 
+        // Past the commit point (CONVENTIONS.md "External side effects have a commit point"): the gateway
+        // may already have moved the subscription, so the audit row and the save must not be abandoned
+        // because the client hung up. Every refusal above happened before that call.
         _ = await audit.LogAsync(
             AuditActions.QuotaIncreaseApproved,
             AuditTargetTypes.QuotaIncreaseRequest,
@@ -200,14 +215,20 @@ public sealed class QuotaRequestService(
                 userId = subject.UserId,
                 before,
                 after = new { subject.IsUnlimited, subject.MonthlyTokenQuota },
+                currentQuotaAtReview = current.Quota,
+                resolvedLevelAtReview = current.Level,
                 allocatedTokens = resolution.Allocation.AllocatedTokens,
                 tierProductId = resolution.Allocation.TierProductId,
                 previousTierProductId = resolution.PreviousTierProductId,
                 tierSyncRequested = resolution.TierSyncRequested,
             },
-            cancellationToken);
+            CancellationToken.None);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await dbContext.SaveChangesAsync(CancellationToken.None);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(CancellationToken.None);
+        }
 
         return await GetProjectedAsync(entity.QuotaIncreaseRequestId, cancellationToken);
     }
@@ -219,7 +240,10 @@ public sealed class QuotaRequestService(
 
         var (entity, reviewer) = await LoadForReviewAsync(quotaIncreaseRequestId, cancellationToken);
 
-        Decide(entity, QuotaRequestStatusType.Rejected, reviewer, review.ReviewNotes);
+        // Same row claim as approval — the transaction is what makes the claim and the audit row one
+        // unit, so a rejection can never end up decided but untraceable.
+        await using var transaction = await BeginTransactionIfNoneAsync(cancellationToken);
+        await ClaimAsync(entity, QuotaRequestStatusType.Rejected, reviewer, review.ReviewNotes, timeProvider.GetUtcNow(), cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.QuotaIncreaseRejected,
@@ -230,11 +254,15 @@ public sealed class QuotaRequestService(
                 userId = entity.UserId,
                 currentQuota = entity.CurrentQuota,
                 requestedQuota = entity.RequestedQuota,
-                reviewNotes = entity.ReviewNotes,
+                reviewNotes = review.ReviewNotes ?? string.Empty,
             },
             cancellationToken);
 
         await dbContext.SaveChangesAsync(cancellationToken);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
 
         return await GetProjectedAsync(entity.QuotaIncreaseRequestId, cancellationToken);
     }
@@ -284,19 +312,23 @@ public sealed class QuotaRequestService(
                 $"User {subject.UserId} already has a pending quota increase request for {period}. It must be approved or rejected before another can be submitted.");
         }
 
-        var currentQuota = await GetCurrentQuotaAsync(subject, period, cancellationToken);
+        // Live resolution, not the stored allocation row: the row is whatever the last resolution wrote,
+        // so a group membership or user override changed since then would make the "before" the reviewing
+        // admin sees plain wrong. PreviewAsync writes nothing and calls no gateway — so every refusal
+        // below still happens before any side effect (CONVENTIONS.md).
+        var currentQuota = (await quotaResolution.PreviewAsync(subject.UserId, cancellationToken)).Quota;
 
         if (currentQuota is null)
         {
             throw new ArgumentException(
-                $"User {subject.UserId} already has an unlimited budget for {period}; there is nothing larger to request.",
+                $"User {subject.UserId} already has an unlimited budget; there is nothing larger to request.",
                 nameof(request));
         }
 
-        if (request.RequestedQuota is { } requestedQuota && requestedQuota <= currentQuota.Value)
+        if (!IsIncrease(currentQuota, request.RequestedQuota))
         {
             throw new ArgumentException(
-                $"A quota increase request must ask for more than the current budget of {currentQuota.Value.ToString("N0", CultureInfo.InvariantCulture)} tokens; {requestedQuota.ToString("N0", CultureInfo.InvariantCulture)} is not an increase. {tierMapper.Describe()}",
+                $"A quota increase request must ask for more than the current budget of {currentQuota.Value.ToString("N0", CultureInfo.InvariantCulture)} tokens; {request.RequestedQuota!.Value.ToString("N0", CultureInfo.InvariantCulture)} is not an increase. {tierMapper.Describe()}",
                 nameof(request.RequestedQuota));
         }
 
@@ -317,7 +349,11 @@ public sealed class QuotaRequestService(
         // has run — so this is the one write path here that cannot be a single SaveChangesAsync. The
         // two saves run inside one transaction instead, because CONVENTIONS.md's rule is that a
         // mutation must never exist without its audit row, not that there must be exactly one save.
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        // (Keying the row on QuotaIncreaseRequestUnique, which exists before the insert, would collapse
+        // this to one save — but approve/reject key on the int PK, so a request's three audit rows would
+        // then live in two different id spaces and the audit viewer's targetId filter could not join
+        // them. One transaction is the cheaper price.)
+        await using var transaction = await BeginTransactionIfNoneAsync(cancellationToken);
 
         await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -337,34 +373,30 @@ public sealed class QuotaRequestService(
             cancellationToken);
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
 
         return await GetProjectedAsync(entity.QuotaIncreaseRequestId, cancellationToken);
     }
 
     /// <summary>
-    /// The subject's resolved quota for <paramref name="period"/> (<see langword="null"/> = unlimited):
-    /// the existing allocation if there is one, otherwise a fresh resolution — the same row a first
-    /// <c>GET /quota/allocations/me</c> of the month would create, added to this unit of work and
-    /// committed with the request.
+    /// A transaction for this unit of work, or <see langword="null"/> when the caller already owns one —
+    /// an orchestrator calling in is the stated design here (<see cref="CancelPendingForUserAsync"/>),
+    /// and <c>BeginTransactionAsync</c> throws on an ambient transaction. Precedent:
+    /// <c>ApimKeyService.ProvisionAsync</c>. Commit only what you began.
     /// </summary>
-    private async Task<long?> GetCurrentQuotaAsync(User subject, BillingPeriod period, CancellationToken cancellationToken)
-    {
-        var existing = await dbContext.QuotaAllocations.AsNoTracking()
-            .Where(a => a.UserId == subject.UserId && a.PeriodYear == period.Year && a.PeriodMonth == period.Month)
-            .Select(a => new ResolvedQuota(a.AllocatedTokens))
-            .SingleOrDefaultAsync(cancellationToken);
-
-        if (existing is not null)
-        {
-            return existing.AllocatedTokens;
-        }
-
-        var resolution = await quotaResolution.ResolveAsync(subject.UserId, period, cancellationToken);
-        return resolution.Allocation.AllocatedTokens;
-    }
+    private async Task<IDbContextTransaction?> BeginTransactionIfNoneAsync(CancellationToken cancellationToken) =>
+        dbContext.Database.CurrentTransaction is null
+            ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
     /// <summary>Loads a request that must still be pending, plus the reviewing admin (the audit actor).</summary>
+    /// <remarks>
+    /// The status check here is the fast, friendly refusal; it is not the guard. Two reviewers can both
+    /// pass it — <see cref="ClaimAsync"/> is what makes exactly one of them win.
+    /// </remarks>
     private async Task<(QuotaIncreaseRequest Request, User Reviewer)> LoadForReviewAsync(int quotaIncreaseRequestId, CancellationToken cancellationToken)
     {
         var reviewer = await currentUser.GetRequiredUserAsync(cancellationToken);
@@ -375,20 +407,88 @@ public sealed class QuotaRequestService(
 
         if (entity.StatusType != QuotaRequestStatusType.Pending)
         {
-            throw new ConflictException(
-                $"Quota increase request {quotaIncreaseRequestId} was already {entity.StatusType.ToString().ToLowerInvariant()} and cannot be reviewed again.");
+            throw AlreadyDecided(quotaIncreaseRequestId, entity.StatusType);
         }
 
         return (entity, reviewer);
     }
 
-    private void Decide(QuotaIncreaseRequest entity, QuotaRequestStatusType status, User reviewer, string? reviewNotes)
+    /// <summary>
+    /// Moves the row out of <see cref="QuotaRequestStatusType.Pending"/> with a single conditional
+    /// <c>UPDATE … WHERE StatusType = Pending</c>: whoever's statement matches the row wins, the other
+    /// gets 0 rows and a 409. Read-then-write on the tracked entity would let a simultaneous approve and
+    /// reject both proceed, leaving the quota raised, the subscription moved, the row reading
+    /// <c>Rejected</c> and two contradictory audit rows. Precedent:
+    /// <c>ApimKeyService.ProvisionAsync</c>'s subscription-id claim.
+    /// </summary>
+    /// <remarks>
+    /// <c>ExecuteUpdateAsync</c> runs immediately, outside the change tracker, so the tracked copy is
+    /// stale the moment it succeeds: it is detached rather than patched. Mutating it instead would make
+    /// the later <c>SaveChangesAsync</c> issue a second, unconditional UPDATE of the same columns —
+    /// undoing the whole point of the claim — and leaving a stale copy tracked would let a second review
+    /// in the same scope read <c>Pending</c> from memory after the database says otherwise. Reads after
+    /// this point go to the database (<see cref="GetProjectedAsync"/> projects fresh).
+    /// </remarks>
+    private async Task ClaimAsync(
+        QuotaIncreaseRequest entity,
+        QuotaRequestStatusType status,
+        User reviewer,
+        string? reviewNotes,
+        DateTimeOffset reviewedDate,
+        CancellationToken cancellationToken)
     {
-        entity.StatusType = status;
-        entity.ReviewedByUserId = reviewer.UserId;
-        entity.ReviewedDate = timeProvider.GetUtcNow();
-        entity.ReviewNotes = reviewNotes ?? string.Empty;
+        int? reviewerUserId = reviewer.UserId;
+        DateTimeOffset? reviewedOn = reviewedDate;
+        var notes = reviewNotes ?? string.Empty;
+
+        var claimed = await dbContext.QuotaIncreaseRequests
+            .Where(r => r.QuotaIncreaseRequestId == entity.QuotaIncreaseRequestId && r.StatusType == QuotaRequestStatusType.Pending)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(r => r.StatusType, status)
+                    .SetProperty(r => r.ReviewedByUserId, reviewerUserId)
+                    .SetProperty(r => r.ReviewedDate, reviewedOn)
+                    .SetProperty(r => r.ReviewNotes, notes),
+                cancellationToken);
+
+        if (claimed == 0)
+        {
+            // Another reviewer got there between LoadForReviewAsync and here. Re-read to say which way
+            // it went rather than guessing.
+            var decided = await dbContext.QuotaIncreaseRequests.AsNoTracking()
+                .Where(r => r.QuotaIncreaseRequestId == entity.QuotaIncreaseRequestId)
+                .Select(r => (QuotaRequestStatusType?)r.StatusType)
+                .SingleOrDefaultAsync(cancellationToken);
+
+            throw decided is { } decidedStatus
+                ? AlreadyDecided(entity.QuotaIncreaseRequestId, decidedStatus)
+                : NotFound(entity.QuotaIncreaseRequestId);
+        }
+
+        dbContext.Entry(entity).State = EntityState.Detached;
     }
+
+    /// <summary>
+    /// Is <paramml name="requested"/> strictly more budget than <paramref name="current"/>? Unlimited
+    /// (<see langword="null"/>) beats every finite quota and nothing beats unlimited — so a user who is
+    /// already unlimited can never be increased.
+    /// </summary>
+    private static bool IsIncrease(long? current, long? requested) =>
+        current is { } finiteCurrent && (requested is null || requested.Value > finiteCurrent);
+
+    private static string NoLongerAnIncrease(int userId, long? currentQuota, long? requestedQuota)
+    {
+        var requested = requestedQuota is { } value
+            ? $"{value.ToString("N0", CultureInfo.InvariantCulture)} tokens"
+            : "unlimited";
+
+        return currentQuota is null
+            ? $"User {userId}'s budget is already unlimited, so approving this request for {requested} would lower it. Their quota changed after the request was filed; reject it instead."
+            : $"User {userId}'s budget is now {currentQuota.Value.ToString("N0", CultureInfo.InvariantCulture)} tokens, so approving this request for {requested} would not raise it. Their quota changed after the request was filed; reject it instead.";
+    }
+
+    private static ConflictException AlreadyDecided(int quotaIncreaseRequestId, QuotaRequestStatusType status) =>
+        new($"Quota increase request {quotaIncreaseRequestId} was already {status.ToString().ToLowerInvariant()} and cannot be reviewed again.");
 
     private Task<QuotaIncreaseRequestResponse?> FindProjectedAsync(int quotaIncreaseRequestId, CancellationToken cancellationToken) =>
         dbContext.QuotaIncreaseRequests.AsNoTracking()
@@ -402,7 +502,4 @@ public sealed class QuotaRequestService(
 
     private static KeyNotFoundException NotFound(int quotaIncreaseRequestId) =>
         new($"Quota increase request {quotaIncreaseRequestId} was not found.");
-
-    /// <summary>Query-side shape for <see cref="GetCurrentQuotaAsync"/> — a nullable quota that must be distinguishable from "no row".</summary>
-    private sealed record ResolvedQuota(long? AllocatedTokens);
 }

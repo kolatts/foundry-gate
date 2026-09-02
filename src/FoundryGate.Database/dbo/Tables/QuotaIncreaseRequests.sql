@@ -36,8 +36,12 @@ CREATE UNIQUE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_QuotaIncreaseRequestU
     ON [dbo].[QuotaIncreaseRequests]([QuotaIncreaseRequestUnique] ASC);
 GO
 
-CREATE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_UserId]
-    ON [dbo].[QuotaIncreaseRequests]([UserId] ASC);
+CREATE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_CreatedDate]
+    ON [dbo].[QuotaIncreaseRequests]([CreatedDate] ASC);
+GO
+
+CREATE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_UserId_StatusType]
+    ON [dbo].[QuotaIncreaseRequests]([UserId] ASC, [StatusType] ASC);
 GO
 
 CREATE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_RequestedByUserId]

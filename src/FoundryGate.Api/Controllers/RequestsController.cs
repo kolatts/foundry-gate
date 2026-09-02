@@ -99,8 +99,10 @@ public sealed class RequestsController(IQuotaRequestService quotaRequests) : Api
     /// <summary>
     /// Admin: approves a pending request. Applies the requested budget to the user and re-resolves
     /// their current-period allocation (moving their gateway tier) before responding. Send <c>{}</c>
-    /// when there are no notes. <c>409</c> if the request was already decided or the user is
-    /// deactivated; <c>400</c> if the requested value is no longer a configured tier.
+    /// when there are no notes. <c>409</c> if the request was already decided (including by a reviewer
+    /// racing this one), if the user is deactivated, or if their budget has changed since the request
+    /// was filed such that approving it would no longer raise it; <c>400</c> if the requested value is
+    /// no longer a configured tier.
     /// </summary>
     [HttpPost("{id:int}/approve")]
     [Authorize(Policy = PolicyNames.AdminOnly)]

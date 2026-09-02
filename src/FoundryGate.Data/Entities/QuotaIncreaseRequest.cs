@@ -16,6 +16,16 @@ namespace FoundryGate.Data.Entities;
 /// twice; this is the reconciled single source.
 /// </remarks>
 [Index(nameof(QuotaIncreaseRequestUnique), IsUnique = true)]
+
+// GET /requests' two access shapes (CONVENTIONS.md: index what your default ordering and filters use;
+// AuditLog.OccurredDate is the precedent). CreatedDate alone serves the admin's unfiltered list, which
+// is ordered newest-first across every user and can narrow on nothing else. (UserId, StatusType) serves
+// both the developer's own list — always filtered to one user, often to Pending — and the admin's
+// ?userId=&status=; it leads with UserId so it also subsumes the FK index EF would otherwise create.
+// Deliberately two indexes rather than one composite: no single column order serves an ordering that
+// applies with no user filter and a filter that applies with no ordering advantage.
+[Index(nameof(CreatedDate))]
+[Index(nameof(UserId), nameof(StatusType))]
 public class QuotaIncreaseRequest : ICreatedDate
 {
     public int QuotaIncreaseRequestId { get; set; }

@@ -156,21 +156,21 @@ public static class TestDataSeeder
         // Standard-tier developer asking for the next tier up. Deliberately not the unlimited user:
         // POST /requests refuses a caller who is already unlimited (nothing larger to ask for) and
         // refuses anything that is not an increase (#34), so demo data must not depict either.
-        var requester = users.Find(u => u.MonthlyTokenQuota == StandardTierCap);
-        if (requester is not null)
+        // First(), not Find()+null check: no Standard-tier developer in the roster means QuotaTiers and
+        // the landing page have drifted apart, and a loud InvalidOperationException on the local seed is
+        // a better read than demo data that is quietly one row short.
+        var requester = users.First(u => u.MonthlyTokenQuota == StandardTierCap);
+        context.QuotaIncreaseRequests.Add(new QuotaIncreaseRequest
         {
-            context.QuotaIncreaseRequests.Add(new QuotaIncreaseRequest
-            {
-                UserId = requester.UserId,
-                RequestedByUserId = requester.UserId,
-                PeriodYear = now.Year,
-                PeriodMonth = now.Month,
-                CurrentQuota = requester.MonthlyTokenQuota,
-                RequestedQuota = PowerTierCap, // the next tier up — requests ask for a tier, not a number
-                Justification = "Running a batch evaluation this sprint that needs more headroom than the standard tier.",
-                StatusType = QuotaRequestStatusType.Pending
-            });
-        }
+            UserId = requester.UserId,
+            RequestedByUserId = requester.UserId,
+            PeriodYear = now.Year,
+            PeriodMonth = now.Month,
+            CurrentQuota = requester.MonthlyTokenQuota,
+            RequestedQuota = PowerTierCap, // the next tier up — requests ask for a tier, not a number
+            Justification = "Running a batch evaluation this sprint that needs more headroom than the standard tier.",
+            StatusType = QuotaRequestStatusType.Pending
+        });
 
         await context.SaveChangesAsync(cancellationToken);
     }

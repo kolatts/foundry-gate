@@ -413,6 +413,9 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         public Task<QuotaResolution> ResolveAsync(int userId, BillingPeriod period, CancellationToken cancellationToken) =>
             inner.ResolveAsync(userId, period, cancellationToken);
 
+        public Task<QuotaPreview> PreviewAsync(int userId, CancellationToken cancellationToken) =>
+            inner.PreviewAsync(userId, cancellationToken);
+
         public async Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(IReadOnlyCollection<int> userIds, BillingPeriod period, CancellationToken cancellationToken)
         {
             var results = await inner.ResolveManyAsync(userIds, period, cancellationToken);

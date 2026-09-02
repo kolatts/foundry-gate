@@ -65,8 +65,10 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
         Assert.Null(result.ReviewNotes);
         Assert.NotEqual(Guid.Empty, result.QuotaIncreaseRequestUnique);
 
-        // The allocation the request measured itself against was created and committed with it.
-        Assert.True(await Context.QuotaAllocations.AsNoTracking().AnyAsync(a => a.UserId == me.UserId && a.PeriodYear == Period.Year));
+        // Submission writes the request and its audit row and nothing else: the quota it measured
+        // against came from live resolution, which creates no allocation and calls no gateway.
+        Assert.False(await Context.QuotaAllocations.AsNoTracking().AnyAsync(a => a.UserId == me.UserId));
+        Assert.Empty(_tierSync.Calls);
 
         var audit = Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaIncreaseSubmitted).ToListAsync());
         Assert.Equal(me.UserId, audit.ActorUserId);
@@ -93,18 +95,56 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task SubmitAsync_measures_against_the_existing_allocation_rather_than_re_resolving()
+    public async Task SubmitAsync_measures_against_live_resolution_not_the_stale_allocation_row()
     {
         await SeedReferenceDataAsync();
+        // The user is on Power now; the allocation row still says Standard because nothing has
+        // re-resolved since an admin (or a group) raised them. Reading the row would let them "ask" for
+        // a tier they already have.
         var me = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
-        await SeedAllocationAsync(me, Period, allocated: TestGatewayTiers.StandardCap); // mid-month state, not yet re-resolved
+        await SeedAllocationAsync(me, Period, allocated: TestGatewayTiers.StandardCap);
 
-        var result = await CreateService(me.EntraObjectId).SubmitAsync(
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => CreateService(me.EntraObjectId).SubmitAsync(
             new SubmitQuotaIncreaseRequest { RequestedQuota = TestGatewayTiers.PowerCap, Justification = Justification },
-            CancellationToken.None);
+            CancellationToken.None));
 
-        Assert.Equal(TestGatewayTiers.StandardCap, result.CurrentQuota);
-        Assert.Equal(1, await Context.QuotaAllocations.AsNoTracking().CountAsync(a => a.UserId == me.UserId));
+        Assert.Contains("current budget of 20,000,000 tokens", exception.Message, StringComparison.Ordinal);
+        Assert.False(await Context.QuotaIncreaseRequests.AsNoTracking().AnyAsync());
+    }
+
+    [Fact]
+    public async Task SubmitAsync_sees_a_group_quota_the_allocation_row_has_not_caught_up_with()
+    {
+        await SeedReferenceDataAsync();
+        var me = await SeedUserAsync("Ada");
+        await SeedGroupMembershipAsync(me, groupQuota: TestGatewayTiers.PowerCap);
+        await SeedAllocationAsync(me, Period, allocated: TestGatewayTiers.StandardCap); // pre-dates the group change
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() => CreateService(me.EntraObjectId).SubmitAsync(
+            new SubmitQuotaIncreaseRequest { RequestedQuota = TestGatewayTiers.PowerCap, Justification = Justification },
+            CancellationToken.None));
+
+        Assert.Contains("current budget of 20,000,000 tokens", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SubmitAsync_that_is_refused_touches_neither_the_gateway_nor_the_database()
+    {
+        await SeedReferenceDataAsync();
+        var me = await SeedUserAsync("Ada", u =>
+        {
+            u.MonthlyTokenQuota = TestGatewayTiers.PowerCap;
+            u.ApimSubscriptionId = "sub-ada"; // resolution would sync this one
+        });
+
+        _ = await Assert.ThrowsAsync<ArgumentException>(() => CreateService(me.EntraObjectId).SubmitAsync(
+            new SubmitQuotaIncreaseRequest { RequestedQuota = TestGatewayTiers.StandardCap, Justification = Justification },
+            CancellationToken.None));
+
+        // CONVENTIONS.md: every refusal happens before anything external is touched.
+        Assert.Empty(_tierSync.Calls);
+        Assert.False(await Context.QuotaAllocations.AsNoTracking().AnyAsync());
+        Assert.False(await Context.QuotaIncreaseRequests.AsNoTracking().AnyAsync());
     }
 
     [Theory]
@@ -489,7 +529,9 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
         await SeedReferenceDataAsync();
         var admin = await SeedUserAsync("Admin");
         var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
-        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+        // Unlimited, so the second attempt is still an increase and the "already decided" refusal is
+        // what fires rather than the downgrade guard.
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: null);
         var service = CreateService(admin.EntraObjectId, isAdmin: true);
         _ = await service.ApproveAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None);
 
@@ -498,6 +540,177 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
 
         Assert.Contains("already approved", exception.Message, StringComparison.Ordinal);
         Assert.Equal(1, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.QuotaIncreaseApproved));
+    }
+
+    [Fact]
+    public async Task ApproveAsync_refuses_with_409_when_the_subject_is_now_unlimited_so_approval_would_downgrade_them()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u =>
+        {
+            u.MonthlyTokenQuota = TestGatewayTiers.StandardCap;
+            u.ApimSubscriptionId = "sub-ada";
+        });
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        // Between filing and review an admin makes them unlimited (PUT /users/{id}/quota).
+        ada.IsUnlimited = true;
+        ada.MonthlyTokenQuota = null;
+        await Context.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => CreateService(admin.EntraObjectId, isAdmin: true)
+            .ApproveAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None));
+
+        Assert.Contains("already unlimited", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("reject it instead", exception.Message, StringComparison.Ordinal);
+
+        var user = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == ada.UserId);
+        Assert.True(user.IsUnlimited); // not downgraded to 20M
+        Assert.Null(user.MonthlyTokenQuota);
+        Assert.Equal(QuotaRequestStatusType.Pending, (await Context.QuotaIncreaseRequests.AsNoTracking().SingleAsync()).StatusType);
+        Assert.Empty(_tierSync.Calls);
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task ApproveAsync_refuses_with_409_when_a_group_has_already_raised_the_subject_to_the_requested_tier()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        // The user override goes away and a Power group takes over — same budget the request asks for.
+        ada.MonthlyTokenQuota = null;
+        await Context.SaveChangesAsync();
+        await SeedGroupMembershipAsync(ada, groupQuota: TestGatewayTiers.PowerCap);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => CreateService(admin.EntraObjectId, isAdmin: true)
+            .ApproveAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None));
+
+        Assert.Contains("is now 20,000,000 tokens", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(QuotaRequestStatusType.Pending, (await Context.QuotaIncreaseRequests.AsNoTracking().SingleAsync()).StatusType);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_still_succeeds_when_the_subject_moved_up_but_the_request_asks_for_more_again()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: null); // asked for unlimited
+
+        ada.MonthlyTokenQuota = TestGatewayTiers.PowerCap; // an admin bumped them one tier meanwhile
+        await Context.SaveChangesAsync();
+
+        var result = await CreateService(admin.EntraObjectId, isAdmin: true)
+            .ApproveAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None);
+
+        Assert.Equal(QuotaRequestStatusType.Approved, result.StatusType);
+        var user = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == ada.UserId);
+        Assert.True(user.IsUnlimited);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_loses_the_row_claim_to_a_concurrent_reviewer_and_is_409()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        // "Another reviewer" decides it through a second connection to the same database, in the window
+        // between this call's status check and its claim.
+        await using (var other = NewContext())
+        {
+            var theirs = await other.QuotaIncreaseRequests.SingleAsync(r => r.QuotaIncreaseRequestId == request.QuotaIncreaseRequestId);
+            theirs.StatusType = QuotaRequestStatusType.Rejected;
+            theirs.ReviewedDate = Now;
+            theirs.ReviewNotes = "Beat you to it.";
+            await other.SaveChangesAsync();
+        }
+
+        // The tracked copy in this scope still reads Pending, so LoadForReviewAsync waves it through —
+        // the conditional UPDATE is what refuses.
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => CreateService(admin.EntraObjectId, isAdmin: true)
+            .ApproveAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None));
+
+        Assert.Contains("already rejected", exception.Message, StringComparison.Ordinal);
+
+        await using var probe = NewContext();
+        var row = await probe.QuotaIncreaseRequests.AsNoTracking().SingleAsync();
+        Assert.Equal(QuotaRequestStatusType.Rejected, row.StatusType); // the winner's decision stands
+        Assert.Equal("Beat you to it.", row.ReviewNotes);
+        var user = await probe.Users.AsNoTracking().SingleAsync(u => u.UserId == ada.UserId);
+        Assert.Equal(TestGatewayTiers.StandardCap, user.MonthlyTokenQuota); // no quota raised behind a rejection
+        Assert.Empty(_tierSync.Calls);
+        Assert.Empty(await probe.AuditLogs.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task RejectAsync_loses_the_row_claim_to_a_concurrent_reviewer_and_is_409()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        await using (var other = NewContext())
+        {
+            var theirs = await other.QuotaIncreaseRequests.SingleAsync(r => r.QuotaIncreaseRequestId == request.QuotaIncreaseRequestId);
+            theirs.StatusType = QuotaRequestStatusType.Approved;
+            await other.SaveChangesAsync();
+        }
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => CreateService(admin.EntraObjectId, isAdmin: true)
+            .RejectAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None));
+
+        Assert.Contains("already approved", exception.Message, StringComparison.Ordinal);
+
+        await using var probe = NewContext();
+        Assert.Empty(await probe.AuditLogs.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task SubmitAsync_joins_a_transaction_the_caller_already_owns_instead_of_opening_its_own()
+    {
+        await SeedReferenceDataAsync();
+        var me = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var service = CreateService(me.EntraObjectId);
+
+        // What an orchestrator (#65's deprovision path, plan 21's provisioning) looks like from here.
+        await using var outer = await Context.Database.BeginTransactionAsync();
+        var result = await service.SubmitAsync(
+            new SubmitQuotaIncreaseRequest { RequestedQuota = TestGatewayTiers.PowerCap, Justification = Justification },
+            CancellationToken.None);
+        var cancelled = await service.CancelPendingForUserAsync(me.UserId, "Account deprovisioned.", CancellationToken.None);
+        await Context.SaveChangesAsync();
+        await outer.CommitAsync();
+
+        Assert.Equal(1, cancelled);
+        await using var probe = NewContext();
+        var row = await probe.QuotaIncreaseRequests.AsNoTracking().SingleAsync(r => r.QuotaIncreaseRequestId == result.QuotaIncreaseRequestId);
+        Assert.Equal(QuotaRequestStatusType.Rejected, row.StatusType);
+        Assert.Equal("Account deprovisioned.", row.ReviewNotes);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_joins_a_transaction_the_caller_already_owns()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        await using var outer = await Context.Database.BeginTransactionAsync();
+        var result = await CreateService(admin.EntraObjectId, isAdmin: true)
+            .ApproveAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None);
+        await outer.CommitAsync();
+
+        Assert.Equal(QuotaRequestStatusType.Approved, result.StatusType);
+        await using var probe = NewContext();
+        Assert.Equal(TestGatewayTiers.PowerCap, (await probe.Users.AsNoTracking().SingleAsync(u => u.UserId == ada.UserId)).MonthlyTokenQuota);
     }
 
     [Fact]
@@ -705,6 +918,21 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
             ResolvedLevelType = allocated is null ? QuotaLevelType.UserUnlimited : QuotaLevelType.UserOverride,
             TierProductId = allocated is null ? GatewayTiers.Unlimited : GatewayTiers.Standard,
         });
+        await Context.SaveChangesAsync();
+    }
+
+    private async Task SeedGroupMembershipAsync(User user, long? groupQuota, bool isUnlimited = false)
+    {
+        var group = new Group
+        {
+            Name = $"g-{Guid.NewGuid():N}",
+            MonthlyTokenQuota = groupQuota,
+            IsUnlimited = isUnlimited,
+        };
+        Context.Groups.Add(group);
+        await Context.SaveChangesAsync();
+
+        Context.GroupMembers.Add(new GroupMember { GroupId = group.GroupId, UserId = user.UserId });
         await Context.SaveChangesAsync();
     }
 

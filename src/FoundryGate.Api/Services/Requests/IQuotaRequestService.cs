@@ -27,12 +27,29 @@ namespace FoundryGate.Api.Services.Requests;
 /// current period so the new budget (and the gateway tier behind it) is live before the response is
 /// written — no cron job, no lag. Every mutation commits with its audit row.
 /// </para>
+/// <para>
+/// <b>Both quota rules are re-checked at approval, against live resolution.</b> A stored
+/// <c>RequestedQuota</c> is only applied if it is <em>still</em> a configured tier and <em>still</em> an
+/// increase over what <see cref="Quota.IQuotaResolutionService.PreviewAsync"/> says the subject's budget
+/// is now — otherwise approving a request filed before an admin raised them (or before a group did) would
+/// silently lower it. Both submission and approval measure against that live answer rather than the
+/// stored <c>QuotaAllocation</c> row, which only reflects the last resolution.
+/// </para>
+/// <para>
+/// <b>Reviews claim the row.</b> The transition out of <c>Pending</c> is a conditional update, so a
+/// simultaneous approve and reject cannot both proceed: one wins, the other gets a 409. Everything a
+/// review writes — the row, the subject's quota, the allocation, the audit entry — commits in one
+/// transaction, and the service joins an ambient transaction rather than opening its own when an
+/// orchestrator already has one.
+/// </para>
 /// </remarks>
 public interface IQuotaRequestService
 {
     /// <summary>
-    /// Submits a request for the calling developer (<c>POST /requests</c>). Captures their current
-    /// resolved quota, the current billing period, and <c>RequestedByUserId = </c> themselves.
+    /// Submits a request for the calling developer (<c>POST /requests</c>). Captures their live resolved
+    /// quota, the current billing period, and <c>RequestedByUserId = </c> themselves. Writes nothing but
+    /// the request and its audit row — no allocation is created, and no gateway call is made, so a
+    /// refusal leaves no trace.
     /// </summary>
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (→ 403; call <c>GET /users/me</c> first), or their account is deactivated (→ 403).</exception>
     /// <exception cref="ArgumentException"><c>RequestedQuota</c> is not a configured tier cap, or is not an increase over the caller's current quota (→ 400).</exception>
@@ -77,7 +94,11 @@ public interface IQuotaRequestService
     /// </summary>
     /// <exception cref="KeyNotFoundException">No such request (→ 404).</exception>
     /// <exception cref="ArgumentException">The stored <c>RequestedQuota</c> is no longer a configured tier cap — the tier table changed after submission (→ 400).</exception>
-    /// <exception cref="Domain.Exceptions.ConflictException">The request is already approved or rejected, or the subject user is deactivated (→ 409).</exception>
+    /// <exception cref="Domain.Exceptions.ConflictException">
+    /// The request is already approved or rejected (including by a reviewer racing this one), the subject
+    /// user is deactivated, or the stored <c>RequestedQuota</c> is no longer an increase over the
+    /// subject's live quota — approving would lower it (→ 409).
+    /// </exception>
     Task<QuotaIncreaseRequestResponse> ApproveAsync(int quotaIncreaseRequestId, ReviewQuotaIncreaseRequest review, CancellationToken cancellationToken);
 
     /// <summary>
@@ -99,7 +120,8 @@ public interface IQuotaRequestService
     /// <b>Nothing here saves and nothing here audits</b> — both belong to the calling orchestrator, so
     /// the cancellations commit atomically inside <em>its</em> unit of work and are described by
     /// <em>its</em> audit row (a lifecycle action, not a review decision). Idempotent: a second call
-    /// finds nothing pending and returns 0.
+    /// finds nothing pending and returns 0. An orchestrator holding its own transaction can call any
+    /// method on this service inside it; none of them opens a second one.
     /// </remarks>
     Task<int> CancelPendingForUserAsync(int userId, string note, CancellationToken cancellationToken);
 }
