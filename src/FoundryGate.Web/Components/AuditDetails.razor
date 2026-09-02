@@ -25,7 +25,7 @@ else
     /// doesn't. Never throws — a row whose details are a bare string, truncated JSON, or something a
     /// future writer invented still renders.
     /// </summary>
-    internal static string Prettify(string? details)
+    public static string Prettify(string? details)
     {
         if (string.IsNullOrWhiteSpace(details))
         {

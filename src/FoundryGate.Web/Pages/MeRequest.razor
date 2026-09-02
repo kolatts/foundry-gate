@@ -174,7 +174,7 @@ else
     /// The tiers a caller on <paramref name="currentQuota"/> may ask for: strictly larger caps, plus
     /// any unlimited tier. An already-unlimited caller has nothing to ask for.
     /// </summary>
-    internal static IReadOnlyList<QuotaTierResponse> TiersAbove(
+    public static IReadOnlyList<QuotaTierResponse> TiersAbove(
         IReadOnlyList<QuotaTierResponse> tiers,
         long? currentQuota,
         bool currentIsUnlimited)

@@ -139,10 +139,10 @@
     private const int PageSize = 25;
 
     /// <summary>The known <c>AuditLog.Action</c> values, straight off the Domain constants.</summary>
-    internal static readonly IReadOnlyList<string> Actions = ConstantSet.StringConstants(typeof(AuditActions));
+    public static readonly IReadOnlyList<string> Actions = ConstantSet.StringConstants(typeof(AuditActions));
 
     /// <summary>The known <c>AuditLog.TargetType</c> values, straight off the Domain constants.</summary>
-    internal static readonly IReadOnlyList<string> TargetTypes = ConstantSet.StringConstants(typeof(AuditTargetTypes));
+    public static readonly IReadOnlyList<string> TargetTypes = ConstantSet.StringConstants(typeof(AuditTargetTypes));
 
     private MudDataGrid<AuditLogEntryResponse>? _grid;
     private string? _action;
