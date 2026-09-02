@@ -322,10 +322,119 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
         Assert.Equal(SystemConfigurationKeys.All.Count, await dbContext.SystemConfigurations.CountAsync());
     }
 
+    [Fact]
+    public async Task Update_with_a_matching_ExpectedUpdatedDate_succeeds()
+    {
+        // #170: the optional concurrency check passes when the caller is writing over the version it
+        // read, which is the ordinary "open the form, save it" path.
+        const string Key = SystemConfigurationKeys.ResetDayOfMonth;
+        var oid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(oid);
+
+        using var client = factory.CreateClientAs(oid, isAdmin: true);
+        var first = await PutAsync(client, Key, "4");
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var read = await first.Content.ReadFromJsonAsync<SystemConfigEntryResponse>(JsonOptions);
+
+        factory.TimeProvider.Advance(TimeSpan.FromMinutes(3));
+        var second = await PutAsync(client, Key, "5", read!.UpdatedDate);
+
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal("5", await ValueOfAsync(Key));
+    }
+
+    [Fact]
+    public async Task Update_with_a_stale_ExpectedUpdatedDate_returns_409_naming_the_current_value_and_editor()
+    {
+        // #170: two admins with the config page open. The second one's write is refused rather than
+        // silently overwriting the first, and the 409 carries everything needed to re-decide — what the
+        // value is now, when it changed, and who changed it.
+        const string Key = SystemConfigurationKeys.ResetDayOfMonth;
+        var firstOid = Guid.NewGuid().ToString();
+        var secondOid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(firstOid, displayName: "Ada Lovelace");
+        _ = await factory.SeedUserAsync(secondOid, displayName: "Grace Hopper");
+
+        using var firstClient = factory.CreateClientAs(firstOid, isAdmin: true);
+        using var secondClient = factory.CreateClientAs(secondOid, isAdmin: true);
+
+        // Both read the same version...
+        var seen = await PutAsync(firstClient, Key, "6");
+        var stale = (await seen.Content.ReadFromJsonAsync<SystemConfigEntryResponse>(JsonOptions))!.UpdatedDate;
+
+        // ...then Ada writes first.
+        factory.TimeProvider.Advance(TimeSpan.FromMinutes(1));
+        var winner = await PutAsync(firstClient, Key, "7", stale);
+        Assert.Equal(HttpStatusCode.OK, winner.StatusCode);
+
+        // Grace's save is now against a version that no longer exists.
+        factory.TimeProvider.Advance(TimeSpan.FromMinutes(1));
+        var loser = await PutAsync(secondClient, Key, "8", stale);
+
+        Assert.Equal(HttpStatusCode.Conflict, loser.StatusCode);
+        var problem = await loser.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
+        Assert.Contains(Key, problem!.Detail, StringComparison.Ordinal);
+        Assert.Contains("'7'", problem.Detail, StringComparison.Ordinal);
+        Assert.Contains("Ada Lovelace", problem.Detail, StringComparison.Ordinal);
+
+        // Nothing was written, and no audit row was added for the refused write.
+        Assert.Equal("7", await ValueOfAsync(Key));
+        await using var dbContext = factory.CreateDbContext();
+        var lastAudit = await dbContext.AuditLogs
+            .Where(a => a.Action == AuditActions.ConfigUpdated && a.TargetId == Key)
+            .OrderByDescending(a => a.AuditLogId)
+            .FirstAsync();
+        using var details = JsonDocument.Parse(lastAudit.Details);
+        Assert.Equal("7", details.RootElement.GetProperty("after").GetString());
+    }
+
+    [Fact]
+    public async Task Update_without_an_ExpectedUpdatedDate_is_still_last_write_wins()
+    {
+        // The field is optional and therefore additive (#170): a caller that does not send it keeps the
+        // behaviour every existing client has.
+        const string Key = SystemConfigurationKeys.ResetDayOfMonth;
+        var oid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(oid);
+
+        using var client = factory.CreateClientAs(oid, isAdmin: true);
+        _ = await PutAsync(client, Key, "9");
+        factory.TimeProvider.Advance(TimeSpan.FromMinutes(1));
+        var response = await PutAsync(client, Key, "10");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("10", await ValueOfAsync(Key));
+    }
+
+    [Fact]
+    public async Task A_stale_ExpectedUpdatedDate_is_refused_before_the_value_is_validated()
+    {
+        // Ordering matters: a caller whose view of the row is stale has to re-read it whatever they were
+        // trying to write, so the 409 wins over the 400 the value alone would earn.
+        const string Key = SystemConfigurationKeys.ResetDayOfMonth;
+        var oid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(oid);
+
+        using var client = factory.CreateClientAs(oid, isAdmin: true);
+        var seed = await PutAsync(client, Key, "12");
+        var stale = (await seed.Content.ReadFromJsonAsync<SystemConfigEntryResponse>(JsonOptions))!.UpdatedDate
+            - TimeSpan.FromHours(1);
+
+        var response = await PutAsync(client, Key, "not-a-day", stale);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("12", await ValueOfAsync(Key));
+    }
+
     private static Task<HttpResponseMessage> PutAsync(HttpClient client, string key, string value) =>
         client.PutAsJsonAsync(
             new Uri($"{ConfigPath}/{Uri.EscapeDataString(key)}", UriKind.Relative),
             new UpdateSystemConfigRequest { Value = value });
+
+    private static Task<HttpResponseMessage> PutAsync(HttpClient client, string key, string value, DateTimeOffset expectedUpdatedDate) =>
+        client.PutAsJsonAsync(
+            new Uri($"{ConfigPath}/{Uri.EscapeDataString(key)}", UriKind.Relative),
+            new UpdateSystemConfigRequest { Value = value, ExpectedUpdatedDate = expectedUpdatedDate });
 
     private async Task<string> ValueOfAsync(string key)
     {

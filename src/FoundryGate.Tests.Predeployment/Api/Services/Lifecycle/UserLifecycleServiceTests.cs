@@ -10,6 +10,7 @@ using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
@@ -602,7 +603,7 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
 
         // The real request service: deactivation delegates its pending-request cancellation to it
         // (#148's CancelPendingForUserAsync), so a stub would prove nothing about what commits.
-        var quotaRequests = new QuotaRequestService(Context, quotaResolution, tierMapper, accessor, audit, _timeProvider);
+        var quotaRequests = new QuotaRequestService(Context, quotaResolution, new QuotaRequestExpiry(Context, writer, _timeProvider, NullLogger<QuotaRequestExpiry>.Instance), tierMapper, accessor, audit, _timeProvider);
 
         return new UserLifecycleService(
             Context,

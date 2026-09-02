@@ -65,10 +65,17 @@ public readonly record struct QuotaResetTrigger(int? ActorUserId, string AuditAc
 /// <summary>What one <see cref="IQuotaResetService.ResetAsync"/> run did.</summary>
 /// <param name="UsersResetCount">Active users whose allocation was created or re-resolved.</param>
 /// <param name="TierSyncCount">How many of those asked <see cref="IGatewayTierSync"/> to move a subscription — zero for a scheduled reset, whose inputs have not changed since the last resolution.</param>
+/// <param name="ExpiredRequestCount">
+/// Quota increase requests left pending from an earlier period that this run closed
+/// (<see cref="Requests.IQuotaRequestExpiry"/>, #159). Usually zero; reported so an admin who ran
+/// <c>POST /quota/reset</c> and cleared six stale requests is told so, rather than having to read the
+/// audit log to find out.
+/// </param>
 /// <param name="Period">The UTC calendar month that was reset.</param>
 /// <param name="ResetDate">The instant written to every touched row's <c>ResetDate</c>.</param>
 public readonly record struct QuotaResetOutcome(
     int UsersResetCount,
     int TierSyncCount,
+    int ExpiredRequestCount,
     BillingPeriod Period,
     DateTimeOffset ResetDate);

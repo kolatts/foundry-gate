@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
@@ -26,6 +27,7 @@ namespace FoundryGate.Api.Services.Requests;
 public sealed class QuotaRequestService(
     AppDbContext dbContext,
     IQuotaResolutionService quotaResolution,
+    IQuotaRequestExpiry requestExpiry,
     GatewayTierMapper tierMapper,
     ICurrentUserAccessor currentUser,
     IAuditService audit,
@@ -161,6 +163,19 @@ public sealed class QuotaRequestService(
 
         var (entity, reviewer) = await LoadForReviewAsync(quotaIncreaseRequestId, cancellationToken);
 
+        var period = BillingPeriod.Current(timeProvider);
+        if (entity.PeriodYear != period.Year || entity.PeriodMonth != period.Month)
+        {
+            // The cheapest refusal, and the one that needs no other read. Everything below re-resolves
+            // *this* period, so approving a request filed for another one would raise today's budget
+            // while the row and the response still reported the month it was filed for — the number in
+            // the UI and the month actually affected would disagree (#159). The monthly reset closes
+            // these, so an admin normally never sees one; this is the guard for the window between a
+            // period ending and the next reset running.
+            throw new ConflictException(
+                $"Quota increase request {quotaIncreaseRequestId} was filed for {new BillingPeriod(entity.PeriodYear, entity.PeriodMonth)}, which has ended; the current period is {period}. Approving it would raise the budget for a different month than the one the request records. Reject it and ask the developer to submit a new one.");
+        }
+
         var subject = await dbContext.Users.SingleAsync(u => u.UserId == entity.UserId, cancellationToken);
         if (!subject.IsActive)
         {
@@ -202,7 +217,7 @@ public sealed class QuotaRequestService(
         // Immediately live: upserts this period's allocation and (via the resolution service) moves the
         // subscription to the new tier product before anything is committed, so a failed gateway move
         // fails the approval rather than leaving the database claiming a budget nobody enforces.
-        var resolution = await quotaResolution.ResolveAsync(subject.UserId, BillingPeriod.Current(timeProvider), cancellationToken);
+        var resolution = await quotaResolution.ResolveAsync(subject.UserId, period, cancellationToken);
 
         // Past the commit point (CONVENTIONS.md "External side effects have a commit point") exactly when
         // resolution actually moved the subscription: from there the audit row and the save must not be
@@ -296,6 +311,21 @@ public sealed class QuotaRequestService(
         return pending.Count;
     }
 
+    /// <inheritdoc />
+    public async Task<int> ExpireStaleAsync(CancellationToken cancellationToken)
+    {
+        // The rule is Core's, shared with the monthly reset; the Api's job here is only to give it a
+        // period and own the save. Nothing external is touched, so the caller's token applies throughout
+        // and a count of 0 leaves the change tracker (and the audit log) untouched.
+        var expired = await requestExpiry.ExpireStaleAsync(BillingPeriod.Current(timeProvider), cancellationToken);
+        if (expired > 0)
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        return expired;
+    }
+
     private async Task<QuotaIncreaseRequestResponse> SubmitCoreAsync(
         User subject,
         User actor,
@@ -308,6 +338,10 @@ public sealed class QuotaRequestService(
 
         var period = BillingPeriod.Current(timeProvider);
 
+        // The fast path, and the friendly one: it is what a serial double-submit hits, and it refuses
+        // before PreviewAsync's read. It is NOT the guard — two concurrent submissions can both pass it,
+        // which is what IX_QuotaIncreaseRequests_PendingPerUserPeriod is for (#147); the insert below
+        // translates that index's violation into this same 409.
         if (await dbContext.QuotaIncreaseRequests.AnyAsync(
             r => r.UserId == subject.UserId
                 && r.PeriodYear == period.Year
@@ -315,8 +349,7 @@ public sealed class QuotaRequestService(
                 && r.StatusType == QuotaRequestStatusType.Pending,
             cancellationToken))
         {
-            throw new ConflictException(
-                $"User {subject.UserId} already has a pending quota increase request for {period}. It must be approved or rejected before another can be submitted.");
+            throw new ConflictException(AlreadyPending(subject.UserId, period));
         }
 
         // Live resolution, not the stored allocation row: the row is whatever the last resolution wrote,
@@ -362,7 +395,7 @@ public sealed class QuotaRequestService(
         // them. One transaction is the cheaper price.)
         await using var transaction = await BeginTransactionIfNoneAsync(cancellationToken);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        await InsertAsync(subject.UserId, period, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.QuotaIncreaseSubmitted,
@@ -387,6 +420,41 @@ public sealed class QuotaRequestService(
 
         return await GetProjectedAsync(entity.QuotaIncreaseRequestId, cancellationToken);
     }
+
+    /// <summary>
+    /// Identifiers a violation of the pending-per-period index carries, per provider: SQL Server names
+    /// the index ("Cannot insert duplicate key row … with unique index
+    /// 'IX_QuotaIncreaseRequests_PendingPerUserPeriod'"), SQLite names the columns ("UNIQUE constraint
+    /// failed: QuotaIncreaseRequests.UserId, …"). Matching the identifiers rather than re-querying keeps
+    /// the 409 honest whichever provider is underneath — see <see cref="UniqueIndexViolation"/> for why
+    /// each index needs both. <c>UserId</c> is enough to pick this index out on SQLite: the table's only
+    /// other unique index is on <c>QuotaIncreaseRequestUnique</c>.
+    /// </summary>
+    private static readonly string[] PendingPerUserPeriodIndexMarkers =
+        ["IX_QuotaIncreaseRequests_PendingPerUserPeriod", "QuotaIncreaseRequests.UserId"];
+
+    /// <summary>
+    /// Inserts the pending request, turning the filtered unique index's violation into the same
+    /// <c>409</c> the read-then-write check above produces serially (#147). Two concurrent submissions
+    /// from one developer — a double-clicked button, a retrying client — used to leave two pending rows
+    /// for one period, showing the same person twice in the reviewer queue and stranding whichever one
+    /// nobody approved. Precedent for adopting the database's answer rather than re-querying:
+    /// <c>QuotaAllocationService</c>'s "lost the race" path and <c>GroupService.SaveGroupAsync</c>.
+    /// </summary>
+    private async Task InsertAsync(int userId, BillingPeriod period, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (UniqueIndexViolation.Mentions(exception, PendingPerUserPeriodIndexMarkers))
+        {
+            throw new ConflictException(AlreadyPending(userId, period), exception);
+        }
+    }
+
+    private static string AlreadyPending(int userId, BillingPeriod period) =>
+        $"User {userId} already has a pending quota increase request for {period}. It must be approved or rejected before another can be submitted.";
 
     /// <summary>
     /// A transaction for this unit of work, or <see langword="null"/> when the caller already owns one —

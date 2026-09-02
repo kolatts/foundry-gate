@@ -3,6 +3,7 @@ using System.Text.Json;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Quota;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -441,7 +442,7 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
         var auditWriter = new AuditWriter(Context, _clock);
         resolution ??= new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance);
-        var reset = new QuotaResetService(Context, resolution, auditWriter, _clock, NullLogger<QuotaResetService>.Instance);
+        var reset = new QuotaResetService(Context, resolution, new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance), auditWriter, _clock, NullLogger<QuotaResetService>.Instance);
 
         return new QuotaAllocationService(
             Context,

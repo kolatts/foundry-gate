@@ -170,7 +170,12 @@ public sealed class QuotaAllocationService(
 
         var outcome = await quotaReset.ResetAsync(QuotaResetTrigger.Admin(actor.UserId), cancellationToken);
 
-        return new QuotaResetResult(outcome.UsersResetCount, outcome.Period.Year, outcome.Period.Month, outcome.ResetDate);
+        return new QuotaResetResult(
+            outcome.UsersResetCount,
+            outcome.Period.Year,
+            outcome.Period.Month,
+            outcome.ResetDate,
+            outcome.ExpiredRequestCount);
     }
 
     private IQueryable<QuotaAllocation> ForPeriod(BillingPeriod period) =>

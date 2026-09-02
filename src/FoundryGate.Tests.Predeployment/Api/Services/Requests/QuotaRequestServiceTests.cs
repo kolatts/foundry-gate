@@ -5,6 +5,7 @@ using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -219,6 +220,58 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
 
         Assert.Contains("already has a pending quota increase request for 2026-09", exception.Message, StringComparison.Ordinal);
         Assert.Equal(1, await Context.QuotaIncreaseRequests.AsNoTracking().CountAsync(r => r.UserId == me.UserId));
+    }
+
+    [Fact]
+    public async Task SubmitAsync_turns_a_concurrent_duplicate_into_the_same_409_the_pre_check_gives()
+    {
+        // #147: the AnyAsync above is the fast path, not the guard — two submissions racing each other
+        // both pass it. The competing row is inserted from a second context in the window between the
+        // check and our INSERT, which is the only way to reach the filtered unique index from here; the
+        // service must answer with the same ConflictException a serial double-submit gets, not a 500.
+        await SeedReferenceDataAsync();
+        var me = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var body = new SubmitQuotaIncreaseRequest { RequestedQuota = TestGatewayTiers.PowerCap, Justification = Justification };
+
+        var raced = false;
+        CommandInterceptor.BeforeExecuting = sql =>
+        {
+            if (raced || !sql.Contains("INSERT INTO \"QuotaIncreaseRequests\"", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            raced = true;
+            using var winner = CreateVerificationContext();
+            winner.QuotaIncreaseRequests.Add(new QuotaIncreaseRequest
+            {
+                UserId = me.UserId,
+                RequestedByUserId = me.UserId,
+                PeriodYear = Period.Year,
+                PeriodMonth = Period.Month,
+                CurrentQuota = TestGatewayTiers.StandardCap,
+                RequestedQuota = TestGatewayTiers.PowerCap,
+                Justification = Justification,
+                StatusType = QuotaRequestStatusType.Pending,
+            });
+            winner.SaveChanges();
+        };
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            CreateService(me.EntraObjectId).SubmitAsync(body, CancellationToken.None));
+
+        CommandInterceptor.BeforeExecuting = _ => { };
+        Assert.Contains("already has a pending quota increase request for 2026-09", exception.Message, StringComparison.Ordinal);
+        Assert.True(raced);
+
+        // Nothing of the refused submission committed — no request row, and no audit row claiming one was
+        // filed. (The competing row is gone too: the harness's second context shares this one's
+        // connection, so its insert joined the service's transaction and rolled back with it. That is a
+        // property of the harness, not of the service — QuotaIncreaseRequestIndexTests proves the
+        // constraint itself across two independently-saving contexts.)
+        await using var verify = CreateVerificationContext();
+        Assert.Empty(await verify.QuotaIncreaseRequests.AsNoTracking().Where(r => r.UserId == me.UserId).ToListAsync());
+        Assert.Empty(await verify.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaIncreaseSubmitted).ToListAsync());
     }
 
     [Fact]
@@ -901,6 +954,86 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
         Assert.Equal(0, await CreateService(ada.EntraObjectId).CancelPendingForUserAsync(ada.UserId, "Account deprovisioned.", CancellationToken.None));
     }
 
+    // -- Stale requests (#159) --
+
+    [Fact]
+    public async Task ApproveAsync_refuses_a_request_filed_for_a_closed_period()
+    {
+        // #159: approval re-resolves the CURRENT period, so approving a request filed for an earlier one
+        // would raise this month's budget while the row and the response still reported the month it was
+        // filed for. Refused, and nothing about the subject moves.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var request = await SeedRequestAsync(ada, ada, new BillingPeriod(2026, 7), requestedQuota: TestGatewayTiers.PowerCap);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            CreateService(admin.EntraObjectId, isAdmin: true).ApproveAsync(
+                request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), CancellationToken.None));
+
+        Assert.Contains("2026-07", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("2026-09", exception.Message, StringComparison.Ordinal);
+
+        await using var verification = CreateVerificationContext();
+        var row = await verification.QuotaIncreaseRequests.AsNoTracking().SingleAsync(r => r.QuotaIncreaseRequestId == request.QuotaIncreaseRequestId);
+        Assert.Equal(QuotaRequestStatusType.Pending, row.StatusType);
+        Assert.Equal(TestGatewayTiers.StandardCap, (await verification.Users.AsNoTracking().SingleAsync(u => u.UserId == ada.UserId)).MonthlyTokenQuota);
+        Assert.Empty(_tierSync.Calls);
+    }
+
+    [Fact]
+    public async Task RejectAsync_still_works_on_a_request_from_a_closed_period()
+    {
+        // The other half of the rule: an admin must always be able to clear the queue by hand, and a
+        // rejection changes nobody's budget, so there is nothing for the period to make wrong.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var request = await SeedRequestAsync(ada, ada, new BillingPeriod(2026, 7), requestedQuota: TestGatewayTiers.PowerCap);
+
+        var result = await CreateService(admin.EntraObjectId, isAdmin: true).RejectAsync(
+            request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest { ReviewNotes = "Too late." }, CancellationToken.None);
+
+        Assert.Equal(QuotaRequestStatusType.Rejected, result.StatusType);
+        Assert.Equal(admin.UserId, result.ReviewedByUserId);
+    }
+
+    [Fact]
+    public async Task ExpireStaleAsync_closes_the_old_pending_requests_saves_and_audits_once()
+    {
+        await SeedReferenceDataAsync();
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var bob = await SeedUserAsync("Bob", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        var stale = await SeedRequestAsync(ada, ada, new BillingPeriod(2026, 7), requestedQuota: TestGatewayTiers.PowerCap);
+        var live = await SeedRequestAsync(bob, bob, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        var expired = await CreateService(ada.EntraObjectId).ExpireStaleAsync(CancellationToken.None);
+
+        Assert.Equal(1, expired);
+        await using var verification = CreateVerificationContext();
+        var rows = await verification.QuotaIncreaseRequests.AsNoTracking().ToDictionaryAsync(r => r.QuotaIncreaseRequestId);
+        Assert.Equal(QuotaRequestStatusType.Rejected, rows[stale.QuotaIncreaseRequestId].StatusType);
+        Assert.Equal(QuotaRequestStatusType.Pending, rows[live.QuotaIncreaseRequestId].StatusType);
+
+        var audit = Assert.Single(await verification.AuditLogs.AsNoTracking().ToListAsync());
+        Assert.Equal(AuditActions.QuotaRequestsExpired, audit.Action);
+        Assert.Null(audit.ActorUserId);
+    }
+
+    [Fact]
+    public async Task ExpireStaleAsync_with_nothing_stale_saves_nothing()
+    {
+        await SeedReferenceDataAsync();
+        var ada = await SeedUserAsync("Ada", u => u.MonthlyTokenQuota = TestGatewayTiers.StandardCap);
+        _ = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        var expired = await CreateService(ada.EntraObjectId).ExpireStaleAsync(CancellationToken.None);
+
+        Assert.Equal(0, expired);
+        await using var verification = CreateVerificationContext();
+        Assert.Empty(await verification.AuditLogs.AsNoTracking().ToListAsync());
+    }
+
     // -- Helpers --
 
     /// <summary>Real accessor + real audit + real resolution over this test's context, as DI would wire them per request.</summary>
@@ -920,6 +1053,7 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
         return new QuotaRequestService(
             Context,
             new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance),
+            new QuotaRequestExpiry(Context, auditWriter, _clock, NullLogger<QuotaRequestExpiry>.Instance),
             TestGatewayTiers.Mapper(),
             accessor,
             new AuditService(Context, auditWriter, accessor),

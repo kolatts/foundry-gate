@@ -65,73 +65,92 @@ optional — the Api refuses to start without at least one tier.
 Validated at startup (fail-fast): at least one tier, product ids ⊆ `GatewayTiers.All`, no
 duplicates, every cap in range, exactly one unlimited tier, and at least one finite tier.
 
-**Adding or changing a tier** means changing two things together: `quotaTiers` in
+**Adding or changing a tier** means changing three things together: `quotaTiers` in
 `infra/main.bicep` (creates the APIM product and renders its `llm-token-limit` policy) and
-`Gateway:Tiers` here (what the Api validates quotas against and serves from `GET /quota/tiers`).
-A new product id must also be added to `GatewayTiers.All` in Domain. Until #108 has infra emit
-`Gateway__Tiers__*`, a fork that overrides `quotaTiers` at deploy time updates this section by
-hand. Existing quotas that no longer match any tier are not rejected on read — they are enforced
-at the next tier up and flagged `isGatewayCapped` until an admin corrects them.
+`Gateway:Tiers` in **both** hosts' `appsettings.json` (what the Api validates quotas against and
+serves from `GET /quota/tiers`, and what quota resolution in the Functions host maps onto). A new
+product id must also be added to `GatewayTiers.All` in Domain. Three predeployment tests keep the
+four in step, so getting this wrong fails the build rather than a deployment.
+
+`Gateway__Tiers__*` is the one part of the `Gateway` section infra does **not** set — every other
+value is an environment variable on both hosts (see below). A fork that overrides the `quotaTiers`
+parameter at deploy time therefore has to update both `appsettings.json` files by hand, or the gateway
+will enforce caps the control plane has never heard of;
+[#201](https://github.com/kolatts/foundry-gate/issues/201) tracks having infra emit them. Existing
+quotas that no longer match any tier are not rejected on read — they are enforced at the next tier up
+and flagged `isGatewayCapped` until an admin corrects them.
 
 ---
 
-## API environment variables / appsettings
+## Environment variables / appsettings
 
-Set as Container App environment variables by `infra/modules/control-plane.bicep` — the
-Bicep is the source of truth for names and values, and the
-[Infrastructure Reference](/foundry-gate/reference/infrastructure/) lists them per host.
-None of them is a secret: SQL uses Entra authentication, so even the connection string is
-plain configuration. Secrets, when one is ever needed, are set out of band in Key Vault
-and referenced from appsettings as `@KeyVault(SecretName)`.
+The complete set for both control-plane hosts, grouped by who gets what: shared, gateway addressing,
+API-only, Functions-only. `infra/modules/control-plane.bicep` sets them as Container App environment
+variables and Function App application settings; the Bicep is the source of truth for the names, and
+the [Infrastructure Reference](/foundry-gate/reference/infrastructure/) covers the resources behind
+the values. None of them is a secret: SQL uses Entra authentication, so even the connection string is
+plain configuration. Secrets, when one is ever needed, are set out of band in Key Vault and referenced
+from appsettings as `@KeyVault(SecretName)`.
 
-| Key | Source | Description |
-|---|---|---|
-| `ASPNETCORE_ENVIRONMENT` | env var | `qa` or `prod` (lowercase; `local` is docker-only) |
-| `AZURE_CLIENT_ID` | env var | Client id of the API's user-assigned managed identity — selects it in the token credential chain |
-| `Azure__KeyVaultUrl` | env var | Key Vault URI for `@KeyVault()` reference resolution; absent locally, which skips resolution |
-| `ConnectionStrings__FoundryGate` | env var | Azure SQL connection string, `Authentication=Active Directory Default` (no password) |
-| `AzureAd__Instance` | env var | Entra cloud instance (`https://login.microsoftonline.com/` in the public cloud) |
-| `AzureAd__TenantId` | env var | Entra tenant ID for bearer token validation |
-| `AzureAd__ClientId` | env var | Entra App Registration client ID |
-| `AzureAd__Audience` | env var | Token audience (usually `api://{clientId}`) |
-| `Cors__AllowedOrigins__0` | env var | The Static Web App origin allowed to call `/api/v1` |
-| `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | env var | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` |
-| `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl` | env var | Where the APIM instance lives — for subscription create/rotate/delete and alias named-value edits. `ApimName` without the subscription/resource group fails startup; with all three absent the `/keys/*` routes answer `503` locally (and a `qa`/`prod` host refuses to start) |
-| `Gateway__FoundryAccountNames__{i}` | env var | Foundry account names in pool order (index 0 = primary) — the API manages OpenAI model deployments in exactly these accounts. The whole `Gateway` section may be absent locally (no gateway to manage; `/foundry/*` then answers `503`); account names without a subscription/resource group fail startup |
-| `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | env var | Workspace GUID (what the Log Analytics query API calls the workspace id) / ARM resource id |
-| `Gateway__KeyEncryptionKeyUri` | env var | Versionless URI of the Key Vault RSA key (`fg-apim-key-encryption`) that wraps stored APIM subscription keys (RSA-OAEP-256). The API resolves the key's current version per wrap (5-minute cache) and pins each stored value to the version that wrapped it, so a Key Vault key rotation needs no redeploy or re-encryption. Required when `KeyProtection__Provider` is `KeyVault` |
-| `KeyProtection__Provider` | env var | `KeyVault` (default; cloud) or `DataProtection` (machine-local key ring — accepted in the `local` environment only; the API refuses to start with it anywhere else) |
-| `Entra__Enabled` | env var | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` (see the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)). While `false`, the sync endpoints return `400`. |
-| `Entra__ServicePrincipalObjectId` | env var | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application. |
-| `Entra__GraphBaseUrl` | env var | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it). |
+Everything in the first two sections is set on **both** hosts from one shared block in the Bicep, so
+the API and the Functions host can never be told about different gateways
+([#108](https://github.com/kolatts/foundry-gate/issues/108)). A predeployment test,
+`GatewayInfraBindingTests`, reads that Bicep, binds a real `GatewayOptions` from the names it finds and
+checks by reflection that each one arrived — so it fails if a `Gateway__*` name drifts, if infra sets
+one nothing binds, or if a new `Gateway` member turns up with no declared source.
 
----
-
-## Function App settings
-
-Azure Functions (Flex Consumption) gets the same `Azure__*`, `ConnectionStrings__*`,
-`OpenTelemetry__*` and `Gateway__*` settings as the API, with its own identity in
-`AZURE_CLIENT_ID`, plus:
+### Shared by both hosts
 
 | Key | Description |
 |---|---|
-| `AZURE_FUNCTIONS_ENVIRONMENT` / `DOTNET_ENVIRONMENT` | `qa` or `prod` — the Functions host reads the first, the isolated worker's generic host the second |
-| `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage__credential=managedidentity` / `AzureWebJobsStorage__clientId` | Identity-based host storage. There is no storage connection string: shared-key access is disabled on the account |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Functions host telemetry |
+| `AZURE_CLIENT_ID` | Client id of that host's user-assigned managed identity — selects it in the token credential chain |
+| `Azure__KeyVaultUrl` | Key Vault URI for `@KeyVault()` reference resolution; absent locally, which skips resolution |
+| `ConnectionStrings__FoundryGate` | Azure SQL connection string, `Authentication=Active Directory Default` (no password) |
+| `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` and for a local `func start` |
 
-Of the shared `Gateway__*` values the Functions host actually reads two: `Gateway__Tiers__*`
-(quota resolution — shipped in the Functions project's own `appsettings.json`, which a
-predeployment test keeps byte-identical to the API's) and `Gateway__LogAnalyticsWorkspaceId`
-(usage reconciliation). That last one must be the workspace **GUID**, not the ARM resource id
-— it is what the Log Analytics query API calls the "workspace id" — and the host now refuses
-to start if it is given anything else. With it absent, the reconciliation job logs a warning
-each pass and does nothing, which is the correct behaviour for a fork that has not enabled
-the gateway's GenAI diagnostic setting.
+### Gateway addressing (`Gateway__*`, shared by both hosts)
 
-It also has four settings of its own, all optional; the two addressing ones are normally left unset:
+Set on both hosts so nothing has to type an ARM resource id into `SystemConfiguration`. Both hosts
+bind the whole section rather than a per-host subset that would drift; the **Read by** column says who
+actually consumes each value.
+
+| Key | Read by | Description |
+|---|---|---|
+| `Gateway__SubscriptionId` | API | Subscription the gateway resource group lives in — the ARM scope shared by APIM and Foundry |
+| `Gateway__ResourceGroup` | API | `rg-foundrygate-{env}` |
+| `Gateway__ApimName` | API | APIM service name (short name, not the ARM id) — subscription create/rotate/delete and alias named-value edits. `ApimName` without the subscription/resource group fails startup; with all three absent the `/keys/*` routes answer `503` locally (and a `qa`/`prod` host refuses to start) |
+| `Gateway__ApimGatewayUrl` | API | The gateway's public origin, handed to developers as `cliConfig.gatewayBaseUrl` on `GET /users/me`. Comes from the APIM module's own output, so it cannot drift from the gateway that was deployed |
+| `Gateway__FoundryAccountNames__{i}` | API | Foundry account names in pool order (index 0 = primary) — the API manages model deployments in exactly these accounts and no others. Account names without a subscription/resource group fail startup; the whole section may be absent locally, and `/foundry/*` then answers `503` |
+| `Gateway__KeyEncryptionKeyUri` | API | Versionless URI of the Key Vault RSA key (`fg-apim-key-encryption`) that wraps stored APIM subscription keys (RSA-OAEP-256). The API resolves the key's current version per wrap (5-minute cache) and pins each stored value to the version that wrapped it, so a Key Vault key rotation needs no redeploy or re-encryption. Required when `KeyProtection__Provider` is `KeyVault` |
+| `Gateway__LogAnalyticsWorkspaceId` | Functions | The workspace **GUID** — what the Log Analytics query API calls the "workspace id", not the ARM resource id. The only gateway value the usage reconciliation job needs; the host refuses to start if given anything that is not a GUID. Absent, the job logs a warning each pass and does nothing, which is right for a fork that has not enabled the gateway's GenAI diagnostic setting |
+| `Gateway__LogAnalyticsWorkspaceResourceId` | *(nothing yet)* | ARM resource id of the same workspace, for `QueryResourceAsync` and anything management-plane. Bound so nothing has to reconstruct it |
+| `Gateway__Tiers__{i}__*` | API + Functions | **Not set by infra** — see [Gateway quota tiers](#gateway-quota-tiers-gatewaytiers) above. Both hosts ship the table in their own `appsettings.json`, mirroring `infra/main.bicep`'s `quotaTiers`; a fork that overrides `quotaTiers` at deploy time must edit both by hand until [#201](https://github.com/kolatts/foundry-gate/issues/201) has infra emit them |
+
+### API only
+
+| Key | Description |
+|---|---|
+| `ASPNETCORE_ENVIRONMENT` | `qa` or `prod` (lowercase; `local` is docker-only) |
+| `AzureAd__Instance` | Entra cloud instance (`https://login.microsoftonline.com/` in the public cloud) |
+| `AzureAd__TenantId` | Entra tenant ID for bearer token validation |
+| `AzureAd__ClientId` | Entra App Registration client ID |
+| `AzureAd__Audience` | Token audience (usually `api://{clientId}`) |
+| `Cors__AllowedOrigins__0` | The Static Web App origin allowed to call `/api/v1` |
+| `KeyProtection__Provider` | `KeyVault` (default; cloud) or `DataProtection` (machine-local key ring — accepted in the `local` environment only; the API refuses to start with it anywhere else) |
+| `Entra__Enabled` | `false` by default. Turns on Microsoft Graph-backed Entra sync (`POST /users/sync`). There is **no client secret**: Graph is called as the API's own identity — the user-assigned managed identity in Azure, your Azure CLI login locally — which must hold the Graph *application* roles `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` (see the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)). While `false`, the sync endpoints return `400` |
+| `Entra__ServicePrincipalObjectId` | Optional. Object id of the enterprise application whose user assignments define who is a FoundryGate user. Defaults to the service principal of `AzureAd__ClientId`, resolved once at first use; set it only if developers are assigned to a different enterprise application |
+| `Entra__GraphBaseUrl` | Optional. Defaults to `https://graph.microsoft.com/v1.0`; sovereign-cloud forks override it (the token scope `{host}/.default` is derived from it) |
+
+The Functions host has no `AzureAd`, `Cors` or `KeyProtection` section at all: nothing there serves a
+request, so there is no token to validate, and its jobs never read or write a developer's key.
+
+### Functions only
 
 | Key | Default | Description |
 |---|---|---|
+| `AZURE_FUNCTIONS_ENVIRONMENT` / `DOTNET_ENVIRONMENT` | — | `qa` or `prod` — the Functions host reads the first, the isolated worker's generic host the second |
+| `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage__credential=managedidentity` / `AzureWebJobsStorage__clientId` | — | Identity-based host storage. There is no storage connection string: shared-key access is disabled on the account |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | — | Functions host telemetry |
 | `Storage__AccountName` | *(unset)* | Storage account for the monthly reset's distributed lock. Left empty, the host uses the account it already knows from `AzureWebJobsStorage__accountName`, so no extra configuration is needed in Azure |
 | `Storage__ConnectionString` | *(unset)* | Local Azurite only (`UseDevelopmentStorage=true`). A cloud connection string is refused at startup — the storage account does not accept shared keys |
 | `Storage__LockContainerName` | `foundrygate-locks` | Blob container holding the lock blob; created on demand |
