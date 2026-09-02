@@ -382,6 +382,62 @@ public class RequestsEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTe
     }
 
     [Fact]
+    public async Task Approving_a_request_the_user_has_already_outgrown_returns_409_and_does_not_downgrade_them()
+    {
+        var adminOid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(entraObjectId: adminOid);
+        var dev = await factory.SeedUserAsync(configure: u => u.MonthlyTokenQuota = StandardCap);
+        var request = await SeedRequestAsync(dev.UserId, PowerCap);
+        using var client = factory.CreateClientAs(adminOid, isAdmin: true);
+
+        // An admin makes them unlimited between filing and review (PUT /users/{id}/quota).
+        await using (var dbContext = factory.CreateDbContext())
+        {
+            var user = await dbContext.Users.SingleAsync(u => u.UserId == dev.UserId);
+            user.IsUnlimited = true;
+            user.MonthlyTokenQuota = null;
+            await dbContext.SaveChangesAsync();
+        }
+
+        var response = await client.PostAsJsonAsync(
+            new Uri($"{RequestsPath}/{request.QuotaIncreaseRequestId}/approve", UriKind.Relative),
+            new ReviewQuotaIncreaseRequest());
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
+        Assert.Contains("already unlimited", problem.GetProperty("detail").GetString(), StringComparison.Ordinal);
+
+        await using var probe = factory.CreateDbContext();
+        var unchanged = await probe.Users.SingleAsync(u => u.UserId == dev.UserId);
+        Assert.True(unchanged.IsUnlimited);
+        Assert.Null(unchanged.MonthlyTokenQuota);
+        Assert.Equal(
+            QuotaRequestStatusType.Pending,
+            (await probe.QuotaIncreaseRequests.SingleAsync(r => r.QuotaIncreaseRequestId == request.QuotaIncreaseRequestId)).StatusType);
+    }
+
+    [Fact]
+    public async Task Submit_measures_against_live_resolution_and_creates_no_allocation()
+    {
+        var oid = Guid.NewGuid().ToString();
+        var me = await factory.SeedUserAsync(entraObjectId: oid, configure: u => u.MonthlyTokenQuota = StandardCap);
+        using var client = factory.CreateClientAs(oid);
+
+        var response = await client.PostAsJsonAsync(
+            new Uri(RequestsPath, UriKind.Relative),
+            new SubmitQuotaIncreaseRequest { RequestedQuota = PowerCap, Justification = Justification });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<QuotaIncreaseRequestResponse>(JsonOptions);
+        Assert.Equal(StandardCap, created?.CurrentQuota);
+
+        // Asking for a budget is not activity that mints one: the row still appears on the first
+        // GET /quota/allocations/me of the month, not here.
+        await using var dbContext = factory.CreateDbContext();
+        Assert.False(await dbContext.QuotaAllocations.AnyAsync(a => a.UserId == me.UserId));
+    }
+
+    [Fact]
     public async Task Approving_an_unknown_request_returns_404()
     {
         var adminOid = Guid.NewGuid().ToString();
