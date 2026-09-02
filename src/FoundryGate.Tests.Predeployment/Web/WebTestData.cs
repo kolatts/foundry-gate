@@ -87,13 +87,15 @@ public static class WebTestData
         string tierProductId = GatewayTiers.Standard,
         bool isGatewayCapped = false,
         bool isHardStopped = false,
+        string userDisplayName = "Dev Eloper",
+        string userEmail = "dev@example.test",
         QuotaLevelType level = QuotaLevelType.SystemDefault) =>
         new(
             QuotaAllocationId: 1,
             userId,
             UserUnique,
-            UserDisplayName: "Dev Eloper",
-            UserEmail: "dev@example.test",
+            UserDisplayName: userDisplayName,
+            UserEmail: userEmail,
             PeriodYear: 2026,
             PeriodMonth: 9,
             IsUnlimited: isUnlimited,

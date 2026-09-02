@@ -1,5 +1,4 @@
 using Bunit;
-using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Dashboard.Contracts;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
@@ -53,20 +52,42 @@ public class DashboardPageTests : WebTestContext
     }
 
     [Fact]
-    public void A_non_zero_hard_stopped_count_reads_as_an_alert_and_links_to_the_pipeline_that_set_it()
+    public void A_non_zero_hard_stopped_count_reads_as_an_alert_and_links_to_the_people_it_counts()
     {
-        // A hard stop is an outage for that developer, and the audit log is the only place that says
-        // who and when — so the number is a link into it, not a dead figure. It has to be the action
-        // that actually sets the flag: `user.deactivated` (whose details carry
-        // `allocationHardStopped`). `key.revoked` is also written by DELETE /keys/{userId}, which
-        // explicitly leaves the allocation alone, so linking there lands on mostly other people.
+        // A hard stop is an outage for that developer, so the number is a link, not a dead figure —
+        // and since #208 it goes to the people themselves rather than to `audit?action=user.deactivated`,
+        // the trail of the pipeline that sets the flag. Both filters matter: the count is scoped to
+        // active users, so the list has to be too, or the card says 1 and the page shows everyone
+        // who ever left.
         Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(hardStoppedUserCount: 1));
 
         var page = RenderPage<Dashboard>();
 
         var link = page.Find("[data-testid='stat-hard-stopped-link']");
-        Assert.Equal($"audit?action={AuditActions.UserDeactivated}", link.GetAttribute("href"));
+        Assert.Equal("quota?isHardStopped=true&isActive=true", link.GetAttribute("href"));
         Assert.Contains("mud-error-text", page.Find("[data-testid='stat-hard-stopped']").InnerHtml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_non_zero_over_budget_count_links_to_the_same_query_it_was_counted_with()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(overBudgetUserCount: 7));
+
+        var page = RenderPage<Dashboard>();
+
+        var link = page.Find("[data-testid='stat-over-budget-link']");
+        Assert.Equal("quota?isOverBudget=true&isActive=true", link.GetAttribute("href"));
+        Assert.Contains("7 over budget", link.TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Nobody_over_budget_offers_no_link_to_follow()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(overBudgetUserCount: 0));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Empty(page.FindAll("[data-testid='stat-over-budget-link']"));
     }
 
     [Fact]

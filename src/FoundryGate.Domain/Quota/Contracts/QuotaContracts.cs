@@ -65,6 +65,44 @@ public record QuotaAllocationResponse(
     DateTimeOffset? ResetDate);
 
 /// <summary>
+/// Filters for GET /quota/allocations (<c>[FromQuery]</c>, alongside <c>PagedRequest</c>) — issue
+/// #208. Every property is optional; <see langword="null"/> (and, for <paramref name="Search"/> and
+/// <paramref name="Tier"/>, blank) means "no filter", so an empty query string is the unfiltered
+/// list this endpoint has always returned.
+/// </summary>
+/// <remarks>
+/// These exist so the dashboard's counts are reachable as lists (#54, #190): the hard-stopped and
+/// over-budget cards link here rather than to the audit trail of the pipeline that produced the
+/// state, which was the closest honest destination before there was a page to send anyone to.
+/// <para>
+/// <paramref name="IsActive"/> is here for the same honesty: the dashboard counts <em>active</em>
+/// users only (a deactivated account is already off the gateway), so a card showing 2 has to link
+/// to a list of the same 2. Without it the link would land on every allocation ever hard-stopped,
+/// most of which belong to people who have left.
+/// </para>
+/// </remarks>
+/// <param name="IsHardStopped">Match allocations whose key the deprovision pipeline revoked (<c>true</c>), or only those it did not (<c>false</c>).</param>
+/// <param name="IsOverBudget">
+/// <c>true</c>: a finite budget that reconciled usage has reached or passed
+/// (<c>TokensUsed &gt;= AllocatedTokens</c>) — the gateway is already refusing these developers.
+/// <c>false</c>: everyone else, unlimited allocations included. Same <c>&gt;=</c> as the dashboard
+/// count, so the two can never disagree.
+/// </param>
+/// <param name="Tier">
+/// APIM tier product id (<see cref="Constants.GatewayTiers"/>), matched case-insensitively against
+/// the configured tiers. A value that names no configured tier is matched literally rather than
+/// refused — allocations can carry a legacy product id, and finding them is the point.
+/// </param>
+/// <param name="Search">Substring of the owning user's display name or email.</param>
+/// <param name="IsActive">Match allocations owned by active (<c>true</c>) or deactivated (<c>false</c>) users.</param>
+public record QuotaAllocationQuery(
+    bool? IsHardStopped,
+    bool? IsOverBudget,
+    string? Tier,
+    string? Search,
+    bool? IsActive);
+
+/// <summary>
 /// One configured budget tier — GET /quota/tiers (any authenticated user). The values an admin (or
 /// an approval) may set as a monthly token quota are exactly these: a finite quota must equal a
 /// tier's <paramref name="MonthlyTokenQuota"/>, or be unlimited. The UI offers these as the choices

@@ -58,13 +58,17 @@ public sealed class QuotaAllocationService(
             t.IsUnlimited))];
 
     /// <inheritdoc />
-    public async Task<PagedResult<QuotaAllocationResponse>> ListCurrentPeriodAsync(PagedRequest paging, CancellationToken cancellationToken)
+    public async Task<PagedResult<QuotaAllocationResponse>> ListCurrentPeriodAsync(
+        QuotaAllocationQuery filter,
+        PagedRequest paging,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(filter);
         ArgumentNullException.ThrowIfNull(paging);
 
         var period = BillingPeriod.Current(timeProvider);
 
-        var page = await ForPeriod(period)
+        var page = await Filtered(ForPeriod(period), filter)
             .OrderBy(a => a.User.DisplayName)
             .ThenBy(a => a.UserId)
             .Select(Projection)
@@ -176,6 +180,62 @@ public sealed class QuotaAllocationService(
             outcome.Period.Month,
             outcome.ResetDate,
             outcome.ExpiredRequestCount);
+    }
+
+    /// <summary>
+    /// Applies <paramref name="filter"/> to a period's allocations (#208). Each clause is skipped
+    /// when its value is null, so an empty query string is the unfiltered list.
+    /// </summary>
+    /// <remarks>
+    /// The over-budget predicate is written the same way in both directions and matches
+    /// <c>DashboardService</c>'s count exactly, including the <c>&gt;=</c>: the gateway's
+    /// <c>token-quota</c> policy refuses the request that would cross the cap, so "reached it" is
+    /// already "cut off", and a card that counts one rule while the list it links to applies another
+    /// is worse than no link at all.
+    /// </remarks>
+    private IQueryable<QuotaAllocation> Filtered(IQueryable<QuotaAllocation> allocations, QuotaAllocationQuery filter)
+    {
+        if (filter.IsHardStopped is { } hardStopped)
+        {
+            allocations = allocations.Where(a => a.IsHardStopped == hardStopped);
+        }
+
+        if (filter.IsOverBudget is { } overBudget)
+        {
+            allocations = overBudget
+                ? allocations.Where(a => a.AllocatedTokens != null && a.TokensUsed >= a.AllocatedTokens.Value)
+                : allocations.Where(a => a.AllocatedTokens == null || a.TokensUsed < a.AllocatedTokens.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.Tier))
+        {
+            // Canonicalized against the configured tiers so ?tier=Standard finds the rows stored as
+            // "standard" on every provider, rather than depending on the database's collation for a
+            // value that is an identifier rather than prose. An id no tier claims is matched as
+            // typed: a legacy product id is exactly what someone would be looking for.
+            var tier = filter.Tier.Trim();
+            var canonical = tierMapper.Tiers
+                .FirstOrDefault(t => string.Equals(t.ProductId, tier, StringComparison.OrdinalIgnoreCase))?.ProductId
+                ?? tier;
+
+            allocations = allocations.Where(a => a.TierProductId == canonical);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.Search))
+        {
+            // Translates to LIKE '%term%'; case sensitivity follows the database collation (SQL
+            // Server's default is case-insensitive), which is what an admin typing a name expects.
+            // Same rule as GET /users?search=, so one search box behaves one way across the portal.
+            var search = filter.Search.Trim();
+            allocations = allocations.Where(a => a.User.DisplayName.Contains(search) || a.User.Email.Contains(search));
+        }
+
+        if (filter.IsActive is { } isActive)
+        {
+            allocations = allocations.Where(a => a.User.IsActive == isActive);
+        }
+
+        return allocations;
     }
 
     private IQueryable<QuotaAllocation> ForPeriod(BillingPeriod period) =>

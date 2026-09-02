@@ -227,12 +227,29 @@ well-formed and the caller can do nothing about it, so it is the operator's prob
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/quota/tiers` | Any | The configured budget tiers `{ productId, displayName, monthlyTokenQuota, isUnlimited }` — the only values a quota may take |
-| `GET` | `/quota/allocations` | Admin | All current-period allocations, paged (`?page=&pageSize=`), ordered by user display name; includes `userDisplayName`/`userEmail` |
+| `GET` | `/quota/allocations` | Admin | Current-period allocations, paged (`?page=&pageSize=`), ordered by user display name; includes `userDisplayName`/`userEmail`. Filters: `?isHardStopped=`, `?isOverBudget=`, `?tier=`, `?search=`, `?isActive=` |
 | `GET` | `/quota/allocations/me` | Any | Own current allocation. Resolved and created on the first call of the month (`tokensUsed = 0`, no `resetDate`). `403` until `GET /users/me` has provisioned the caller. |
 | `GET` | `/quota/allocations/{userId}` | Admin | Specific user's current allocation. Read-only: `404` if the user has none for this period yet. |
 | `POST` | `/quota/reset` | Admin | Manually trigger monthly reset (idempotent) — see below |
 
 "Current period" is always the UTC calendar month, matching the gateway's `token-quota` window.
+
+`GET /quota/allocations` takes five optional filters, all omitted by default (an empty query string
+is the plain list):
+
+| Filter | Matches |
+|---|---|
+| `?isHardStopped=true\|false` | Allocations whose key the deprovision pipeline revoked — or, with `false`, only those it did not |
+| `?isOverBudget=true\|false` | A finite budget that reconciled usage has **reached or passed** (`tokensUsed >= allocatedTokens`). Unlimited allocations are never over budget, so they fall in the `false` half |
+| `?tier=<productId>` | An APIM tier product, matched case-insensitively against `Gateway:Tiers`. A value naming no configured tier is matched literally, so a legacy `tierProductId` is still findable |
+| `?search=` | Substring of the owning user's display name or email (same rule as `GET /users?search=`) |
+| `?isActive=true\|false` | Allocations owned by active — or deactivated — users |
+
+`isOverBudget` uses the same `>=` the dashboard's `overBudgetUserCount` is computed with, and
+`isActive` exists because that count (and `hardStoppedUserCount`) is scoped to active users: the
+`/quota` page's links from those cards carry both filters, so the number on the card and the rows on
+the page are the same query. Note that the deprovision pipeline hard-stops *and* deactivates, so
+`?isHardStopped=true` on its own is mostly people who have left.
 
 `QuotaAllocationResponse` carries, besides the numeric fields (`allocatedTokens` — null when
 unlimited — `tokensUsed`, `percentUsed`, `isHardStopped`):

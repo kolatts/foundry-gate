@@ -85,11 +85,10 @@ else
 
         <MudItem xs="6" md="3">
             @* #190: the slot #54 asked for. A hard stop is an outage for that developer, so a non-zero
-               count is rendered as an alert and links to the audit trail of the pipeline that sets the
-               flag — `user.deactivated`, which carries `allocationHardStopped` in its details. Not
-               `key.revoked`: `DELETE /keys/{userId}` writes that too and explicitly does not hard-stop,
-               so it would land on a set that is mostly other people. #208 will replace this with a
-               link to the affected users themselves. *@
+               count is rendered as an alert and links to the people it names (#208) — /quota with the
+               same two filters this count is computed from, active accounts included, so the number
+               and the list can never disagree. It used to link to `audit?action=user.deactivated`,
+               the trail of the pipeline that sets the flag, because there was no list to link to. *@
             <MudCard Elevation="2"
                      Outlined="@(_summary.HardStoppedUserCount > 0)"
                      Class="@(_summary.HardStoppedUserCount > 0 ? "mud-border-error" : null)"
@@ -98,7 +97,7 @@ else
                     <MudText Typo="Typo.subtitle2" Class="fg-label">Hard-stopped</MudText>
                     @if (_summary.HardStoppedUserCount > 0)
                     {
-                        <MudLink Href="@($"audit?action={AuditActions.UserDeactivated}")" Underline="Underline.Hover" data-testid="stat-hard-stopped-link">
+                        <MudLink Href="quota?isHardStopped=true&isActive=true" Underline="Underline.Hover" data-testid="stat-hard-stopped-link">
                             <MudText Typo="Typo.h4" Class="fg-mono mud-error-text">@_summary.HardStoppedUserCount.ToString("N0")</MudText>
                         </MudLink>
                         <MudText Typo="Typo.caption" Color="Color.Error" Class="d-block">
@@ -127,9 +126,20 @@ else
                         <span class="fg-mono" data-testid="stat-tokens-used">@_summary.TotalTokensUsedThisPeriod.ToString("N0")</span>
                         tokens reconciled from gateway logs ·
                         <span data-testid="stat-over-budget">
-                            @(_summary.OverBudgetUserCount > 0
-                                ? $"{_summary.OverBudgetUserCount:N0} over budget — the gateway is already refusing them"
-                                : "nobody over budget")
+                            @if (_summary.OverBudgetUserCount > 0)
+                            {
+                                @* Links to the same query the count came from (#208), so "7 over budget"
+                                   lands on seven rows. *@
+                                <MudLink Href="quota?isOverBudget=true&isActive=true" Underline="Underline.Hover" data-testid="stat-over-budget-link">
+                                    @($"{_summary.OverBudgetUserCount:N0} over budget")
+                                </MudLink>
+
+                                <text> — the gateway is already refusing them</text>
+                            }
+                            else
+                            {
+                                <text>nobody over budget</text>
+                            }
                         </span>
                     </MudText>
 

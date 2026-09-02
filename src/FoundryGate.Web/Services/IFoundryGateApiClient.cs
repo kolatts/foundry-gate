@@ -69,7 +69,13 @@ public partial interface IFoundryGateApiClient
     Task<ApiCallResult<IReadOnlyList<GroupSyncResult>>> SyncGroupsFromEntraAsync(CancellationToken ct = default);
 
     // Quota — spec §4.3
-    Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(PagedRequest paging, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /quota/allocations?isHardStopped=&amp;isOverBudget=&amp;tier=&amp;search=&amp;isActive=&amp;page=&amp;pageSize=</c>
+    /// — the admin list behind <c>/quota</c>'s grid (#208). Null (and blank) filters are omitted from
+    /// the query string, so an unfiltered <see cref="QuotaAllocationQuery"/> is the plain list.
+    /// </summary>
+    Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(QuotaAllocationQuery query, PagedRequest paging, CancellationToken ct = default);
 
     Task<ApiCallResult<QuotaAllocationResponse>> GetMyQuotaAllocationAsync(CancellationToken ct = default);
 

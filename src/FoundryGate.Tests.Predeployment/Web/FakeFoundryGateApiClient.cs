@@ -141,6 +141,9 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     public RecordedCalls<(PagedRequest Paging, string? Search)> GroupListCalls { get; } = new();
 
+    /// <summary>Every filtered <c>GET /quota/allocations</c> the <c>/quota</c> page made, in order (#208).</summary>
+    public RecordedCalls<(QuotaAllocationQuery Query, PagedRequest Paging)> QuotaAllocationListCalls { get; } = new();
+
     public RecordedCalls<int> ActivatedUserIds { get; } = new();
 
     public RecordedCalls<int> DeactivatedUserIds { get; } = new();
@@ -191,6 +194,12 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
     public FakeFoundryGateApiClient ArrangeUsers(params UserResponse[] users)
     {
         UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page(users));
+        return this;
+    }
+
+    public FakeFoundryGateApiClient ArrangeAllocations(params QuotaAllocationResponse[] allocations)
+    {
+        QuotaAllocationsResult = ApiCallResult<PagedResult<QuotaAllocationResponse>>.Ok(WebTestData.Page(allocations));
         return this;
     }
 
@@ -332,8 +341,14 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
     public Task<ApiCallResult<IReadOnlyList<QuotaTierResponse>>> GetQuotaTiersAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetQuotaTiersAsync), QuotaTiersResult);
 
-    public Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(PagedRequest paging, CancellationToken ct = default) =>
-        RespondAsync(nameof(GetQuotaAllocationsAsync), QuotaAllocationsResult);
+    public Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(
+        QuotaAllocationQuery query,
+        PagedRequest paging,
+        CancellationToken ct = default)
+    {
+        QuotaAllocationListCalls.Add((query, paging));
+        return RespondAsync(nameof(GetQuotaAllocationsAsync), QuotaAllocationsResult);
+    }
 
     public Task<ApiCallResult<QuotaAllocationResponse>> GetMyQuotaAllocationAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetMyQuotaAllocationAsync), QuotaAllocationResult);

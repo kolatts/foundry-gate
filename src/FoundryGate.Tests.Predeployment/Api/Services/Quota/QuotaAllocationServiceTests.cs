@@ -10,6 +10,7 @@ using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Quota;
+using FoundryGate.Domain.Quota.Contracts;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.AspNetCore.Http;
@@ -28,6 +29,9 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 15, 12, 0, 0, TimeSpan.Zero);
     private static readonly BillingPeriod Period = new(2026, 9);
+
+    /// <summary>An all-null <see cref="QuotaAllocationQuery"/> — the unfiltered list (#208). The filters themselves are covered end to end in <c>Api/Endpoints/QuotaEndpointTests</c>.</summary>
+    private static readonly QuotaAllocationQuery NoFilter = new(null, null, null, null, null);
 
     private readonly MutableTimeProvider _clock = new(Now);
     private readonly RecordingGatewayTierSync _tierSync = new();
@@ -208,8 +212,8 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         await SeedAllocationAsync(amy, new BillingPeriod(2026, 8), allocated: 1, tokensUsed: 0); // not current
 
         var service = CreateService(admin.EntraObjectId);
-        var page1 = await service.ListCurrentPeriodAsync(new PagedRequest(Page: 1, PageSize: 2), CancellationToken.None);
-        var page2 = await service.ListCurrentPeriodAsync(new PagedRequest(Page: 2, PageSize: 2), CancellationToken.None);
+        var page1 = await service.ListCurrentPeriodAsync(NoFilter, new PagedRequest(Page: 1, PageSize: 2), CancellationToken.None);
+        var page2 = await service.ListCurrentPeriodAsync(NoFilter, new PagedRequest(Page: 2, PageSize: 2), CancellationToken.None);
 
         Assert.Equal(3, page1.TotalCount);
         Assert.Equal(2, page1.TotalPages);

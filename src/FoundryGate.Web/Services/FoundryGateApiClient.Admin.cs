@@ -22,10 +22,7 @@ public sealed partial class FoundryGateApiClient
 
         var parts = PagingParts(paging);
         AddIfPresent(parts, "search", query.Search);
-        if (query.IsActive is { } isActive)
-        {
-            parts.Add($"isActive={(isActive ? "true" : "false")}");
-        }
+        AddIfPresent(parts, "isActive", query.IsActive);
 
         return GetAsync<PagedResult<UserResponse>>($"users?{string.Join('&', parts)}", ct);
     }
@@ -76,6 +73,15 @@ public sealed partial class FoundryGateApiClient
         if (!string.IsNullOrWhiteSpace(value))
         {
             parts.Add($"{name}={Uri.EscapeDataString(value)}");
+        }
+    }
+
+    /// <summary>Lower-cased <c>true</c>/<c>false</c> — what the API's <c>bool?</c> query binders read; omitted when unset.</summary>
+    private static void AddIfPresent(List<string> parts, string name, bool? value)
+    {
+        if (value is { } flag)
+        {
+            parts.Add($"{name}={(flag ? "true" : "false")}");
         }
     }
 }

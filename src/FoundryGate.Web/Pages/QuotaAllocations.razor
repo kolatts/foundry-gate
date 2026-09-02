@@ -1,0 +1,350 @@
+@page "/quota"
+@attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
+
+@* /quota (#208): the list behind the dashboard's counts. #190 could say how many developers are
+   hard-stopped or over budget; nothing could say who. The cards link here with the filter already
+   applied, so the number and the names are the same query. *@
+
+<PageTitle>Quota — Foundry Gate</PageTitle>
+
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <MudText Typo="Typo.h4" HtmlTag="h1" Class="mb-1">Quota allocations</MudText>
+    <MudText Typo="Typo.body1" Class="mud-text-secondary mb-4">
+        This month's budgets, as reconciled from gateway logs. Rows appear for developers who have
+        been resolved this period — their first visit of the month, or the last reset.
+    </MudText>
+
+    <MudChipSet T="string" Class="mb-3" data-testid="quota-filter-chips">
+        <MudChip T="string"
+                 Variant="@ChipVariant(_isHardStopped == true)"
+                 Color="Color.Error"
+                 Icon="@Icons.Material.Filled.Block"
+                 OnClick="@ToggleHardStoppedAsync"
+                 data-testid="quota-chip-hard-stopped">Hard-stopped</MudChip>
+        <MudChip T="string"
+                 Variant="@ChipVariant(_isOverBudget == true)"
+                 Color="Color.Warning"
+                 Icon="@Icons.Material.Filled.TrendingUp"
+                 OnClick="@ToggleOverBudgetAsync"
+                 data-testid="quota-chip-over-budget">Over budget</MudChip>
+        <MudChip T="string"
+                 Variant="@ChipVariant(_isActive == true)"
+                 Color="Color.Success"
+                 Icon="@Icons.Material.Filled.PersonOutline"
+                 OnClick="@ToggleActiveAsync"
+                 data-testid="quota-chip-active">Active accounts</MudChip>
+        @if (HasFilter)
+        {
+            <MudChip T="string"
+                     Variant="Variant.Text"
+                     Icon="@Icons.Material.Filled.FilterAltOff"
+                     OnClick="@ClearFiltersAsync"
+                     data-testid="quota-chip-clear">Clear filters</MudChip>
+        }
+    </MudChipSet>
+
+    <MudDataGrid @ref="_grid"
+                 T="QuotaAllocationResponse"
+                 ServerData="@LoadAsync"
+                 Loading="@_loading"
+                 Hover="true"
+                 Dense="true"
+                 Elevation="1"
+                 RowClick="@OnRowClick"
+                 data-testid="quota-grid">
+        <ToolBarContent>
+            <MudTextField T="string"
+                          Value="@_search"
+                          ValueChanged="@OnSearchChangedAsync"
+                          Immediate="true"
+                          DebounceInterval="300"
+                          Placeholder="Search name or email"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          IconSize="Size.Medium"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Clearable="true"
+                          Class="mt-0"
+                          Style="max-width: 22rem;"
+                          data-testid="quota-search" />
+            <MudSpacer />
+            <MudSelect T="string"
+                       Value="@_tier"
+                       ValueChanged="@OnTierChangedAsync"
+                       Label="Tier"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Dense="true"
+                       Clearable="true"
+                       Style="max-width: 14rem;"
+                       data-testid="quota-tier-filter">
+                <MudSelectItem T="string" Value="@(null)">All tiers</MudSelectItem>
+                @foreach (var tier in _tiers)
+                {
+                    <MudSelectItem T="string" Value="@tier.ProductId">@tier.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+        </ToolBarContent>
+        <Columns>
+            <TemplateColumn Title="Developer" Sortable="false">
+                <CellTemplate>
+                    <MudText Typo="Typo.body2">@context.Item.UserDisplayName</MudText>
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary">@context.Item.UserEmail</MudText>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Tier" Sortable="false">
+                <CellTemplate>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text">
+                        @TierDisplay.TierDisplayName(context.Item.TierProductId, _tiers)
+                    </MudChip>
+                    @if (context.Item.IsGatewayCapped)
+                    {
+                        @* The stored number is not a configured tier, so the gateway enforces the next
+                           one up. An admin can only fix what they can see. *@
+                        <MudTooltip Text="This budget matches no configured tier, so the gateway enforces the next tier up.">
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small" />
+                        </MudTooltip>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Used" CellClass="fg-mono" Sortable="false">
+                <CellTemplate>@TierDisplay.FormatTokensExact(context.Item.TokensUsed)</CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Budget" CellClass="fg-mono" Sortable="false">
+                <CellTemplate>@TierDisplay.FormatTokensExact(context.Item.AllocatedTokens)</CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Share of budget" Sortable="false">
+                <CellTemplate>
+                    @if (context.Item.PercentUsed is null)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Success" Icon="@Icons.Material.Filled.AllInclusive">
+                            Unlimited
+                        </MudChip>
+                    }
+                    else
+                    {
+                        <MudProgressLinear Color="@TierDisplay.GaugeColor(context.Item.PercentUsed)"
+                                           Value="@TierDisplay.GaugeValue(context.Item.PercentUsed)"
+                                           Rounded="true"
+                                           Size="Size.Small"
+                                           Class="my-1" />
+                        <MudText Typo="Typo.caption" Class="fg-mono">@($"{TierDisplay.GaugeValue(context.Item.PercentUsed):0.#}%")</MudText>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="State" Sortable="false">
+                <CellTemplate>
+                    @if (context.Item.IsHardStopped)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Error"
+                                 data-testid="@($"quota-hard-stopped-{context.Item.UserId}")">Hard-stopped</MudChip>
+                    }
+                    @if (IsOverBudget(context.Item))
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning"
+                                 data-testid="@($"quota-over-budget-{context.Item.UserId}")">Over budget</MudChip>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="" Sortable="false">
+                <CellTemplate>
+                    @* RowClick is mouse-only — a <tr> takes no focus and carries no role — so every
+                       row also has a control keyboard and screen-reader users can reach. *@
+                    <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                   Size="Size.Small"
+                                   Href="@($"users/{context.Item.UserId}")"
+                                   aria-label="@($"Open {context.Item.UserDisplayName}")"
+                                   data-testid="@($"quota-open-{context.Item.UserId}")" />
+                </CellTemplate>
+            </TemplateColumn>
+        </Columns>
+        <NoRecordsContent>
+            <MudText Class="pa-6 mud-text-secondary" data-testid="quota-empty">
+                @(HasFilter
+                    ? "No allocations match those filters."
+                    : "No allocations for this period yet. They appear on a developer's first visit of the month, or after a reset.")
+            </MudText>
+        </NoRecordsContent>
+        <PagerContent>
+            <MudDataGridPager T="QuotaAllocationResponse" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+        </PagerContent>
+    </MudDataGrid>
+}
+
+@code {
+    /// <summary>
+    /// The dashboard's hard-stopped card links here as <c>?isHardStopped=true&amp;isActive=true</c>
+    /// and the over-budget figure as <c>?isOverBudget=true&amp;isActive=true</c>. The names match the
+    /// API's own query string, so the page URL and the request it makes read the same.
+    /// </summary>
+    [Parameter, SupplyParameterFromQuery(Name = "isHardStopped")]
+    public bool? HardStoppedQuery { get; set; }
+
+    [Parameter, SupplyParameterFromQuery(Name = "isOverBudget")]
+    public bool? OverBudgetQuery { get; set; }
+
+    [Parameter, SupplyParameterFromQuery(Name = "isActive")]
+    public bool? ActiveQuery { get; set; }
+
+    [Parameter, SupplyParameterFromQuery(Name = "tier")]
+    public string? TierQuery { get; set; }
+
+    [Parameter, SupplyParameterFromQuery(Name = "search")]
+    public string? SearchQuery { get; set; }
+
+    private MudDataGrid<QuotaAllocationResponse>? _grid;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+    private bool? _isHardStopped;
+    private bool? _isOverBudget;
+    private bool? _isActive;
+    private string? _tier;
+    private string? _search;
+    private bool _loading;
+    private bool _accessDenied;
+
+    private bool HasFilter =>
+        _isHardStopped is not null
+        || _isOverBudget is not null
+        || _isActive is not null
+        || !string.IsNullOrWhiteSpace(_tier)
+        || !string.IsNullOrWhiteSpace(_search);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tiers = await Tiers.GetAsync();
+    }
+
+    /// <summary>Keeps the filters in step with the query string, including a later in-app navigation to it.</summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_isHardStopped == HardStoppedQuery
+            && _isOverBudget == OverBudgetQuery
+            && _isActive == ActiveQuery
+            && string.Equals(_tier, Blank(TierQuery), StringComparison.Ordinal)
+            && string.Equals(_search, Blank(SearchQuery), StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _isHardStopped = HardStoppedQuery;
+        _isOverBudget = OverBudgetQuery;
+        _isActive = ActiveQuery;
+        _tier = Blank(TierQuery);
+        _search = Blank(SearchQuery);
+
+        if (_grid is not null)
+        {
+            await ReloadAsync();
+        }
+    }
+
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
+
+    /// <summary>
+    /// Same rule as <c>DashboardService</c>'s over-budget count and the API's <c>isOverBudget</c>
+    /// filter — <c>&gt;=</c>, because the gateway refuses the request that would cross the cap.
+    /// </summary>
+    private static bool IsOverBudget(QuotaAllocationResponse allocation) =>
+        allocation.AllocatedTokens is { } allocated && allocation.TokensUsed >= allocated;
+
+    private static Variant ChipVariant(bool selected) => selected ? Variant.Filled : Variant.Outlined;
+
+    private async Task<GridData<QuotaAllocationResponse>> LoadAsync(GridState<QuotaAllocationResponse> state, CancellationToken cancellationToken)
+    {
+        _loading = true;
+        try
+        {
+            var query = new QuotaAllocationQuery(_isHardStopped, _isOverBudget, _tier, _search, _isActive);
+            var result = await Api.GetQuotaAllocationsAsync(query, new PagedRequest(state.Page + 1, state.PageSize), cancellationToken);
+
+            return result.ToGridData(OnForbidden, Snackbar, "Couldn't load quota allocations.");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>A chip is a two-state filter: on means "only these", off means "no opinion" (not "only the others").</summary>
+    private Task ToggleHardStoppedAsync()
+    {
+        _isHardStopped = _isHardStopped == true ? null : true;
+        return ApplyAsync();
+    }
+
+    private Task ToggleOverBudgetAsync()
+    {
+        _isOverBudget = _isOverBudget == true ? null : true;
+        return ApplyAsync();
+    }
+
+    private Task ToggleActiveAsync()
+    {
+        _isActive = _isActive == true ? null : true;
+        return ApplyAsync();
+    }
+
+    private Task OnSearchChangedAsync(string? search)
+    {
+        _search = Blank(search);
+        return ApplyAsync();
+    }
+
+    private Task OnTierChangedAsync(string? tier)
+    {
+        _tier = Blank(tier);
+        return ApplyAsync();
+    }
+
+    private Task ClearFiltersAsync()
+    {
+        _isHardStopped = null;
+        _isOverBudget = null;
+        _isActive = null;
+        _tier = null;
+        _search = null;
+        return ApplyAsync();
+    }
+
+    /// <summary>
+    /// Writes the filters back into the URL and reloads from page one. Outbound as well as inbound:
+    /// the page you are looking at is the page you can send someone. Replacing rather than pushing
+    /// keeps Back meaning "the page before this one".
+    /// </summary>
+    private Task ApplyAsync()
+    {
+        var uri = Navigation.GetUriWithQueryParameters(new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["isHardStopped"] = _isHardStopped,
+            ["isOverBudget"] = _isOverBudget,
+            ["isActive"] = _isActive,
+            ["tier"] = _tier,
+            ["search"] = _search,
+        });
+
+        Navigation.NavigateTo(uri, forceLoad: false, replace: true);
+        return ReloadAsync();
+    }
+
+    /// <summary>Back to page 1: page 3 of the old filter is rarely page 3 of the new one.</summary>
+    private Task ReloadAsync() => _grid?.ReloadFromFirstPageAsync() ?? Task.CompletedTask;
+
+    private void OnForbidden()
+    {
+        _accessDenied = true;
+        StateHasChanged();
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<QuotaAllocationResponse> args) =>
+        Navigation.NavigateTo($"users/{args.Item.UserId}");
+}
