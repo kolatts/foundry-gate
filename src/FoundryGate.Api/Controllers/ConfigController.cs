@@ -28,14 +28,12 @@ public sealed class ConfigController(IConfigService configService) : ApiControll
     /// <response code="200">The row as it now stands.</response>
     /// <response code="400">The value breaks the key's rule; the <c>detail</c> states the rule.</response>
     /// <response code="403">The caller is not an admin, or has no <c>User</c> row yet (call <c>GET /users/me</c> first).</response>
-    /// <response code="404">No such configuration key.</response>
-    /// <response code="409">The key is retired and read-only; the <c>detail</c> names its replacement.</response>
+    /// <response code="404">No such configuration key — including one retired by #164/#123, whose row no longer exists.</response>
     [HttpPut("{key}")]
     [ProducesResponseType<SystemConfigEntryResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public Task<SystemConfigEntryResponse> UpdateAsync(
         string key,
         [FromBody] UpdateSystemConfigRequest request,

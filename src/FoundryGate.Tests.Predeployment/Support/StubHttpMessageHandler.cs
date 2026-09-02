@@ -14,6 +14,7 @@ namespace FoundryGate.Tests.Predeployment.Support;
 public sealed class StubHttpMessageHandler : HttpMessageHandler
 {
     private readonly List<(Func<string, bool> Match, HttpStatusCode Status, string Json)> _routes = [];
+    private readonly List<(Func<string, bool> Match, Func<Exception> Failure)> _transportFailures = [];
 
     /// <summary>Decoded absolute URLs of every request seen, in order.</summary>
     public List<string> Requests { get; } = [];
@@ -22,6 +23,19 @@ public sealed class StubHttpMessageHandler : HttpMessageHandler
     public StubHttpMessageHandler OnJson(Func<string, bool> urlMatch, string json, HttpStatusCode status = HttpStatusCode.OK)
     {
         _routes.Add((urlMatch, status, json));
+        return this;
+    }
+
+    /// <summary>
+    /// Scripts a <em>transport</em> failure — no response, no Graph error body — for matching requests:
+    /// DNS, a reset connection, a timeout. What a caller sees once the SDK's retry handler has given up
+    /// is an <see cref="HttpRequestException"/> or a <see cref="TaskCanceledException"/>, never an
+    /// <c>ODataError</c>, and code that only catches the latter behaves very differently here.
+    /// Matched before <see cref="OnJson"/>.
+    /// </summary>
+    public StubHttpMessageHandler OnTransportFailure(Func<string, bool> urlMatch, Func<Exception>? failure = null)
+    {
+        _transportFailures.Add((urlMatch, failure ?? (() => new HttpRequestException("The connection was reset."))));
         return this;
     }
 
@@ -39,6 +53,14 @@ public sealed class StubHttpMessageHandler : HttpMessageHandler
 
         var url = Uri.UnescapeDataString(request.RequestUri!.AbsoluteUri);
         Requests.Add(url);
+
+        foreach (var (match, failure) in _transportFailures)
+        {
+            if (match(url))
+            {
+                throw failure();
+            }
+        }
 
         foreach (var (match, status, json) in _routes)
         {

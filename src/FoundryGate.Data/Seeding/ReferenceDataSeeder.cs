@@ -19,12 +19,16 @@ public static class ReferenceDataSeeder
 
         var results = new Dictionary<string, ReferenceDataSyncResult>
         {
-            // deleteFilter restricts orphan deletion to the eight known seeded keys
-            // (SystemConfigurationKeys.All): without it, a fork operator who adds their own
-            // SystemConfiguration row (or a future key this code doesn't know about yet) would
-            // have it silently deleted on the next deploy's re-seed.
+            // deleteFilter restricts orphan deletion to keys this code knows about — the seeded set
+            // (SystemConfigurationKeys.All) plus the retired ones (SystemConfigurationKeys.Retired,
+            // #164/#123). Without it, a fork operator who adds their own SystemConfiguration row (or a
+            // future key this code doesn't know about yet) would have it silently deleted on the next
+            // deploy's re-seed. Retiring a key is therefore a two-part move: drop it from All and from
+            // GetSeedData so it stops being seeded, and name it in Retired so the filter still covers
+            // it and the row is deleted on the next `db seed-reference`. Dropping it from All alone
+            // would strand the row in every deployed database forever.
             [nameof(SystemConfiguration)] = await context.SyncReferenceDataAsync<SystemConfiguration, string>(
-                deleteFilter: c => SystemConfigurationKeys.All.Contains(c.Key),
+                deleteFilter: c => SystemConfigurationKeys.All.Contains(c.Key) || SystemConfigurationKeys.Retired.Contains(c.Key),
                 cancellationToken: cancellationToken)
         };
 

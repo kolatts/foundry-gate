@@ -47,7 +47,7 @@ public sealed class ConfigService(
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(request);
 
-        // Materialize the whole table (nine rows on a shipped fork) and match in memory rather than
+        // Materialize the whole table (five rows on a shipped fork) and match in memory rather than
         // translating the comparison: `Key == key` is case-insensitive under SQL Server's default
         // collation but case-sensitive under the SQLite the tests run on, and an endpoint that 404s
         // on one provider and succeeds on the other is a contract nobody can document. Tracked (no
@@ -57,7 +57,6 @@ public sealed class ConfigService(
             ?? throw new KeyNotFoundException(
                 $"There is no system configuration key '{key}'. GET /api/v1/config lists the keys this fork has.");
 
-        SystemConfigValidator.EnsureEditable(entry.Key);
         var newValue = validator.Normalize(entry.Key, request.Value);
 
         // Resolve the actor before mutating anything: "no User row for this caller" is a 403, and it
