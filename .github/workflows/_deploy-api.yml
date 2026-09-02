@@ -172,7 +172,8 @@ jobs:
         id: verify
         run: |
           echo "Waiting for the latest revision to become healthy ..."
-          name="unknown"; image="unknown"; health="unknown"; running="unknown"
+          # $IMAGE (env) is the image we deployed; $current_* is what the revision reports.
+          name="unknown"; current_image="unknown"; health="unknown"; running="unknown"
           for i in $(seq 1 30); do
             # -o json + jq, not tsv + `read`: properties.healthState is empty on a freshly
             # created revision and the default IFS collapses the consecutive tabs, shifting
@@ -182,16 +183,16 @@ jobs:
               --name "$FG_CONTAINER_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" \
               --query "sort_by([?properties.active], &properties.createdTime)[-1]" -o json)"
             name="$(jq -r '.name // "unknown"' <<<"$revision")"
-            image="$(jq -r '.properties.template.containers[0].image // "unknown"' <<<"$revision")"
+            current_image="$(jq -r '.properties.template.containers[0].image // "unknown"' <<<"$revision")"
             health="$(jq -r '.properties.healthState // "unknown"' <<<"$revision")"
             running="$(jq -r '.properties.runningState // "unknown"' <<<"$revision")"
-            echo "attempt $i: revision=${name} image=${image} health=${health} running=${running}"
-            if [ "$image" = "$IMAGE" ] && [ "$health" = "Healthy" ] && { [ "$running" = "Running" ] || [ "$running" = "RunningAtMaxScale" ]; }; then
+            echo "attempt $i: revision=${name} image=${current_image} health=${health} running=${running}"
+            if [ "$current_image" = "$IMAGE" ] && [ "$health" = "Healthy" ] && { [ "$running" = "Running" ] || [ "$running" = "RunningAtMaxScale" ]; }; then
               break
             fi
             sleep 10
           done
-          if [ "$image" != "$IMAGE" ] || [ "$health" != "Healthy" ]; then
+          if [ "$current_image" != "$IMAGE" ] || [ "$health" != "Healthy" ]; then
             echo "::error::Latest active revision did not become Healthy on ${IMAGE} within 5 minutes (health=${health}, running=${running})."
             exit 1
           fi

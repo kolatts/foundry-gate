@@ -44,6 +44,8 @@ const main: Stage[] = [
       'probe TCP 1433',
       'deploy dacpac (DacFx, data-loss blocked)',
       'seed reference → seed test (non-prod)',
+      'grant identities (contained SQL users)',
+      'remove runner firewall rule',
     ],
   },
   {
@@ -72,10 +74,11 @@ const main: Stage[] = [
     can change Azure. Merging to main is pull-request-only. Track two, on merge, is one workflow, deploy-all.yml: the
     fully automated deploy chain with OIDC and GitHub Environment gates from dev to production. Infra, then database
     (whitelist runner IP, wait for firewall propagation, probe port 1433, deploy the dacpac with data-loss blocking,
-    seed reference data and test data outside production), then the API, then Functions and UI in parallel, then
-    post-deploy tests, then a summary. Functions and UI wait for the API because on the very first deploy the API
-    stage re-runs the infrastructure template to replace the placeholder image. Every workflow file exists on main;
-    badges mark that none has yet run against Azure (live validation is #105).
+    seed reference data and test data outside production, grant the API and Functions managed identities their
+    contained database users, and remove the runner's firewall rule again), then the API, then Functions and UI in
+    parallel, then post-deploy tests, then a summary. Functions and UI wait for the API because on the very first
+    deploy the API stage re-runs the infrastructure template to replace the placeholder image. Every workflow file
+    exists on main; badges mark that none has yet run against Azure (live validation is #105).
   </p>
 
   <section class="fgd-plane fgd-plane--neutral">

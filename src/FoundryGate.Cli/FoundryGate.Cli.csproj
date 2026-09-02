@@ -5,8 +5,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.CommandLine" />
+    <PackageReference Include="Azure.ResourceManager" />
+    <PackageReference Include="Azure.ResourceManager.Sql" />
+    <!-- AppTokenCredential (Workload/ManagedIdentity in cloud, Azure CLI locally) — the same
+         class FoundryGate.Api uses, per CONVENTIONS.md "copy the class, not DefaultAzureCredential". -->
+    <PackageReference Include="Imagile.Framework.Configuration" />
     <PackageReference Include="Microsoft.SqlServer.DacFx" />
+    <PackageReference Include="System.CommandLine" />
   </ItemGroup>
 
   <ItemGroup>

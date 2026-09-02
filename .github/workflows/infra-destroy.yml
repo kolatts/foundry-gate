@@ -102,9 +102,11 @@ jobs:
             --query "sort_by([].{Name:name, Type:type, Location:location}, &Type)" -o table | tee resources.txt
 
           # Soft-deleted services that block name reuse after the group is gone.
-          echo "apim-name=$(az resource list -g "$RESOURCE_GROUP" --resource-type Microsoft.ApiManagement/service --query '[0].name' -o tsv)" >> "$GITHUB_OUTPUT"
-          echo "key-vault-name=$(az resource list -g "$RESOURCE_GROUP" --resource-type Microsoft.KeyVault/vaults --query '[0].name' -o tsv)" >> "$GITHUB_OUTPUT"
-          echo "location=$(az group show --name "$RESOURCE_GROUP" --query location -o tsv)" >> "$GITHUB_OUTPUT"
+          {
+            echo "apim-name=$(az resource list -g "$RESOURCE_GROUP" --resource-type Microsoft.ApiManagement/service --query '[0].name' -o tsv)"
+            echo "key-vault-name=$(az resource list -g "$RESOURCE_GROUP" --resource-type Microsoft.KeyVault/vaults --query '[0].name' -o tsv)"
+            echo "location=$(az group show --name "$RESOURCE_GROUP" --query location -o tsv)"
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "## About to delete resource group \`${RESOURCE_GROUP}\` (${{ inputs.environment }})"

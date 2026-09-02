@@ -74,7 +74,7 @@ public class SystemConfiguration : IModifiedDate, IReferenceDataEntity<SystemCon
     /// <summary>The eight placeholder defaults forks must override via the admin config page (spec §3.1).</summary>
     public static IEnumerable<SystemConfiguration> GetSeedData() =>
     [
-        new() { Key = SystemConfigurationKeys.DefaultMonthlyTokenQuota, Value = "1000000" },
+        new() { Key = SystemConfigurationKeys.DefaultMonthlyTokenQuota, Value = "5000000" }, // = the Standard tier cap (Gateway:Tiers / infra quotaTiers); a budget is always a tier (D-013)
         new() { Key = SystemConfigurationKeys.ApimResourceId, Value = string.Empty },
         new() { Key = SystemConfigurationKeys.ApimGatewayUrl, Value = string.Empty },
         new() { Key = SystemConfigurationKeys.ApimProductId, Value = "foundrygate" },

@@ -120,6 +120,22 @@ When a developer's allocation is created or updated, `IQuotaResolutionService` w
 
 The resolved value is written to `QuotaAllocation` for the current period, and the subscription is created under (or moved to) the matching tier product. Admins can see which level resolved each developer's quota in the user detail view. Tiers exist because APIM's `token-quota` attribute accepts only literals — one policy cannot read a per-user number — so each tier is a product with its own rendered policy.
 
+**A budget is a tier.** Resolution picks a tier, not just a number: every quota the
+control plane accepts must equal a configured tier's cap (5M → *Standard*, 20M →
+*Power*, with the shipped caps) or be unlimited, so the number written to the allocation
+and the tier the gateway enforces are the same thing. Admins pick from `GET /quota/tiers`
+rather than typing a figure. A legacy or hand-edited value that matches no tier is never
+rejected on read — it is enforced at the next tier up and flagged **gateway-capped** so an
+admin can correct it. The allocation records the level, the tier, and the flag, and
+moving the developer's subscription onto the tier product is what actually changes
+their budget.
+
+**Resets never zero usage.** The gateway's monthly window resets itself at the UTC month
+boundary, so the monthly job and the admin's manual `POST /quota/reset` only (re)resolve
+every active developer's allocation for the current UTC month: new rows start at zero,
+existing rows are re-resolved but keep their reconciled usage, and the hard-stop mirror is
+cleared. Running it twice in a month is safe and audited once per run.
+
 ---
 
 ## APIM enforcement — how limits actually block traffic
@@ -249,7 +265,11 @@ and variable.
 The database stage is the one with moving parts: the runner's IP is whitelisted on the SQL
 server, the workflow waits for firewall propagation and probes port 1433, then the
 `FoundryGate.Database` dacpac is deployed with DacFx (data-loss blocked unless a reviewed
-`allow-data-loss` override is passed) and reference data is seeded. Bicep re-runs pass
+`allow-data-loss` override is passed) and reference data is seeded. Two steps then close
+the loop that Bicep cannot: the API and Functions managed identities get their contained
+database users (`db grant-identities` — an Entra-only SQL server cannot grant a managed
+identity access through ARM), and the runner's own firewall rule is removed again, along
+with any left behind by a cancelled earlier run. Bicep re-runs pass
 `createModelDeployments=false` because Anthropic model deployments are create-once under
 ARM, and always pass the image the API is currently running so a re-run never resets it.
 That makes the ownership split explicit: Claude deployments belong to the infrastructure

@@ -54,41 +54,63 @@ public record GroupMemberResponse(
     DateTimeOffset AddedDate,
     int? AddedByUserId);
 
-/// <summary>POST /groups body.</summary>
-/// <param name="Name">Group display name.</param>
-/// <param name="Description">Optional free-text description.</param>
-/// <param name="EntraGroupId">
-/// Optional Entra group object id to link for &#167;7.3 group sync. Validated as
-/// GUID-shaped (Entra object ids are always GUIDs) rather than typed as <see cref="Guid"/>
-/// directly, to stay consistent with <c>User.EntraObjectId</c> — also a GUID-shaped
-/// <see cref="string"/> elsewhere in this domain (see <see cref="ValidationConstants.EntraObjectIdMaxLength"/>).
-/// </param>
-/// <param name="IsUnlimited">When true, members get unlimited quota unless overridden individually.</param>
-/// <param name="MonthlyTokenQuota">Group-level quota override for members; null falls through the resolution chain (spec &#167;3.2).</param>
-public record CreateGroupRequest(
-    [property: Required, StringLength(ValidationConstants.GroupNameMaxLength, MinimumLength = 1)]
-    string Name,
-    [property: StringLength(ValidationConstants.DescriptionMaxLength)]
-    string? Description,
-    [property: StringLength(ValidationConstants.EntraObjectIdMaxLength)]
-    [property: RegularExpression(ValidationConstants.GuidPattern, ErrorMessage = "EntraGroupId must be a GUID (Entra object id).")]
-    string? EntraGroupId,
-    bool IsUnlimited,
-    [property: Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
-    long? MonthlyTokenQuota);
+/// <summary>POST /groups body. Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).</summary>
+public record CreateGroupRequest
+{
+    /// <summary>Group display name.</summary>
+    [Required]
+    [StringLength(ValidationConstants.GroupNameMaxLength, MinimumLength = 1)]
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>Optional free-text description.</summary>
+    [StringLength(ValidationConstants.DescriptionMaxLength)]
+    public string? Description { get; init; }
+
+    /// <summary>
+    /// Optional Entra group object id to link for &#167;7.3 group sync. Validated as
+    /// GUID-shaped (Entra object ids are always GUIDs) rather than typed as <see cref="Guid"/>
+    /// directly, to stay consistent with <c>User.EntraObjectId</c> — also a GUID-shaped
+    /// <see cref="string"/> elsewhere in this domain (see <see cref="ValidationConstants.EntraObjectIdMaxLength"/>).
+    /// </summary>
+    [StringLength(ValidationConstants.EntraObjectIdMaxLength)]
+    [RegularExpression(ValidationConstants.GuidPattern, ErrorMessage = "EntraGroupId must be a GUID (Entra object id).")]
+    public string? EntraGroupId { get; init; }
+
+    /// <summary>When true, members get unlimited quota unless overridden individually.</summary>
+    public bool IsUnlimited { get; init; }
+
+    /// <summary>Group-level quota override for members; null falls through the resolution chain (spec &#167;3.2).</summary>
+    [Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
+    public long? MonthlyTokenQuota { get; init; }
+}
 
 /// <summary>PUT /groups/{id} body — admin updates name/description/quota (spec &#167;4.2).</summary>
-public record UpdateGroupRequest(
-    [property: Required, StringLength(ValidationConstants.GroupNameMaxLength, MinimumLength = 1)]
-    string Name,
-    [property: StringLength(ValidationConstants.DescriptionMaxLength)]
-    string? Description,
-    bool IsUnlimited,
-    [property: Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
-    long? MonthlyTokenQuota);
+public record UpdateGroupRequest
+{
+    /// <summary>Group display name.</summary>
+    [Required]
+    [StringLength(ValidationConstants.GroupNameMaxLength, MinimumLength = 1)]
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>Optional free-text description.</summary>
+    [StringLength(ValidationConstants.DescriptionMaxLength)]
+    public string? Description { get; init; }
+
+    /// <summary>When true, members get unlimited quota unless overridden individually.</summary>
+    public bool IsUnlimited { get; init; }
+
+    /// <summary>Group-level quota override for members; null falls through the resolution chain (spec &#167;3.2).</summary>
+    [Range(0, ValidationConstants.MaxMonthlyTokenQuota)]
+    public long? MonthlyTokenQuota { get; init; }
+}
 
 /// <summary>POST /groups/{id}/members body.</summary>
-public record AddGroupMemberRequest([property: Range(1, int.MaxValue, ErrorMessage = "UserId must be a valid user id.")] int UserId);
+public record AddGroupMemberRequest
+{
+    /// <summary>The user to add. An empty body binds to <c>0</c>, which <c>[Range]</c> rejects as a field-level 400.</summary>
+    [Range(1, int.MaxValue, ErrorMessage = "UserId must be a valid user id.")]
+    public int UserId { get; init; }
+}
 
 /// <summary>Result of POST /groups/sync-entra for one group (spec &#167;7.3).</summary>
 public record GroupSyncResult(int GroupId, int AddedCount, int RemovedCount);

@@ -35,8 +35,11 @@ public class AppSettings
     /// with docker SQL and no Azure connectivity at all.</summary>
     public AzureOptions Azure { get; set; } = new();
 
-    /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108). Optional
-    /// as a whole — absent locally; <c>/foundry/*</c> needs it (see <see cref="GatewayOptions"/>).</summary>
+    /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108 — optional as
+    /// a whole; absent locally; <c>/foundry/*</c> and <c>/keys/*</c> need it) plus the always-required
+    /// quota <see cref="GatewayOptions.Tiers"/> (<c>Gateway:Tiers</c>, shipped in <c>appsettings.json</c>;
+    /// issue #32 / D-013). See <see cref="GatewayOptions"/>.</summary>
+    [Required]
     public GatewayOptions Gateway { get; set; } = new();
 
     /// <summary>Microsoft Graph directory sync (#40/#41). Off by default so local dev and the test

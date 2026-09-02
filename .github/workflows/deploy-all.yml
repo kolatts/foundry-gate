@@ -110,6 +110,11 @@ jobs:
       sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
       sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
       run-seed-test: ${{ github.event_name == 'workflow_dispatch' && inputs.run-seed-test || false }}
+      # Create the contained SQL users WITH SID from the identities' client ids, so Azure SQL
+      # never has to look them up in Entra (which would need Directory Readers on the server
+      # identity) - #143.
+      api-identity-client-id: ${{ needs.prepare-database.outputs.api-identity-client-id }}
+      functions-identity-client-id: ${{ needs.prepare-database.outputs.functions-identity-client-id }}
     secrets:
       AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
       AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}

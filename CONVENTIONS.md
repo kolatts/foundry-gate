@@ -122,6 +122,14 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   New action/target kinds are constants in Domain's `AuditActions` / `AuditTargetTypes`,
   never inline strings. `details` is JSON-serialized (camelCase, cycles ignored) — pass
   the fields you mean rather than a tracked entity, and never a key or token.
+- **Quota values are tiers (D-013).** A monthly token quota is either unlimited (`null`) or
+  exactly one configured tier cap (`GatewayOptions.Tiers` from `Gateway:Tiers`; `GET /quota/tiers`
+  lists them). Every write path that accepts a quota — `PUT /users/{id}/quota`, group
+  create/update, request approval — calls
+  `GatewayTierMapper.EnsureValidQuota(quota, nameof(request.MonthlyTokenQuota))` (singleton in
+  `Services/Quota`) *before* persisting: a non-tier value is an `ArgumentException` (400) whose
+  message lists the allowed values. Resolution (`GatewayTierMapper.Map`) never throws for a legacy
+  value — it maps to the next tier up and sets `IsGatewayCapped` so reads keep working.
 - **External side effects have a commit point.** When a service mutates something outside
   the database (ARM, APIM, Graph), resolve the actor and do every refusal *before* the
   call; once the external system has accepted the change, the audit row and
@@ -161,6 +169,21 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   `Program.cs`'s first line, which is also how `UseEnvironment` gets through. External
   systems (ARM, APIM, Graph) are fakes owned by the factory (`FoundryClient` is the
   precedent) — never a live client.
+- **Request DTOs are init-property records; response DTOs are positional records.** A
+  `*Request` body is `public record X { [Required, StringLength(n)] public string Name
+  { get; init; } = string.Empty; … }` — attributes on the properties, `= string.Empty` on
+  every non-nullable string so a missing JSON field is a field-level `[Required]` 400 rather
+  than a `$`-level deserialization error. Never a positional record with `[property: …]`
+  (MVC throws at bind time → 500 on every body of that type, #128) and never attributes on
+  the constructor parameters (MVC is happy, but `Validator` and Blazor's
+  `DataAnnotationsValidator` read properties, so nothing validates). Responses are never
+  bound by MVC, so they stay positional (`public record Y(int Id, string Name);`).
+  `DomainArchitectureTests` fails the build for either broken placement;
+  `Api/Endpoints/RequestDtoBindingTests` posts each request record through the real pipeline
+  (via a test-only controller the factory registers) and asserts 400, never 500.
+- **Generated URLs are lowercase** (`RouteOptions.LowercaseUrls`, #129): `CreatedAtRoute`'s
+  `Location` reads `/api/v1/foundry/...`, route values included — so anything a route value
+  identifies must resolve case-insensitively (Foundry account and deployment names do).
 
 ## Schema pipeline (no EF migrations)
 
@@ -230,7 +253,11 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
 - **Unlike imagile-app, infra deploys automatically**: merge to main runs Bicep
   what-if (posted to PR pre-merge per #69) then deploys — no manual dispatch as the
   normal path. Full chain on merge: infra → dacpac db deploy (runner IP whitelist →
-  firewall wait → deploy → seed) → api/functions/ui → postdeployment tests → summary.
+  firewall wait → deploy → seed → grant identities → remove runner firewall rule) →
+  api/functions/ui → postdeployment tests → summary. The grant step creates the API and
+  Functions contained SQL users `WITH SID` from the identities' client ids (deployment
+  outputs) — `FROM EXTERNAL PROVIDER` would need Directory Readers on a SQL server
+  identity the Bicep does not declare, so it is opt-in only.
 - SQL deploy niceties to copy verbatim: CLI-driven runner IP whitelist, 60s firewall
   propagation wait, TCP 1433 probe, Entra-admin-group membership verification with
   retries.
