@@ -174,19 +174,20 @@ public sealed class ApimKeyService(
 
         try
         {
-            // Both keys (#117): the secondary is never issued, but leaving it unrotated would leave a
-            // live credential whose lifetime exceeds every primary the developer has ever held.
             await apim.RegeneratePrimaryKeyAsync(subscriptionName, cancellationToken);
-            await apim.RegenerateSecondaryKeyAsync(subscriptionName, cancellationToken);
         }
         catch (ApimSubscriptionNotFoundException exception)
         {
             throw SubscriptionMissing(user, exception);
         }
 
-        // From here on APIM holds new keys; anything that stops us storing the new primary leaves the
-        // row's ciphertext stale. Keep the previous values so the failure path can restore them and
-        // leave a trail instead of a silently unrevealable key.
+        // THE commit point (#168): the developer's old key died the instant APIM returned above, and
+        // nothing can bring it back. Everything from here therefore runs on CancellationToken.None — a
+        // client that hangs up in this window must not be the reason the new key is never stored, which
+        // would leave the row holding ciphertext for a key the gateway no longer recognises and lock the
+        // developer out with no signal. That includes the second regeneration: it is past the same point.
+        // Keep the previous values so the failure path can restore them and leave a trail instead of a
+        // silently unrevealable key.
         var previous = (user.ApimSubscriptionKey, user.ApimSubscriptionKeyHint, user.ApimKeyIssuedDate);
         AuditLog? rotatedRow = null;
         DateTimeOffset issuedDate;
@@ -194,21 +195,30 @@ public sealed class ApimKeyService(
 
         try
         {
-            keys = await apim.ListSecretsAsync(subscriptionName, cancellationToken);
+            // Both keys (#117): the secondary is never issued, but leaving it unrotated would leave a
+            // live credential whose lifetime exceeds every primary the developer has ever held.
+            await apim.RegenerateSecondaryKeyAsync(subscriptionName, CancellationToken.None);
+
+            keys = await apim.ListSecretsAsync(subscriptionName, CancellationToken.None);
             issuedDate = timeProvider.GetUtcNow();
-            await StoreKeyAsync(user, user.ApimSubscriptionId, keys.PrimaryKey, issuedDate, cancellationToken);
+            await StoreKeyAsync(user, user.ApimSubscriptionId, keys.PrimaryKey, issuedDate, CancellationToken.None);
 
             rotatedRow = await audit.LogAsync(
                 AuditActions.KeyRotated,
                 AuditTargetTypes.ApiKey,
                 TargetId(user),
                 new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, keysRegenerated = new[] { "primary", "secondary" } },
-                cancellationToken);
-            await dbContext.SaveChangesAsync(cancellationToken);
+                CancellationToken.None);
+            await dbContext.SaveChangesAsync(CancellationToken.None);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception)
         {
-            await RecordRotationFailureAsync(user, subscriptionName, previous, rotatedRow, exception, cancellationToken);
+            // No `when (exception is not OperationCanceledException)` guard (#168): a cancellation used
+            // to be the one failure that skipped compensation entirely, silently — the worst outcome of
+            // the lot, since the key is already dead. With the section above on None a cancellation
+            // should no longer arise here at all, and if one does it gets the same restore-and-audit
+            // treatment as every other failure.
+            await RecordRotationFailureAsync(user, subscriptionName, previous, rotatedRow, exception);
             throw;
         }
 
@@ -397,18 +407,18 @@ public sealed class ApimKeyService(
     }
 
     /// <summary>
-    /// APIM regenerated the keys but the new primary was not stored. Restore the previous (stale)
+    /// APIM regenerated the primary key but the new value was not stored. Restore the previous (stale)
     /// values so the row is at least self-consistent, drop the unsaved <c>key.rotated</c> row, log at
     /// Error with the remedy, and try to leave a <c>key.rotation-failed</c> audit row (best effort — the
-    /// database itself may be what failed).
+    /// database itself may be what failed). Takes no <c>CancellationToken</c> on purpose (#168): this
+    /// runs past the commit point, so it must not be abandoned by the token that abandoned the rotation.
     /// </summary>
     private async Task RecordRotationFailureAsync(
         User user,
         string subscriptionName,
         (string Key, string Hint, DateTimeOffset? IssuedDate) previous,
         AuditLog? rotatedRow,
-        Exception exception,
-        CancellationToken cancellationToken)
+        Exception exception)
     {
         user.ApimSubscriptionKey = previous.Key;
         user.ApimSubscriptionKeyHint = previous.Hint;
@@ -433,11 +443,13 @@ public sealed class ApimKeyService(
                 AuditTargetTypes.ApiKey,
                 TargetId(user),
                 new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, error = exception.GetType().Name, remedy = RotationFailureRemedy },
-                cancellationToken);
-            await dbContext.SaveChangesAsync(cancellationToken);
+                CancellationToken.None);
+            await dbContext.SaveChangesAsync(CancellationToken.None);
         }
-        catch (Exception auditException) when (auditException is not OperationCanceledException)
+        catch (Exception auditException)
         {
+            // Every arm logs (#168): a compensation that gives up quietly is how a dead key becomes
+            // invisible.
             logger.LogError(auditException, "Could not record the key.rotation-failed audit row for user {UserId}; the log line above is the only trail.", user.UserId);
         }
     }

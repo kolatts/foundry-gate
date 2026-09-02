@@ -281,6 +281,69 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task Rotate_survives_a_client_that_disconnects_the_instant_APIM_regenerates_the_key()
+    {
+        // #168's probe. The old primary is dead the moment RegeneratePrimaryKeyAsync returns, but
+        // everything after it ran on the request's token — so a disconnect in that window left the row
+        // holding ciphertext for a key APIM no longer recognises, and POST /keys/me/reveal handed the
+        // developer a dead credential with no signal at all.
+        var (service, admin) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Hangs Up", "hangsup@contoso.test");
+        var name = ApimSubscriptionNames.ForUser(developer.UserId);
+        var provisioned = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+
+        using var cts = new CancellationTokenSource();
+        _apim.AfterMutation = cts.Cancel;
+
+        var rotated = await service.RotateAsync(developer, cts.Token);
+
+        _apim.AfterMutation = null;
+        Assert.True(cts.IsCancellationRequested);
+
+        // Both keys still rotated (#117) — the secondary regeneration is past the same commit point.
+        Assert.Contains($"RegenerateSecondary:{name}", _apim.Calls);
+
+        // What the caller was handed is what the gateway holds...
+        Assert.Equal(_apim.KeysOf(name).PrimaryKey, rotated.PlaintextKey);
+        Assert.NotEqual(provisioned.PlaintextKey, rotated.PlaintextKey);
+
+        // ...and so is what the row stores, so a later reveal cannot return a dead credential.
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Equal(rotated.PlaintextKey, await _protector.UnprotectAsync(saved.ApimSubscriptionKey, CancellationToken.None));
+        Assert.Equal(rotated.PlaintextKey[^4..], saved.ApimSubscriptionKeyHint);
+        Assert.Equal(Now, saved.ApimKeyIssuedDate);
+
+        var audit = await SingleAuditAsync(AuditActions.KeyRotated, developer.UserId);
+        Assert.Equal(admin.UserId, audit.ActorUserId);
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotationFailed).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Rotate_compensation_runs_even_when_the_failure_is_a_cancellation()
+    {
+        // The other half of #168: RecordRotationFailureAsync used to be guarded by
+        // `when (exception is not OperationCanceledException)`, so a cancellation was the one failure
+        // that skipped compensation entirely — nothing restored, nothing logged, nothing audited, on the
+        // exact path where the key is already dead.
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Cancelled Mid-Rotate", "cancelled@contoso.test");
+        var provisioned = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var envelopeBefore = developer.ApimSubscriptionKey;
+        _apim.ThrowOnListSecrets = new OperationCanceledException("the caller went away");
+
+        _ = await Assert.ThrowsAsync<OperationCanceledException>(() => service.RotateAsync(developer, CancellationToken.None));
+
+        _apim.ThrowOnListSecrets = null;
+        Assert.Equal(envelopeBefore, developer.ApimSubscriptionKey);
+        Assert.Equal(provisioned.IssuedDate, developer.ApimKeyIssuedDate);
+        var failed = await SingleAuditAsync(AuditActions.KeyRotationFailed, developer.UserId);
+        Assert.Contains("\"error\":\"OperationCanceledException\"", failed.Details, StringComparison.Ordinal);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("STALE", StringComparison.Ordinal));
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotated).ToListAsync());
+    }
+
+    [Fact]
     public async Task RevokeAsSystem_deletes_the_subscription_and_writes_a_system_audit_row_without_any_HTTP_caller()
     {
         var (service, _) = await CreateServiceAsync();

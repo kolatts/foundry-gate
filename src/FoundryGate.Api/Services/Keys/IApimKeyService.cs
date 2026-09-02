@@ -73,6 +73,13 @@ public interface IApimKeyService
     /// the previous (now stale) ciphertext is kept, an error is logged and a <c>key.rotation-failed</c>
     /// audit row records the remedy: rotate again, or revoke and re-provision.
     /// </summary>
+    /// <remarks>
+    /// The commit point is the <em>primary</em> regeneration — the developer's old key is dead the
+    /// moment it returns — so everything after it (the secondary regeneration included) runs on
+    /// <see cref="CancellationToken.None"/> and the compensation above cannot be skipped by a
+    /// cancellation (#168). <paramref name="cancellationToken"/> therefore governs only the refusals
+    /// and the first ARM call.
+    /// </remarks>
     /// <exception cref="KeyNotFoundException"><paramref name="user"/> has no key → 404.</exception>
     /// <exception cref="ConflictException">The APIM subscription behind the key no longer exists → 409 with "revoke and re-provision" guidance.</exception>
     Task<ApiKeyRevealResponse> RotateAsync(User user, CancellationToken cancellationToken);
