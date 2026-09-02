@@ -19,6 +19,7 @@ pull request ──► ci.yml (build · Predeployment tests · format)   require
              ├─► .github/**          → actionlint.yml     : actionlint + shellcheck + script tests
              ├─► infra/**            → infra-deploy.yml   : validate + what-if (dev-plan), posted as a PR comment
              ├─► Dockerfile          → api-deploy.yml     : image build + /health smoke test
+             ├─► FoundryGate.Web/**  → ui-deploy.yml      : SWA preview (ui-preview), closed when the PR closes
              └─► docs-site/**        → docs-deploy.yml    : Astro build
 
 merge to main ─► anything deployable → deploy-all.yml   : THE chain, against dev
@@ -95,22 +96,42 @@ children (`workflow_call`) that take `environment:` and are composed by `deploy-
 | `infra-destroy.yml` | dispatch only (`environment`, `confirmation`, `purge-soft-deleted`) | `validate-confirmation` → `list-resources` → `destroy` | `dev-destroy` / `prod-destroy` | `AZURE_*` on the destroy environment |
 | `api-deploy.yml` | PR touching the Dockerfile → image build check · dispatch (`environment`, `run-seed-test`) | `image-build` (PR, no Azure) · `_prepare-database` → `_deploy-database` → `_deploy-api` | `dev` / `production` | — |
 | `functions-deploy.yml` | dispatch only | `_deploy-functions` | `dev` / `production` | — |
-| `ui-deploy.yml` | dispatch only | `_deploy-ui` | `dev` / `production` | — |
+| `ui-deploy.yml` | PR touching `src/FoundryGate.Web/**` (+ Domain/Core, shared props) → SWA preview · dispatch (`environment`) | `preview` / `close-preview` (PR) · `_deploy-ui` (dispatch) | `ui-preview` (PR) · `dev` / `production` (dispatch) | `AZURE_*`, `FG_STATIC_WEB_APP_NAME`, `FG_RESOURCE_GROUP`, `FG_API_BASE_URL`, `FG_ENTRA_*` on `ui-preview` |
 | `docs-deploy.yml` | PR/push `docs-site/**`, `content/**` · dispatch | `build` → `deploy` (only when `github.ref == refs/heads/main`) | `github-pages` | — |
 | `actionlint.yml` | PR `.github/**` | `actionlint` (+ shellcheck) · composite-action parse · `resolve-api-image.test.sh` | — | — |
 | `claude-review.yml`, `claude-triage.yml` | see `CLAUDE.md` | — | — | `CLAUDE_AUTOMATION_ENABLED` |
 
-Nothing that can mutate Azure or read a deployment token runs on `pull_request`. The PR track is:
+Nothing on the PR track can reach an identity with subscription access. The PR track is:
 `ci.yml`, `claude-review.yml`, `actionlint.yml`, the Docker image build (no credentials at all),
-the Astro build, and a Bicep what-if under the read-only `dev-plan` identity.
+the Astro build, a Bicep what-if under the read-only `dev-plan` identity, and the Static Web Apps
+preview under `ui-preview` — an identity whose only role assignment is **Static Web App
+Contributor on the dev Static Web App**.
+
+That last one is the exception that proves the rule. A `pull_request` run executes the PR
+branch's own copy of the workflow files, so the workflow cannot protect anything — only the
+identity can. `ui-preview` is therefore scoped to one resource, and `ui-deploy.yml`'s preview
+jobs deliberately resolve nothing from the deployment outputs (an identity with a role on one
+Static Web App could not read them anyway): the app name, resource group and API base URL are
+`ui-preview` Environment variables. The only Azure call is `az staticwebapp secrets list`
+against that one app. A change that makes a PR-track job read subscription-scope state is a
+change that reopens the hole #144 closed.
 
 ### Reusable children (`workflow_call`)
 
 | File | Does | Inputs | Outputs |
 |---|---|---|---|
 | `_deploy-infra.yml` | `validate` (rejects an unknown `mode`, then `az bicep build` + `lint` on main and every module, `build-params` for the env) → `what-if` (PR mode, under `plan-environment`; upserts one comment per environment, artifact `what-if-{env}`) or `deploy` (what-if preview in the same job, then `.github/scripts/infra/deploy.sh`; exports outputs) | `environment`, `plan-environment`, `mode` (`what-if` \| `deploy`), `create-model-deployments`, `post-what-if-comment` | resource names from the outputs contract, `container-app-is-bootstrap-image` |
-| `_prepare-database.yml` | resolves SQL names and the API/Functions identity client ids from the infra outputs; builds the `dacpac` and `foundrygate-cli` artifacts `_deploy-database.yml` downloads; surfaces the OIDC ids for its `secrets:` inputs ([#137](https://github.com/kolatts/foundry-gate/issues/137) removes that bridge) | `environment` | `sql-server-name`, `sql-database-name`, `resource-group`, `api-identity-client-id`, `functions-identity-client-id`, `azure-*` |
-| `_deploy-database.yml` | runner IP whitelist (`foundrygate ip setup`) → 60 s firewall wait → TCP 1433 probe → dacpac deploy (DacFx, data-loss blocked unless `allow-data-loss`) → seed reference → seed test (never in production) → `db grant-identities` (contained users for the API and Functions identities) → `ip cleanup` | `environment`, `sql-*`, `run-seed-test`, `allow-data-loss`, `api-identity-client-id`, `functions-identity-client-id`, `allow-external-provider`, `firewall-rule-max-age-hours`; secrets `AZURE_*` | — |
+| `_prepare-database.yml` | resolves SQL names and the API/Functions identity client ids from the infra outputs; builds the `dacpac` and `foundrygate-cli` artifacts `_deploy-database.yml` downloads | `environment` | `sql-server-name`, `sql-database-name`, `resource-group`, `api-identity-client-id`, `functions-identity-client-id` |
+| `_deploy-database.yml` | runner IP whitelist (`foundrygate ip setup`) → 60 s firewall wait → TCP 1433 probe → dacpac deploy (DacFx, data-loss blocked unless `allow-data-loss`) → seed reference → seed test (never in production) → `db grant-identities` (contained users for the API and Functions identities) → `ip cleanup` | `environment`, `sql-*`, `run-seed-test`, `allow-data-loss`, `api-identity-client-id`, `functions-identity-client-id`, `allow-external-provider`, `firewall-rule-max-age-hours` — **no secrets** | — |
+
+`_deploy-database.yml` takes no `secrets:` inputs: its `deploy` job declares
+`environment: ${{ inputs.environment }}`, so it reads `vars.AZURE_CLIENT_ID` / `_TENANT_ID` /
+`_SUBSCRIPTION_ID` itself through `.github/actions/azure-oidc-login` like every other
+`_deploy-*.yml` ([#137](https://github.com/kolatts/foundry-gate/issues/137) — the
+`_prepare-database.yml` bridge that used to pass them as job outputs is gone). It receives the
+**GitHub Environment** name (`dev` | `production`) and passes it straight to the CLI's `--env`;
+`FoundryGateAzureResources.NormalizeEnvironment` maps `production` → the Bicep `prod` that every
+resource name embeds.
 
 `_prepare-database.yml` passes `api-identity-client-id` / `functions-identity-client-id` from the
 `apiIdentityClientId` / `functionsIdentityClientId` deployment outputs, so `db grant-identities`
@@ -142,6 +163,7 @@ Entra on behalf of a service principal.
 |---|---|---|---|
 | `dev` | none — automatic | **protected branches only** | every dev deploy |
 | `dev-plan` | none | any branch | the PR-track Bicep what-if **only**. Its identity is intended to hold **Reader** on the subscription and nothing else (#109) |
+| `ui-preview` | none | any branch | the PR-track Static Web Apps preview **only**. Its identity is intended to hold **Static Web App Contributor scoped to `stapp-foundrygate-dev`** and nothing else (#109) |
 | `production` | 1 required reviewer | protected branches (`main`) only | production deploys |
 | `dev-destroy` | required reviewer + 5 min wait | any branch | `infra-destroy.yml` (dev) |
 | `prod-destroy` | required reviewer + 30 min wait (a second reviewer is an owner action, #109) | protected branches only | `infra-destroy.yml` (production) |
@@ -150,13 +172,42 @@ Entra on behalf of a service principal.
 `dev` is restricted to protected branches because its identity is Owner on the subscription and
 a `pull_request` run executes the PR branch’s own copy of the workflow files — without the
 restriction, any PR could have run arbitrary `az` against dev or printed the Static Web App
-deployment token. That is also why the Static Web Apps PR previews were removed
-([#155](https://github.com/kolatts/foundry-gate/issues/155) tracks restoring them behind a
-narrower identity) and why the PR what-if runs under `dev-plan`.
+deployment token. That is why the PR what-if runs under `dev-plan` and the PR preview under
+`ui-preview`, each holding one narrow role: the workflow file is attacker-controlled on the PR
+track, so the identity is the only real boundary.
 
-GitHub approves **pending jobs**, not whole runs: a full-stack production deploy asks once per
-stage (infra, database prepare, database, api, functions and ui together, tests). Whether to
-collapse that to a single gate is [#141](https://github.com/kolatts/foundry-gate/issues/141).
+### Production approvals: one per stage, deliberately
+
+GitHub approves **pending jobs**, not whole runs, so a full-stack production `deploy-all.yml`
+run asks **five** times:
+
+| # | Job(s) waiting | What you are approving |
+|---|---|---|
+| 1 | `infra` | the Bicep change — the what-if preview runs inside this job, so approving it is approving *running* the preview, not the result |
+| 2 | `prepare-database` | building the dacpac and reading the deployment outputs (no writes) |
+| 3 | `database` | the dacpac deploy, seeding and the SQL firewall window — the irreversible one |
+| 4 | `api`, `functions`, `ui` | rolling the three app tiers (three jobs, but they become pending together, so it is one visit) |
+| 5 | `postdeployment-tests` | read-only smoke tests |
+
+This is the decision recorded as **D-019** ([#141](https://github.com/kolatts/foundry-gate/issues/141)):
+**keep per-stage approvals.** Each stage is independently re-runnable, and the gates are what
+make a `dev-then-production` chain unnecessary — the checkpoint between "infra applied" and
+"schema migrated" is the whole point of stage 3 being separate from stage 1.
+
+The single-gate alternative (#141 Option A — one `approve-production` job, then the real work
+against an unprotected `production-deploy` Environment carrying the same variables and its own
+federated credential) is rejected: it moves the deploy identity **behind no gate at all**. Any
+job in any workflow could target `production-deploy` and get a production-Owner token without
+a reviewer ever seeing it, which is exactly the property the environment gate exists to
+provide. The variant that keeps the credential inside the approved job and passes it onward is
+worse, not better: an Azure access token handed between jobs is a bearer credential in a job
+output. OIDC gives no third option — the token is minted per job and the Environment name is
+baked into its `subject`, so a job that does not declare `environment: production` cannot mint
+a token that federates to production, full stop.
+
+What we did instead is make the sequence legible: `deploy-all.yml` starts with an
+ungated `plan` job that writes the table above into the run summary before the first gate, so
+a reviewer knows how many approvals are coming and what each one buys.
 
 ### Variables (per Environment)
 
@@ -169,6 +220,20 @@ collapse that to a single gate is [#141](https://github.com/kolatts/foundry-gate
 | `FG_ENTRA_API_CLIENT_ID` | recommended | optional | recommended | — | FoundryGate.Api app registration → `entraApiClientId`, UI `Api.Scopes` |
 | `FG_ENTRA_WEB_CLIENT_ID` | recommended | — | recommended | — | Blazor SPA app registration → UI `AzureAd.ClientId` |
 | `FG_SQL_ADMIN_GROUP_OBJECT_ID` / `_NAME` | — | — | **required** | — | `prod.bicepparam` has no default (Entra-only SQL) |
+
+`ui-preview` has its own set, because its identity is scoped to one resource and cannot read
+the deployment outputs every other workflow resolves names from:
+
+| Variable | Purpose |
+|---|---|
+| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | the preview app registration (Static Web App Contributor on `stapp-foundrygate-dev` only) |
+| `FG_STATIC_WEB_APP_NAME` / `FG_RESOURCE_GROUP` | which Static Web App to publish the preview slot to |
+| `FG_API_BASE_URL` | `Api.BaseUrl` in the preview's `appsettings.json`, e.g. `https://<dev container app fqdn>/api/v1/` |
+| `FG_ENTRA_WEB_CLIENT_ID` / `FG_ENTRA_API_CLIENT_ID` | same MSAL ids as `dev` |
+
+All of them missing is a **skip**, not a failure: the preview job emits a `::notice::` and goes
+green, so a fork PR (which never receives an OIDC token) is never red for infrastructure it
+cannot have.
 
 There are **no secrets**: not for Azure (OIDC), not for SQL (Entra-only), not for Static Web
 Apps (token read at run time). Resource names are not variables either — they come from the
