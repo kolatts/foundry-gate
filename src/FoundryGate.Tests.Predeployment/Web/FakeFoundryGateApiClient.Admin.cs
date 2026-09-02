@@ -46,18 +46,18 @@ public sealed partial class FakeFoundryGateApiClient
         ApiCallResult<UserSyncStatusResponse>.Ok(new UserSyncStatusResponse(null, null));
 
     /// <summary>Every filtered <c>GET /users</c> the pages made, in order — search, status and paging.</summary>
-    public List<(UserListQuery Query, PagedRequest Paging)> UserListCalls { get; } = [];
+    public RecordedCalls<(UserListQuery Query, PagedRequest Paging)> UserListCalls { get; } = new();
 
     /// <summary>
     /// Group deletes with the flag they carried. <c>DeletedGroupIds</c> records the ids alone; this
     /// records whether the caller sent <c>?force=true</c>, which is the part that decides whether a
     /// group with members is deleted or 409s.
     /// </summary>
-    public List<(int GroupId, bool Force)> DeletedGroups { get; } = [];
+    public RecordedCalls<(int GroupId, bool Force)> DeletedGroups { get; } = new();
 
-    public List<CreateFoundryDeploymentRequest> CreatedDeployments { get; } = [];
+    public RecordedCalls<CreateFoundryDeploymentRequest> CreatedDeployments { get; } = new();
 
-    public List<(string AccountName, string DeploymentName)> DeletedDeployments { get; } = [];
+    public RecordedCalls<(string AccountName, string DeploymentName)> DeletedDeployments { get; } = new();
 
     // -- Fluent arrange helpers -----------------------------------------------------------------
 

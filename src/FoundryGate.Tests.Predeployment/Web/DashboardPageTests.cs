@@ -185,14 +185,14 @@ public class DashboardPageTests : WebTestContext
         // The real page waits a minute; the interval is a parameter purely so this test doesn't.
         var page = RenderPage<Dashboard>(("RefreshInterval", TimeSpan.FromMilliseconds(20)));
 
-        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3), TimeSpan.FromSeconds(5));
+        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3));
     }
 
     [Fact]
     public async Task Stops_refreshing_once_the_page_is_gone()
     {
         var page = RenderPage<Dashboard>(("RefreshInterval", TimeSpan.FromMilliseconds(20)));
-        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 2), TimeSpan.FromSeconds(5));
+        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 2));
 
         await DisposeComponentsAsync();
 
@@ -202,25 +202,39 @@ public class DashboardPageTests : WebTestContext
         // the count moves for a reason that is not the bug. Waiting for the count to stop moving,
         // and only then requiring it to stay still, tests "the loop stopped" rather than "the loop
         // was slower than 200 ms".
+        //
+        // Two samples were not enough of a settle (#203): a tick that had already reached
+        // InvokeAsync when Dispose ran still lands, and 50 ms of quiet either side of it looks
+        // like a stop. Requiring several consecutive identical samples closes that window, and the
+        // final check is then a real assertion rather than a coin toss — once the loop has stopped
+        // no further call can ever start, so a count that is stable stays stable.
         var settled = await SettledCallCountAsync("GetDashboardAsync");
 
-        await Task.Delay(200);
+        await Task.Delay(StabilityWindow);
         Assert.Equal(settled, Api.CallCount("GetDashboardAsync"));
     }
 
+    /// <summary>How long the count has to stay still after settling before the loop counts as stopped.</summary>
+    private static readonly TimeSpan StabilityWindow = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>Consecutive identical samples that count as "the loop has stopped calling".</summary>
+    private const int SettledSampleCount = 5;
+
     /// <summary>
-    /// Polls until the named call count is the same twice running, and answers that count. Fails
-    /// the test rather than looping forever if it never settles — a count that never stops moving
-    /// is the bug this is here to catch.
+    /// Polls until the named call count has been the same for <see cref="SettledSampleCount"/>
+    /// samples running, and answers that count. Fails the test rather than looping forever if it
+    /// never settles — a count that never stops moving is the bug this is here to catch.
     /// </summary>
     private async Task<int> SettledCallCountAsync(string method)
     {
         var previous = -1;
+        var repeats = 0;
 
-        for (var attempt = 0; attempt < 40; attempt++)
+        for (var attempt = 0; attempt < 100; attempt++)
         {
             var current = Api.CallCount(method);
-            if (current == previous)
+            repeats = current == previous ? repeats + 1 : 0;
+            if (repeats >= SettledSampleCount - 1)
             {
                 return current;
             }
@@ -248,7 +262,14 @@ public class DashboardPageTests : WebTestContext
 
         await page.InvokeAsync(dashboard.Instance.Dispose);
         Api.Gate.SetResult();
-        await Task.Delay(50);
+
+        // Wait for the reply to have actually landed rather than sleeping for a guessed 50 ms:
+        // asserting the badge is still zero before the call has returned proves nothing, and the
+        // sleep was the only thing making it likely (#203). CompletedCallCount moves when
+        // RespondAsync returns, which is the moment the page's continuation can write to state.
+        await WaitUntilAsync(
+            () => Api.CompletedCallCount("GetDashboardAsync") == 1,
+            "the in-flight GET /dashboard released by the gate to return");
 
         Assert.Equal(0, Services.GetRequiredService<DashboardStateService>().PendingRequestCount);
     }
@@ -260,7 +281,7 @@ public class DashboardPageTests : WebTestContext
         page.WaitForElement("[data-testid='stat-total-users']");
 
         Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Fail(ApiCallStatus.Unavailable, "Gone.");
-        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3), TimeSpan.FromSeconds(5));
+        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3));
 
         Assert.NotNull(page.Find("[data-testid='stat-total-users']"));
         Assert.DoesNotContain(Snackbars, s => s.Message?.Contains("Gone.", StringComparison.Ordinal) == true);
