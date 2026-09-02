@@ -84,7 +84,7 @@ product, delete the old one, and hand the developer a new key (audited `key.rota
 
 **Group-assigned access is expanded.** An app-role assignment granted to a *group* — the common enterprise pattern of assigning `SG_AI_Developers` to the FoundryGate enterprise application — is flattened to that group's **transitive** user members (nested groups included) and merged with the directly assigned users, de-duplicated, before any of the reconciliation above runs ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Assigning developers through a group is a first-class configuration: adds, updates and departures all work.
 
-**Only a group the run could not read suspends departure detection.** If Graph refuses one of those groups (a missing `GroupMember.ReadBasic.All`, or a group that has been deleted), the run has seen only part of the population, so "not in the user list" cannot mean "departed". For that run the deactivation step is skipped entirely: users are still added and updated, `deactivatedCount` is `0`, `skippedGroupAssignmentCount` counts the unreadable groups, and they are named in a warning log and in the audit row (`departureDetectionSuspended: true`). Grant the role (or unassign the deleted group) and the next run deactivates normally. On a healthy tenant `skippedGroupAssignmentCount` is always `0`.
+**Only a group the run could not read suspends departure detection.** If the API cannot read one of those groups — Graph refuses it (a missing `GroupMember.ReadBasic.All`, or a group that has been deleted), or Graph is briefly unreachable and the SDK's retries are exhausted — the run has seen only part of the population, so "not in the user list" cannot mean "departed". For that run the deactivation step is skipped entirely: users are still added and updated, `deactivatedCount` is `0`, `skippedGroupAssignmentCount` counts the unreadable groups, and they are named in a warning log and in the audit row (`departureDetectionSuspended: true`). Grant the role (or unassign the deleted group) and the next run deactivates normally. On a healthy tenant `skippedGroupAssignmentCount` is always `0`.
 
 Errors: `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role), `503` when `Entra:Enabled` is false on the host (the message names the setting and the Graph roles to grant — the request is fine, the host is not configured for the feature).
 
@@ -148,9 +148,10 @@ the group id as `targetId`.
 
 `POST /groups/{id}/sync-entra` pulls the linked Entra group's membership (transitively, so nested
 groups flatten to their people) and reconciles it. Idempotent: a second run with an unchanged directory
-reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserCount, succeeded, error }`
-— `succeeded` is always `true` here, and only ever `false` inside a `POST /groups/sync-entra` summary
-(see below).
+reports zeros. Returns
+`{ groupId, addedCount, removedCount, skippedUnknownUserCount, succeeded, error, errorType }` —
+`succeeded` is always `true` here (and `errorType` `"None"`), because a single-group failure is the
+HTTP status. They are only ever otherwise inside a `POST /groups/sync-entra` summary (see below).
 
 - Directory members missing from this group are added with **`addedByUserId: null`** — the system
   actor. The directory chose the membership, not the calling admin, and the audit trail should not
@@ -168,18 +169,26 @@ each, in group-id order; groups with no link are skipped and do not appear in th
 table is read **once for the whole run**, not once per group — nothing in this path creates a user, so
 one snapshot is both cheaper and correct.
 
-**One group's failure does not end the run.** A group whose reconciliation throws — Graph refused it,
-the Entra group was deleted — is left exactly as it was, everything it had staged is discarded so it
-cannot ride along on the next group's save, and the loop continues. Its summary carries
-`"succeeded": false` with the failure's message in `"error"` and zeroes everywhere else; every other
-group reports its real counts. The call is still a `200`, because "three of five groups reconciled and
-here is what went wrong with the other two" is a more useful answer than a `500` that says nothing —
-and re-running is idempotent, so a second call once the cause is fixed finishes the job. Each failure
-is also a Warning in the API log. Single-group `POST /groups/{id}/sync-entra` is unchanged: its
-failure is the HTTP status, and it never returns `succeeded: false`.
+**One group's failure does not end the run.** A group whose reconciliation throws is left as it was,
+the loop continues, and its summary carries `"succeeded": false` with the failure's message in
+`"error"` and zeroes everywhere else; every other group reports its real counts. The call is still a
+`200`, because "three of five groups reconciled and here is what went wrong with the other two" is a
+more useful answer than a `500` that says nothing. Single-group `POST /groups/{id}/sync-entra` is
+unchanged: its failure is the HTTP status, and it never returns `succeeded: false`.
 
-The one exception is `Entra:Enabled` being false on the host: that is not a property of any one group
-— every group would carry the same message — so it stays a whole-response `503`.
+**`errorType` says what a person has to do about it, and the two values are not interchangeable:**
+
+| `errorType` | What happened | What to do |
+|---|---|---|
+| `"GraphRead"` | The read failed *before* anything outside the database was touched — Graph refused the group, or it no longer exists. Nothing was applied anywhere and the group's staged changes were discarded, so they cannot ride along on the next group's save. Logged at Warning | Fix the cause and re-run. The sync is idempotent, so that is sufficient |
+| `"PostCommit"` | The APIM tier move for a member was **accepted** and the database write recording it then failed — twice, since the save is retried once on a fresh token with the pending rows still tracked. The gateway and the control plane disagree: someone is on a product their `QuotaAllocation` row does not name. Logged at **Error** with the group's full identity, plus an Error summary line for the run | Re-run to converge the database, and treat that group's reported state as untrustworthy until you have. This is the case CONVENTIONS.md's commit-point rule exists for |
+
+A UI must render the two differently — "try again" is the right advice for one and actively
+misleading for the other.
+
+The one exception to per-group isolation is `Entra:Enabled` being false on the host: that is not a
+property of any one group — every group would carry the same message — so it stays a whole-response
+`503`.
 
 Errors: `400` when the group has no `entraGroupId` (a real caller error — this group has nothing to
 sync against); `404` for an unknown group; `503` when `Entra:Enabled` is false on the host — the

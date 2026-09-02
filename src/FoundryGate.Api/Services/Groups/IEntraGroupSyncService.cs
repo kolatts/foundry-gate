@@ -1,3 +1,4 @@
+using FoundryGate.Domain.Groups;
 using FoundryGate.Domain.Groups.Contracts;
 
 namespace FoundryGate.Api.Services.Groups;
@@ -54,14 +55,22 @@ public interface IEntraGroupSyncService
     /// Reconciles every group that has an <c>EntraGroupId</c>, in group-id order, one unit of work
     /// each. Groups without a link are not touched and do not appear in the result.
     /// <para>
-    /// <b>Failures are isolated per group</b> (#149). A group whose reconciliation throws — a Graph
-    /// fault, a group deleted in the directory — is left exactly as it was, its pending changes are
-    /// discarded so they cannot ride along on the next group's save, and the run continues. The
-    /// summary for that group carries <c>Succeeded = false</c> with the failure's message in
-    /// <c>Error</c> and zeroes everywhere else; every other group still reports its real counts. The
-    /// call answers <c>200</c> with the partial results rather than a <c>500</c> that says nothing
-    /// about what did happen, and each failure is a Warning log. Re-running is idempotent, so a
-    /// second call after the cause is fixed finishes the job.
+    /// <b>Failures are isolated per group</b> (#149), and the two kinds are told apart
+    /// (<see cref="GroupSyncErrorType"/>). A group whose reconciliation throws is left as it was and
+    /// the run continues; its summary carries <c>Succeeded = false</c> with the failure's message in
+    /// <c>Error</c> and zeroes everywhere else, while every other group still reports its real counts.
+    /// The call answers <c>200</c> with the partial results rather than a <c>500</c> that says nothing
+    /// about what did happen.
+    /// <list type="bullet">
+    /// <item><see cref="GroupSyncErrorType.GraphRead"/> — the failure landed before anything outside
+    /// the database was touched. Its pending changes are discarded so they cannot ride along on the
+    /// next group's save, it is logged at Warning, and re-running once the cause is fixed is
+    /// sufficient (the sync is idempotent).</item>
+    /// <item><see cref="GroupSyncErrorType.PostCommit"/> — the gateway had already accepted a member's
+    /// tier move and the database write failed anyway, including the retry. Logged at <b>Error</b>
+    /// with the group's full identity, plus an Error summary line for the run, because the gateway and
+    /// the control plane now disagree and a person has to know.</item>
+    /// </list>
     /// </para>
     /// <para>
     /// The <c>Users</c> table is read <b>once for the run</b> and shared across the loop, not once per

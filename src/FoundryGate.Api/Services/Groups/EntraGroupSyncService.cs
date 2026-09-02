@@ -7,6 +7,7 @@ using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
+using FoundryGate.Domain.Groups;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Quota;
 using Microsoft.EntityFrameworkCore;
@@ -63,28 +64,47 @@ public sealed class EntraGroupSyncService(
 
         var results = new List<GroupSyncResult>(groups.Count);
         var failed = 0;
+        var postCommitFailures = 0;
         foreach (var group in groups)
         {
             try
             {
                 results.Add(await SyncGroupAsync(group, usersByOid, cancellationToken));
             }
+            catch (GroupSyncPostCommitException exception)
+            {
+                // The gateway moved a member's tier and the database write failed twice. Already
+                // logged at Error with the group's full identity by CommitAsync, which is also where
+                // the retry happened — nothing to add here but the marker that keeps this
+                // distinguishable from an ordinary fault in the summary, so a UI can say "the gateway
+                // changed and the database did not" rather than "this group failed, try again".
+                failed++;
+                postCommitFailures++;
+                results.Add(new GroupSyncResult(
+                    group.GroupId, 0, 0, 0, Succeeded: false, Error: exception.Message, ErrorType: GroupSyncErrorType.PostCommit));
+
+                // Only now, after the retry has had its chance, are the pending rows abandoned — the
+                // run has to leave a clean change tracker for the groups that follow.
+                DiscardPendingChanges();
+            }
             catch (Exception exception) when (exception is not (OperationCanceledException or FeatureNotConfiguredException))
             {
                 // Per-group isolation (#149): each group is already its own unit of work, so a Graph
                 // fault on group 3 of 5 must not deny the caller the summaries for 4 and 5 — and
-                // re-running is idempotent, so nothing is left inconsistent. The run answers 200 with
-                // the failure named against the group it belongs to.
+                // nothing outside the database was touched, so re-running once the cause is fixed is
+                // both safe and sufficient. The run answers 200 with the failure named against the
+                // group it belongs to.
                 //
                 // Two escapes stay whole-run failures on purpose: a cancelled request has no caller
                 // left to read a summary, and FeatureNotConfiguredException means Entra is off on this
                 // HOST — every group would carry the same 503 message, so the 503 belongs on the
                 // response, not repeated in each row.
                 failed++;
-                results.Add(new GroupSyncResult(group.GroupId, 0, 0, 0, Succeeded: false, Error: exception.Message));
+                results.Add(new GroupSyncResult(
+                    group.GroupId, 0, 0, 0, Succeeded: false, Error: exception.Message, ErrorType: GroupSyncErrorType.GraphRead));
                 logger.LogWarning(
                     exception,
-                    "Entra group sync could not reconcile group {GroupId} ('{GroupName}'); the run continues with the remaining group(s).",
+                    "Entra group sync could not reconcile group {GroupId} ('{GroupName}'); nothing was applied for it and the run continues with the remaining group(s).",
                     group.GroupId,
                     group.Name);
 
@@ -95,10 +115,21 @@ public sealed class EntraGroupSyncService(
             }
         }
 
+        // Summarized at Error when any group diverged from the gateway: the per-group Error lines are
+        // already there, but a run that ends "3 groups reconciled" in an Information line and hides the
+        // divergence in the middle is how this gets missed.
+        if (postCommitFailures > 0)
+        {
+            logger.LogError(
+                "Entra group sync finished with {PostCommitFailureCount} group(s) whose gateway tier move was accepted but not recorded in the database. Re-run POST /groups/sync-entra to converge them.",
+                postCommitFailures);
+        }
+
         logger.LogInformation(
-            "Entra group sync reconciled {GroupCount} linked group(s), {FailedCount} of which failed.",
+            "Entra group sync reconciled {GroupCount} linked group(s), {FailedCount} of which failed ({PostCommitFailureCount} after the gateway had already been changed).",
             results.Count,
-            failed);
+            failed,
+            postCommitFailures);
 
         return results;
     }
@@ -180,9 +211,8 @@ public sealed class EntraGroupSyncService(
         var resolutions = reresolved.Count == 0
             ? []
             : await quotaResolution.ResolveManyAsync(reresolved, BillingPeriod.Current(timeProvider), cancellationToken);
-        var commitToken = resolutions.Any(resolution => resolution.TierSyncRequested)
-            ? CancellationToken.None
-            : cancellationToken;
+        var gatewayMoved = resolutions.Any(resolution => resolution.TierSyncRequested);
+        var commitToken = gatewayMoved ? CancellationToken.None : cancellationToken;
 
         if (skippedUnknown > 0)
         {
@@ -195,24 +225,19 @@ public sealed class EntraGroupSyncService(
 
         // One row per group per run (not one per membership): the counts are the story, and a 500-member
         // group would otherwise bury every other action in the audit viewer.
-        _ = await audit.LogAsync(
-            AuditActions.GroupEntraSynced,
-            AuditTargetTypes.Group,
-            group.GroupId.ToString(CultureInfo.InvariantCulture),
-            new
-            {
-                group.EntraGroupId,
-                DirectoryMemberCount = directoryOids.Count,
-                AddedCount = added.Count,
-                RemovedCount = removed.Count,
-                SkippedUnknownUserCount = skippedUnknown,
-                AddedUserIds = added.ToArray(),
-                RemovedUserIds = removed.Select(member => member.UserId).ToArray(),
-                ReresolvedUserIds = reresolved.ToArray(),
-            },
-            commitToken);
+        var details = new
+        {
+            group.EntraGroupId,
+            DirectoryMemberCount = directoryOids.Count,
+            AddedCount = added.Count,
+            RemovedCount = removed.Count,
+            SkippedUnknownUserCount = skippedUnknown,
+            AddedUserIds = added.ToArray(),
+            RemovedUserIds = removed.Select(member => member.UserId).ToArray(),
+            ReresolvedUserIds = reresolved.ToArray(),
+        };
 
-        _ = await dbContext.SaveChangesAsync(commitToken);
+        await CommitAsync(group, details, gatewayMoved, reresolved, commitToken);
 
         logger.LogInformation(
             "Entra group sync for group {GroupId} ('{GroupName}'): {AddedCount} added, {RemovedCount} removed, {SkippedUnknownUserCount} skipped.",
@@ -223,6 +248,81 @@ public sealed class EntraGroupSyncService(
             skippedUnknown);
 
         return new GroupSyncResult(group.GroupId, added.Count, removed.Count, skippedUnknown);
+    }
+
+    /// <summary>
+    /// Writes one group's <c>group.entra-synced</c> audit row and commits its unit of work.
+    /// </summary>
+    /// <remarks>
+    /// Split out for the one case that is not an ordinary failure. When
+    /// <paramref name="gatewayMoved"/> is <see langword="true"/> the APIM tier for at least one member
+    /// has already been changed, so a failure here is CONVENTIONS.md's commit-point case — "the
+    /// external system accepted the change and the write did not land" — not a run-of-the-mill fault
+    /// to be logged at Warning and discarded. It gets the Error log with the group's full identity that
+    /// <c>FoundryDeploymentService.AuditAfterCommitAsync</c> established, then <b>one retry on
+    /// <see cref="CancellationToken.None"/> with the pending rows still tracked</b>: those rows are the
+    /// only record of what the gateway did, so throwing them away before trying again would guarantee
+    /// the divergence this is trying to close. Only if the retry fails too does it become a
+    /// <see cref="GroupSyncPostCommitException"/>, which the caller reports as
+    /// <see cref="GroupSyncErrorType.PostCommit"/> (or lets fail the request, for a single-group sync).
+    /// Below the commit point — no tier moved — the original exception propagates untouched and is
+    /// handled as the ordinary per-group failure it is.
+    /// </remarks>
+    private async Task CommitAsync(
+        Group group,
+        object details,
+        bool gatewayMoved,
+        IReadOnlyList<int> reresolved,
+        CancellationToken commitToken)
+    {
+        try
+        {
+            _ = await audit.LogAsync(
+                AuditActions.GroupEntraSynced,
+                AuditTargetTypes.Group,
+                group.GroupId.ToString(CultureInfo.InvariantCulture),
+                details,
+                commitToken);
+
+            _ = await dbContext.SaveChangesAsync(commitToken);
+        }
+        catch (Exception exception) when (gatewayMoved)
+        {
+            logger.LogError(
+                exception,
+                "Entra group sync for group {GroupId} ('{GroupName}', Entra group {EntraGroupId}): the gateway accepted the tier move for user(s) {ReresolvedUserIds} but the database write did not land — retrying the save once; reconcile manually if it fails.",
+                group.GroupId,
+                group.Name,
+                group.EntraGroupId,
+                reresolved);
+
+            try
+            {
+                // Deliberately no DiscardPendingChanges() first: the tracked GroupMember and
+                // QuotaAllocation rows are what the gateway has already been told, so the retry is the
+                // one chance to make the database agree with it.
+                _ = await dbContext.SaveChangesAsync(CancellationToken.None);
+            }
+            catch (Exception retryFailure)
+            {
+                logger.LogError(
+                    retryFailure,
+                    "Entra group sync for group {GroupId} ('{GroupName}', Entra group {EntraGroupId}): the gateway accepted the tier move for user(s) {ReresolvedUserIds} and the retried database write failed as well — reconcile manually. Re-running the sync converges the database, but until then this group's reported state is wrong.",
+                    group.GroupId,
+                    group.Name,
+                    group.EntraGroupId,
+                    reresolved);
+
+                throw new GroupSyncPostCommitException(
+                    $"Group {group.GroupId} ('{group.Name}'): the gateway accepted a tier move but the database write failed twice, so the two now disagree. Re-run the sync; the change is idempotent.",
+                    retryFailure);
+            }
+
+            logger.LogWarning(
+                "Entra group sync for group {GroupId} ('{GroupName}'): the retried database write succeeded, so the gateway and the database agree again.",
+                group.GroupId,
+                group.Name);
+        }
     }
 
     /// <summary>

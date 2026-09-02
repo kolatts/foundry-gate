@@ -35,6 +35,12 @@ public abstract class InMemoryDatabaseTest : IDisposable
     protected IReadOnlyList<string> ExecutedCommands => _commands.Commands;
 
     /// <summary>
+    /// The interceptor behind <see cref="ExecutedCommands"/>. Exposed so a test can also make a chosen
+    /// statement <em>fail</em> (<c>FailWhen</c>) — the only way to break a save at a specific moment.
+    /// </summary>
+    protected RecordingCommandInterceptor CommandInterceptor => _commands;
+
+    /// <summary>
     /// How many statements executed so far are unfiltered reads of <paramref name="table"/> — the
     /// whole-table snapshot shape, as opposed to a keyed lookup, which always carries a <c>WHERE</c>.
     /// </summary>

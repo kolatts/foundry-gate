@@ -140,4 +140,18 @@ public record GroupQuery(string? Search);
 /// can tell "Graph refused this group" from "this group is not linked" without reading the API log;
 /// <see langword="null"/> otherwise.
 /// </param>
-public record GroupSyncResult(int GroupId, int AddedCount, int RemovedCount, int SkippedUnknownUserCount, bool Succeeded = true, string? Error = null);
+/// <param name="ErrorType">
+/// <em>Which kind</em> of failure, which is the part that decides what a person has to do:
+/// <see cref="GroupSyncErrorType.GraphRead"/> means nothing was applied anywhere and re-running is
+/// enough, <see cref="GroupSyncErrorType.PostCommit"/> means the gateway accepted a tier move that
+/// the database then failed to record. A UI must not render the two the same way.
+/// <see cref="GroupSyncErrorType.None"/> when the group succeeded.
+/// </param>
+public record GroupSyncResult(
+    int GroupId,
+    int AddedCount,
+    int RemovedCount,
+    int SkippedUnknownUserCount,
+    bool Succeeded = true,
+    string? Error = null,
+    GroupSyncErrorType ErrorType = GroupSyncErrorType.None);
