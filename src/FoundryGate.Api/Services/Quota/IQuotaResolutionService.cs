@@ -55,4 +55,23 @@ public interface IQuotaResolutionService
     /// </summary>
     /// <returns>One <see cref="QuotaResolution"/> per resolved user, in <paramref name="userIds"/> order.</returns>
     Task<IReadOnlyList<QuotaResolution>> ResolveManyAsync(IReadOnlyCollection<int> userIds, BillingPeriod period, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs the same five-level chain and returns the answer <em>without writing anything</em> — no
+    /// allocation row added or modified, no <see cref="IGatewayTierSync"/> call, nothing left on the
+    /// change tracker. Period-independent: the chain reads only the user's and their groups' current
+    /// settings, so there is nothing for a period to select.
+    /// </summary>
+    /// <remarks>
+    /// For callers that need "what is this developer's budget right now?" in order to decide whether to
+    /// act at all — quota increase requests measure both submission and approval against it (#34/#35).
+    /// Reading the stored <c>QuotaAllocation</c> instead would answer with whatever the last resolution
+    /// wrote, which a since-changed user override or group membership has already invalidated; calling
+    /// <see cref="ResolveAsync"/> would answer correctly but move the caller's gateway tier as a side
+    /// effect of a question that may end in a refusal (CONVENTIONS.md: every refusal before the external
+    /// call).
+    /// </remarks>
+    /// <exception cref="KeyNotFoundException">No such user (→ 404).</exception>
+    /// <exception cref="Imagile.Framework.Configuration.Exceptions.ConfigurationValidationException">As <see cref="ResolveAsync"/>.</exception>
+    Task<QuotaPreview> PreviewAsync(int userId, CancellationToken cancellationToken);
 }
