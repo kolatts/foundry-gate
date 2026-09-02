@@ -1,3 +1,4 @@
+using System.Net;
 using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Entra;
 using FoundryGate.Tests.Predeployment.Support;
@@ -20,6 +21,9 @@ public class GraphEntraDirectoryClientTests
     private const string ClientId = "11111111-1111-1111-1111-111111111111";
     private const string ServicePrincipalId = "22222222-2222-2222-2222-222222222222";
 
+    /// <summary>A user who reaches the app only through a group nested inside the assigned group.</summary>
+    private const string NestedMember = "aaaaaaaa-0000-0000-0000-000000000003";
+
     private readonly StubHttpMessageHandler _http = new();
 
     [Fact]
@@ -35,6 +39,9 @@ public class GraphEntraDirectoryClientTests
                 url => url.Contains("skiptoken=page2", StringComparison.Ordinal),
                 AssignmentsPage(ids.Skip(10), nextLink: null, extra: """{"principalId":"44444444-4444-4444-4444-444444444444","principalType":"ServicePrincipal"}"""))
             .OnJson(
+                url => url.Contains("/groups/33333333-3333-3333-3333-333333333333/transitiveMembers", StringComparison.Ordinal),
+                """{"value":[]}""")
+            .OnJson(
                 url => url.StartsWith($"{BaseUrl}/users?$filter=id in ('{ids[0]}'", StringComparison.Ordinal),
                 UsersPage(ids.Take(15)))
             .OnJson(
@@ -47,8 +54,11 @@ public class GraphEntraDirectoryClientTests
         Assert.Equal(20, users.Count);
         Assert.Equal(ids, users.Select(u => u.ObjectId));
         Assert.All(users, u => Assert.StartsWith("User ", u.DisplayName, StringComparison.Ordinal));
-        var group = Assert.Single(assigned.SkippedGroupAssignments); // the Group principal is reported, the ServicePrincipal one is dropped
-        Assert.Equal(new EntraGroupAssignment("33333333-3333-3333-3333-333333333333", "AI Developers"), group);
+        // The Group principal is expanded (and so reported as skipped by nothing); the ServicePrincipal
+        // one is dropped without a directory call at all.
+        Assert.Empty(assigned.SkippedGroupAssignments);
+        _ = Assert.Single(_http.Requests, r => r.Contains("/groups/33333333-3333-3333-3333-333333333333/transitiveMembers", StringComparison.Ordinal));
+        Assert.DoesNotContain(_http.Requests, r => r.Contains("44444444-4444-4444-4444-444444444444", StringComparison.Ordinal));
 
         var firstAssignments = _http.Requests[0];
         Assert.StartsWith(assignmentsUrl, firstAssignments, StringComparison.Ordinal);
@@ -62,6 +72,85 @@ public class GraphEntraDirectoryClientTests
         Assert.Equal(15, userRequests[0].Split("','").Length);
         Assert.Equal(5, userRequests[1].Split("','").Length);
         Assert.DoesNotContain(_http.Requests, r => r.Contains("servicePrincipals(appId=", StringComparison.Ordinal)); // configured id → no resolution
+    }
+
+    [Fact]
+    public async Task ListAssignedUsersAsync_expands_a_group_assignment_to_its_transitive_members_and_reports_no_skipped_group()
+    {
+        // The enterprise pattern: one person assigned directly, the rest through a security group —
+        // one of whom is ALSO assigned directly, so de-duplication has something to prove (#121).
+        const string GroupId = "33333333-3333-3333-3333-333333333333";
+        var direct = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001").ToString();
+        var viaGroup = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000002").ToString();
+        var membersUrl = $"{BaseUrl}/groups/{GroupId}/transitiveMembers";
+        _http
+            .OnJson(
+                url => url.Contains("/appRoleAssignedTo", StringComparison.Ordinal),
+                AssignmentsPage([direct, viaGroup], nextLink: null, extra: $$"""{"principalId":"{{GroupId}}","principalType":"Group","principalDisplayName":"AI Developers"}"""))
+            .OnJson(
+                url => url.StartsWith(membersUrl + "?", StringComparison.Ordinal) && !url.Contains("skiptoken", StringComparison.Ordinal),
+                $$"""
+                {"value":[
+                  {"@odata.type":"#microsoft.graph.user","id":"{{viaGroup}}"},
+                  {"@odata.type":"#microsoft.graph.group","id":"nested-group"}
+                ],"@odata.nextLink":"{{membersUrl}}?$skiptoken=p2"}
+                """)
+            .OnJson(
+                url => url.Contains("skiptoken=p2", StringComparison.Ordinal),
+                $$"""{"value":[{"@odata.type":"#microsoft.graph.user","id":"{{NestedMember}}"}]}""")
+            .OnJson(
+                url => url.StartsWith($"{BaseUrl}/users?", StringComparison.Ordinal),
+                UsersPage([direct, viaGroup, NestedMember]));
+
+        var assigned = await CreateClient(ServicePrincipalId).ListAssignedUsersAsync(CancellationToken.None);
+
+        // Expansion succeeded, so nothing is reported as skipped — departure detection stays on.
+        Assert.Empty(assigned.SkippedGroupAssignments);
+        Assert.Equal([direct, viaGroup, NestedMember], assigned.Users.Select(u => u.ObjectId).Order());
+
+        // One hydration request for the merged set: the duplicate did not become a fourth id.
+        var hydration = Assert.Single(_http.Requests, r => r.StartsWith($"{BaseUrl}/users?", StringComparison.Ordinal));
+        Assert.Equal(3, hydration.Split("','").Length);
+        Assert.Contains("$select=id", _http.Requests[1], StringComparison.Ordinal); // members are read by id only
+        Assert.Contains("$top=999", _http.Requests[1], StringComparison.Ordinal);
+        Assert.Equal($"{membersUrl}?$skiptoken=p2", _http.Requests[2]); // nextLink followed
+    }
+
+    [Fact]
+    public async Task ListAssignedUsersAsync_reports_a_group_it_cannot_expand_and_still_returns_the_users_it_could_read()
+    {
+        // Graph refuses one of two groups (a missing role, or a deleted group). The other group's
+        // members still land; the failed one is reported so the sync suspends departure detection
+        // rather than deactivating everyone it covers on a knowingly partial view.
+        const string ReadableGroupId = "33333333-3333-3333-3333-333333333333";
+        const string DeniedGroupId = "88888888-8888-8888-8888-888888888888";
+        var viaGroup = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000002").ToString();
+        _http
+            .OnJson(
+                url => url.Contains("/appRoleAssignedTo", StringComparison.Ordinal),
+                AssignmentsPage(
+                    [],
+                    nextLink: null,
+                    extra: $$"""
+                    {"principalId":"{{ReadableGroupId}}","principalType":"Group","principalDisplayName":"AI Developers"},
+                    {"principalId":"{{DeniedGroupId}}","principalType":"Group","principalDisplayName":"Platform Team"}
+                    """))
+            .OnJson(
+                url => url.StartsWith($"{BaseUrl}/groups/{ReadableGroupId}/transitiveMembers", StringComparison.Ordinal),
+                $$"""{"value":[{"@odata.type":"#microsoft.graph.user","id":"{{viaGroup}}"}]}""")
+            .OnJson(
+                url => url.StartsWith($"{BaseUrl}/groups/{DeniedGroupId}/transitiveMembers", StringComparison.Ordinal),
+                """{"error":{"code":"Authorization_RequestDenied","message":"Insufficient privileges to complete the operation."}}""",
+                HttpStatusCode.Forbidden)
+            .OnJson(
+                url => url.StartsWith($"{BaseUrl}/users?", StringComparison.Ordinal),
+                UsersPage([viaGroup]));
+
+        var assigned = await CreateClient(ServicePrincipalId).ListAssignedUsersAsync(CancellationToken.None);
+
+        var skipped = Assert.Single(assigned.SkippedGroupAssignments);
+        Assert.Equal(new EntraGroupAssignment(DeniedGroupId, "Platform Team"), skipped);
+        Assert.Equal(viaGroup, Assert.Single(assigned.Users).ObjectId);
     }
 
     [Fact]

@@ -15,7 +15,11 @@ public sealed class FakeEntraDirectoryClient : IEntraDirectoryClient
     /// <summary>Users assigned to the FoundryGate application. Duplicates are returned as-is so de-duplication is the consumer's job to prove.</summary>
     public List<EntraUser> AssignedUsers { get; } = [];
 
-    /// <summary>Group-principal app-role assignments the directory reports alongside the users (not expanded — #121).</summary>
+    /// <summary>
+    /// Group-principal app-role assignments the directory could not expand to their members (#121) —
+    /// the only reason a real client reports one, and what makes the sync suspend departure detection.
+    /// A group that expands successfully shows up as its members in <see cref="AssignedUsers"/> instead.
+    /// </summary>
     public List<EntraGroupAssignment> SkippedGroupAssignments { get; } = [];
 
     /// <summary>Group object id → member object ids.</summary>

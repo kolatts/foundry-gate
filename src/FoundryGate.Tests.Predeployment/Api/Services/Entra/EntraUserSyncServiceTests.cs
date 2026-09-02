@@ -346,10 +346,11 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task A_group_principal_assignment_suspends_departure_detection_but_not_adds_and_updates()
+    public async Task A_group_assignment_that_could_not_be_expanded_suspends_departure_detection_but_not_adds_and_updates()
     {
-        // The enterprise pattern: the app is assigned to a security group. Its members are invisible to
-        // the sync until #121, so an active user missing from the user list must NOT be deactivated.
+        // Group assignees are expanded to their members now (#121); a group the directory could NOT
+        // read is what lands here. The view of the population is partial, so an active user missing
+        // from the user list may simply be covered by one of those groups and must NOT be deactivated.
         var admin = await SeedCallerAsync();
         var coveredByGroup = await SeedUserAsync("oid-covered-by-group");
         _directory.AssignedUsers.Add(Present(admin));
@@ -373,9 +374,10 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task A_group_principal_assignment_with_no_user_assignees_is_not_a_conflict()
+    public async Task An_unexpandable_group_assignment_with_no_user_assignees_is_not_a_conflict()
     {
-        // Everyone is assigned through the group: zero users in the list is expected, not a misconfiguration.
+        // The only group covering everyone could not be read: zero users in the list is the expected
+        // consequence, not the "wrong service principal" misconfiguration the 409 guard is for.
         var admin = await SeedCallerAsync();
         _directory.SkippedGroupAssignments.Add(new EntraGroupAssignment("group-1", "AI Developers"));
 
