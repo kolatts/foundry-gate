@@ -233,6 +233,12 @@ Key Vault RSA key before they reach SQL; `GET /keys/me` shows only the last four
 and `POST /keys/me/reveal` decrypts on demand (audited) rather than caching anything in the
 browser.
 
+Both of those routes are capped **per signed-in person** by the control plane — five reveals
+and three rotations a minute — because a stolen access token could otherwise replay them for
+the plaintext key indefinitely, leaving nothing behind but a long run of audit rows. Over the
+cap the control plane answers `429` with a `Retry-After` header. The admin routes are not
+capped: an admin rotating a compromised team's keys is exactly the work a cap would obstruct.
+
 **Change quota** — the control plane re-scopes the subscription to the new tier's
 product. The new product's `llm-token-limit` applies from the next request, and because
 the gateway's monthly counter is keyed on the subscription *within* a product, the
@@ -240,8 +246,13 @@ developer's used-so-far count restarts for the new tier (live validation of the 
 move is tracked in #88). No state change.
 
 **Quota exhausted / burst** — the gateway's `token-quota` returns `403` for the rest of
-the calendar month; the per-minute cap returns `429 + Retry-After`. The subscription stays
-`active`; the key keeps working the moment the window resets. Nothing to undo.
+the calendar month; its per-minute token cap returns `429 + Retry-After`. The subscription
+stays `active`; the key keeps working the moment the window resets. Nothing to undo.
+
+Two different subsystems can answer `429`, and the URL tells them apart: one from the
+**gateway** origin means the developer's per-minute *token* budget is spent, and one from the
+**control plane** (`/api/v1/keys/me/*`) means they asked to reveal or rotate their key too
+often. Both carry `Retry-After`; only the first has anything to do with quota.
 
 **Delete** — admin deactivation (`POST /users/{id}/deactivate`), Entra departure, or
 admin key revocation (`DELETE /keys/{userId}`): `DELETE /subscriptions/{sid}` removes the

@@ -7,11 +7,13 @@ using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Quota;
 using FoundryGate.Data;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Extensions;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Config.Contracts;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Domain.Users.Contracts;
 using Microsoft.EntityFrameworkCore;
@@ -40,6 +42,16 @@ public sealed class UserService(
     private const int DisplayNameMaxLength = 200;
 
     /// <summary>
+    /// How stale <c>User.LastLoginDate</c> has to be before a profile load rewrites it (#167). The
+    /// column answers "has this account been used?" for offboarding and licence review, where minutes
+    /// never matter — and a UI that reloads the profile on every navigation would otherwise make every
+    /// read an <c>UPDATE</c> on the hottest table in the app, which is exactly the problem that made
+    /// <c>LastSyncedDate</c> dishonest (#156 review). Fifteen minutes caps that at four writes an hour
+    /// per active developer while keeping the value fresh enough to read as "today".
+    /// </summary>
+    public static readonly TimeSpan LastLoginGranularity = TimeSpan.FromMinutes(15);
+
+    /// <summary>
     /// The one user projection, so the list rows and the detail's <c>user</c> block are the same shape
     /// built from the same expression. <see cref="Map"/> is its compiled form for the paths that already
     /// hold the entity (detail, and the actions that return the row they just changed).
@@ -55,7 +67,8 @@ public sealed class UserService(
         user.MonthlyTokenQuota,
         user.ApimSubscriptionId != "",
         user.CreatedDate,
-        user.LastSyncedDate);
+        user.LastSyncedDate,
+        user.LastLoginDate);
 
     private static readonly Func<User, UserResponse> Map = Projection.Compile();
 
@@ -67,8 +80,9 @@ public sealed class UserService(
         if (user is null)
         {
             // First login: the pipeline creates the row, this month's allocation and the APIM
-            // subscription, or leaves nothing behind (plan 21).
-            user = await lifecycle.ProvisionAsync(ProvisionTrigger.FirstLogin, ProvisionContext.FirstLogin(), cancellationToken);
+            // subscription, or leaves nothing behind (plan 21). It also stamps LastLoginDate, so the
+            // freshly-provisioned row falls straight through the staleness check below.
+            user = await ProvisionFirstLoginAsync(cancellationToken);
         }
         else
         {
@@ -80,9 +94,13 @@ public sealed class UserService(
                     $"Your FoundryGate account (user {user.UserId}) is deactivated, so it has no profile, quota or key. Ask an administrator to re-activate it.");
             }
 
-            // Only when a claim actually differs: otherwise every profile load would be a row UPDATE on
-            // Users — the hottest table in the app, and the one the Entra sync writes to (#156 review).
-            if (RefreshFromClaims(user))
+            // Only when a claim actually differs, or the login stamp has gone stale: otherwise every
+            // profile load would be a row UPDATE on Users — the hottest table in the app, and the one
+            // the Entra sync writes to (#156 review, #167).
+            var changed = RefreshFromClaims(user);
+            changed |= StampLogin(user);
+
+            if (changed)
             {
                 await dbContext.SaveChangesAsync(cancellationToken);
             }
@@ -185,7 +203,7 @@ public sealed class UserService(
         // Past the commit point when resolution moved the subscription: the gateway is already enforcing
         // the new tier, so the row that records it and the audit row that explains it must not be
         // abandoned because the client hung up (CONVENTIONS.md; #156 review). Every refusal happened above.
-        var completionToken = resolution.TierSyncRequested ? CancellationToken.None : cancellationToken;
+        var completionToken = CommitToken.For(resolution.TierSyncRequested, cancellationToken);
 
         try
         {
@@ -248,6 +266,83 @@ public sealed class UserService(
     }
 
     /// <summary>
+    /// First login, with the two-tabs race absorbed (#154). <c>Users.EntraObjectId</c> is unique, so when
+    /// two profile calls for the same identity arrive together both find no row, both provision, and the
+    /// loser's save fails — the pipeline detaches its entity, rolls its transaction back and throws a
+    /// <see cref="ConflictException"/>. That used to reach the developer as a <c>409</c> on the very
+    /// first request their UI ever makes. It is a race, not a caller error, and the winner's row,
+    /// allocation and APIM subscription are already committed (the loser blocked on the unique index
+    /// until they were), so the honest answer is the winner's profile.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The inner <see cref="DbUpdateException"/> is the load-bearing signal, and
+    /// <c>UserLifecycleService.CreateFromFirstLoginAsync</c> is where it is attached. The <em>other</em>
+    /// <see cref="ConflictException"/> that path can throw — "first-login provisioning is not
+    /// repeatable", raised when the oid already had a row before the pipeline started — carries no inner
+    /// exception and still surfaces as a <c>409</c>, because that one is a programming error rather than
+    /// a race (#154's "keep the 409 path reachable").
+    /// </para>
+    /// <para>
+    /// The change tracker is cleared before re-reading: the failed save happened inside a transaction
+    /// that has already rolled back, so the retry needs a clean unit of work rather than a second query
+    /// over entities the rollback invalidated. If the winner still cannot be read, a conflict is raised
+    /// again — something other than this race happened and the caller should hear about it.
+    /// </para>
+    /// <para>
+    /// Only the conflict is absorbed, not the latency: the loser still waits out the winner's ARM round
+    /// trip on the unique index, because the provision pipeline holds its transaction across that call
+    /// (measured in #154's comment). Shortening that window means committing the <c>User</c> row before
+    /// APIM is touched, which trades away "a failed first login leaves no row" — a deliberate change to
+    /// the pipeline's failure shape, tracked as #179 rather than made in passing.
+    /// </para>
+    /// </remarks>
+    private async Task<User> ProvisionFirstLoginAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await lifecycle.ProvisionAsync(ProvisionTrigger.FirstLogin, ProvisionContext.FirstLogin(), cancellationToken);
+        }
+        catch (ConflictException exception) when (exception.InnerException is DbUpdateException)
+        {
+            dbContext.ChangeTracker.Clear();
+
+            var winner = await currentUser.TryGetUserAsync(cancellationToken)
+                ?? throw new ConflictException(
+                    $"Provisioning oid {currentUser.EntraObjectId} lost a race with a concurrent first login, but the winning row could not be read back. Retry GET /users/me.",
+                    exception);
+
+            logger.LogInformation(
+                exception,
+                "Concurrent first login for oid {EntraObjectId}; returning the profile of the row that won (user {UserId}).",
+                currentUser.EntraObjectId,
+                winner.UserId);
+
+            return winner;
+        }
+    }
+
+    /// <summary>
+    /// Stamps <c>LastLoginDate</c> when it is null (never signed in) or older than
+    /// <see cref="LastLoginGranularity"/> (#167). Assigning a date from the injected
+    /// <see cref="TimeProvider"/> inside a service is the CONVENTIONS.md exception written for exactly
+    /// this shape — a re-save that changes no other column, which the timestamp interceptor never sees.
+    /// </summary>
+    /// <returns><see langword="true"/> when the row now needs saving.</returns>
+    private bool StampLogin(User user)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        if (user.LastLoginDate is { } lastLogin && now - lastLogin < LastLoginGranularity)
+        {
+            return false;
+        }
+
+        user.LastLoginDate = now;
+        return true;
+    }
+
+    /// <summary>
     /// Keeps the display fields in step with the token (issue #28), so a rename in Entra shows up without
     /// waiting for the next <c>POST /users/sync</c>. Only non-empty claims overwrite — a token that omits
     /// a claim must not blank a value the directory sync filled in — and only a real difference counts,
@@ -255,8 +350,9 @@ public sealed class UserService(
     /// </summary>
     /// <remarks>
     /// <c>LastSyncedDate</c> is deliberately <b>not</b> stamped here: it means "when an Entra sync last
-    /// touched this row", which is what <c>UserContracts</c> documents and what an admin reads it as. A
-    /// separate <c>LastLoginDate</c> is the honest column for "this account is in use" — tracked as #167.
+    /// touched this row", which is what <c>UserContracts</c> documents and what an admin reads it as.
+    /// <c>LastLoginDate</c> is the honest column for "this account is in use", and
+    /// <see cref="StampLogin"/> — not this method — writes it (#167).
     /// </remarks>
     /// <returns><see langword="true"/> when a field changed and the row needs saving.</returns>
     private bool RefreshFromClaims(User user)

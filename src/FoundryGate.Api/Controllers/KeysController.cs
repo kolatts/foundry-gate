@@ -4,6 +4,7 @@ using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Keys.Contracts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace FoundryGate.Api.Controllers;
 
@@ -26,10 +27,17 @@ public sealed class KeysController(IApimKeyService keys, IUserLifecycleService l
     /// Decrypts and returns the caller's full key once (spec &#167;11: fetched directly, never stored in
     /// the browser). Audited as <c>key.revealed</c>. 404 when the caller has no key.
     /// </summary>
-    /// <remarks>Not yet rate-limited — a leaked bearer token can call this repeatedly; #136 adds a per-user limiter.</remarks>
+    /// <remarks>
+    /// Rate-limited per caller (#136): a leaked bearer token could otherwise pull the plaintext
+    /// indefinitely, leaving nothing behind but a growing run of <c>key.revealed</c> rows. Over the
+    /// limit is a <c>429</c> with <c>Retry-After</c>; see <see cref="Extensions.RateLimiterExtensions"/>
+    /// for the window and why it partitions on <c>oid</c> rather than on IP.
+    /// </remarks>
     [HttpPost("me/reveal")]
+    [EnableRateLimiting(RateLimitPolicyNames.KeyReveal)]
     [ProducesResponseType<ApiKeyRevealResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public Task<ApiKeyRevealResponse> RevealMineAsync(CancellationToken cancellationToken) =>
         keys.RevealMineAsync(cancellationToken);
 
@@ -38,10 +46,13 @@ public sealed class KeysController(IApimKeyService keys, IUserLifecycleService l
     /// (#117) — and returns the new primary once. The old key stops working immediately. 404 when
     /// the caller has no key; 409 when the APIM subscription behind it has vanished.
     /// </summary>
+    /// <remarks>Rate-limited per caller (#136), more tightly than reveal: each call breaks whatever CLI the developer already has configured.</remarks>
     [HttpPost("me/rotate")]
+    [EnableRateLimiting(RateLimitPolicyNames.KeyRotate)]
     [ProducesResponseType<ApiKeyRevealResponse>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public Task<ApiKeyRevealResponse> RotateMineAsync(CancellationToken cancellationToken) =>
         keys.RotateMineAsync(cancellationToken);
 
@@ -67,7 +78,15 @@ public sealed class KeysController(IApimKeyService keys, IUserLifecycleService l
     public Task<ApiKeyRevealResponse> ProvisionAsync(int userId, CancellationToken cancellationToken) =>
         lifecycle.ProvisionKeyForUserAsync(userId, cancellationToken);
 
-    /// <summary>Admin: rotates any user's key (both APIM keys regenerated, #117) and returns the new primary once. 404 unknown user or no key.</summary>
+    /// <summary>
+    /// Admin: rotates any user's key (both APIM keys regenerated, #117) and returns the new primary
+    /// once. 404 unknown user or no key.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately <em>not</em> rate-limited (#136): an admin rotating a compromised team's keys is
+    /// the traffic a limiter would get in the way of, and this route never discloses the caller's own
+    /// credential to a token thief.
+    /// </remarks>
     [HttpPost("{userId:int}/rotate")]
     [Authorize(Policy = PolicyNames.AdminOnly)]
     [ProducesResponseType<ApiKeyRevealResponse>(StatusCodes.Status200OK)]

@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Data;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Extensions;
 using FoundryGate.Domain.Common;
@@ -101,7 +102,7 @@ public sealed class QuotaAllocationService(
 
         // Past the commit point when resolution re-scoped the subscription at the gateway: the row that
         // records the tier must not be abandoned because the client hung up (CONVENTIONS.md; #156 review).
-        var completionToken = resolution.TierSyncRequested ? CancellationToken.None : cancellationToken;
+        var completionToken = CommitToken.For(resolution.TierSyncRequested, cancellationToken);
 
         try
         {
@@ -113,7 +114,7 @@ public sealed class QuotaAllocationService(
             // (UserId, PeriodYear, PeriodMonth) index. The other one won; drop our Added entity and
             // read theirs. Anything else (still no row) is a genuine failure and is rethrown.
             dbContext.Entry(resolution.Allocation).State = EntityState.Detached;
-            row = await FindRowAsync(user.UserId, period, cancellationToken);
+            row = await FindRowAsync(user.UserId, period, completionToken);
             if (row is null)
             {
                 throw;
@@ -123,7 +124,10 @@ public sealed class QuotaAllocationService(
             return ToResponse(row);
         }
 
-        return ToResponse(await FindRowAsync(user.UserId, period, cancellationToken)
+        // completionToken, not the request's: the read-back is what turns the committed row into the
+        // response, and failing it on a cancelled token would report a save that actually succeeded as
+        // an error (#163).
+        return ToResponse(await FindRowAsync(user.UserId, period, completionToken)
             ?? throw new InvalidOperationException($"Allocation for user {user.UserId} in {period} was saved but could not be read back."));
     }
 
@@ -173,7 +177,7 @@ public sealed class QuotaAllocationService(
         // failure aborts before this line and saves nothing (the tier sync adds its audit row without
         // saving, #156 review), so the reset is all-or-nothing exactly as this method's docs promise.
         var tierSyncCount = resolutions.Count(r => r.TierSyncRequested);
-        var completionToken = tierSyncCount > 0 ? CancellationToken.None : cancellationToken;
+        var completionToken = CommitToken.For(tierSyncCount > 0, cancellationToken);
 
         foreach (var allocation in touched)
         {

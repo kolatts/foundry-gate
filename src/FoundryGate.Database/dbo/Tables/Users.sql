@@ -13,7 +13,8 @@ CREATE TABLE [dbo].[Users] (
     [ApimSubscriptionKeyHint] NVARCHAR (4)  NOT NULL,
     [ApimKeyIssuedDate]   DATETIMEOFFSET (7) NULL,
     [CreatedDate]         DATETIMEOFFSET (7) NOT NULL,
-    [LastSyncedDate]      DATETIMEOFFSET (7) NULL
+    [LastSyncedDate]      DATETIMEOFFSET (7) NULL,
+    [LastLoginDate]       DATETIMEOFFSET (7) NULL
 );
 GO
 

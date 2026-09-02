@@ -281,6 +281,156 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task Rotate_survives_a_client_that_disconnects_the_instant_APIM_regenerates_the_key()
+    {
+        // #168's probe. The old primary is dead the moment RegeneratePrimaryKeyAsync returns, but
+        // everything after it ran on the request's token — so a disconnect in that window left the row
+        // holding ciphertext for a key APIM no longer recognises, and POST /keys/me/reveal handed the
+        // developer a dead credential with no signal at all.
+        var (service, admin) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Hangs Up", "hangsup@contoso.test");
+        var name = ApimSubscriptionNames.ForUser(developer.UserId);
+        var provisioned = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+
+        using var cts = new CancellationTokenSource();
+        _apim.AfterMutation = cts.Cancel;
+
+        var rotated = await service.RotateAsync(developer, cts.Token);
+
+        _apim.AfterMutation = null;
+        Assert.True(cts.IsCancellationRequested);
+
+        // Both keys still rotated (#117) — the secondary regeneration is past the same commit point.
+        Assert.Contains($"RegenerateSecondary:{name}", _apim.Calls);
+
+        // What the caller was handed is what the gateway holds...
+        Assert.Equal(_apim.KeysOf(name).PrimaryKey, rotated.PlaintextKey);
+        Assert.NotEqual(provisioned.PlaintextKey, rotated.PlaintextKey);
+
+        // ...and so is what the row stores, so a later reveal cannot return a dead credential.
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Equal(rotated.PlaintextKey, await _protector.UnprotectAsync(saved.ApimSubscriptionKey, CancellationToken.None));
+        Assert.Equal(rotated.PlaintextKey[^4..], saved.ApimSubscriptionKeyHint);
+        Assert.Equal(Now, saved.ApimKeyIssuedDate);
+
+        var audit = await SingleAuditAsync(AuditActions.KeyRotated, developer.UserId);
+        Assert.Equal(admin.UserId, audit.ActorUserId);
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotationFailed).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Rotate_compensation_runs_even_when_the_failure_is_a_cancellation()
+    {
+        // The other half of #168: RecordRotationFailureAsync used to be guarded by
+        // `when (exception is not OperationCanceledException)`, so a cancellation was the one failure
+        // that skipped compensation entirely — nothing restored, nothing logged, nothing audited, on the
+        // exact path where the key is already dead.
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Cancelled Mid-Rotate", "cancelled@contoso.test");
+        var provisioned = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var envelopeBefore = developer.ApimSubscriptionKey;
+        _apim.ThrowOnListSecrets = new OperationCanceledException("the caller went away");
+
+        _ = await Assert.ThrowsAsync<OperationCanceledException>(() => service.RotateAsync(developer, CancellationToken.None));
+
+        _apim.ThrowOnListSecrets = null;
+        Assert.Equal(envelopeBefore, developer.ApimSubscriptionKey);
+        Assert.Equal(provisioned.IssuedDate, developer.ApimKeyIssuedDate);
+        var failed = await SingleAuditAsync(AuditActions.KeyRotationFailed, developer.UserId);
+        Assert.Contains("\"error\":\"OperationCanceledException\"", failed.Details, StringComparison.Ordinal);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("STALE", StringComparison.Ordinal));
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotated).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Rotate_keeps_its_409_when_the_subscription_vanishes_right_after_the_regeneration()
+    {
+        // Moving work across the commit point (#168) put ListSecrets in the compensating catch, where an
+        // ApimSubscriptionNotFoundException would have fallen through as a bare 500. The whole method
+        // still answers "revoke and re-provision" with a 409.
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Vanishes Mid-Rotate", "vanishes@contoso.test");
+        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var name = ApimSubscriptionNames.ForUser(developer.UserId);
+        _apim.AfterMutation = () => _apim.Remove(name);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => service.RotateAsync(developer, CancellationToken.None));
+
+        _apim.AfterMutation = null;
+        Assert.IsType<ApimSubscriptionNotFoundException>(exception.InnerException);
+        Assert.Contains($"DELETE /keys/{developer.UserId}", exception.Message, StringComparison.Ordinal);
+
+        // Compensation still ran: the stale-but-consistent row, and a trail.
+        _ = await SingleAuditAsync(AuditActions.KeyRotationFailed, developer.UserId);
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotated).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Rotate_cancelled_while_ARM_is_still_regenerating_the_primary_leaves_a_trail_rather_than_nothing()
+    {
+        // The #184 review's catch: the primary regeneration is the longest call in the method and the
+        // last one on the request's token, so it is the likeliest moment to lose a client — and ARM may
+        // already have swapped the key. Before the fix the OperationCanceledException walked straight
+        // out: no compensation, no audit row, not even a log line, while the stored ciphertext may
+        // already have been dead.
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Cancelled Mid-Regenerate", "midregen@contoso.test");
+        var provisioned = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var envelopeBefore = developer.ApimSubscriptionKey;
+        _apim.ThrowOnRegeneratePrimaryKey = new OperationCanceledException("the caller went away");
+
+        _ = await Assert.ThrowsAsync<OperationCanceledException>(() => service.RotateAsync(developer, CancellationToken.None));
+
+        _apim.ThrowOnRegeneratePrimaryKey = null;
+
+        // Nothing to restore, and nothing changed: the row still holds what it held.
+        Assert.Equal(envelopeBefore, developer.ApimSubscriptionKey);
+        Assert.Equal(provisioned.IssuedDate, developer.ApimKeyIssuedDate);
+
+        // But the trail says "possibly stale", not "stale" — that is what we actually know.
+        var failed = await SingleAuditAsync(AuditActions.KeyRotationFailed, developer.UserId);
+        Assert.Contains("\"regenerationConfirmed\":false", failed.Details, StringComparison.Ordinal);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("may now be STALE", StringComparison.Ordinal));
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotated).ToListAsync());
+    }
+
+    [Fact]
+    public async Task A_secondary_regeneration_that_fails_costs_the_developer_nothing()
+    {
+        // #184 review: the secondary regeneration used to sit between the commit point and the store, so
+        // an ARM blip on a key nobody has ever been issued restored the stale ciphertext and locked the
+        // developer out. It now runs after the new primary is on the row, and failing it is a logged,
+        // audited piece of hygiene rather than an outage.
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Secondary Fails", "secondary@contoso.test");
+        var provisioned = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var name = ApimSubscriptionNames.ForUser(developer.UserId);
+        var secondaryBefore = _apim.KeysOf(name).SecondaryKey;
+        _apim.ThrowOnRegenerateSecondaryKey = new IOException("ARM returned 500 for the secondary.");
+
+        var rotated = await service.RotateAsync(developer, CancellationToken.None);
+
+        _apim.ThrowOnRegenerateSecondaryKey = null;
+
+        // The developer has a working key: what they were handed is what the gateway holds and what the
+        // row stores.
+        Assert.NotEqual(provisioned.PlaintextKey, rotated.PlaintextKey);
+        Assert.Equal(_apim.KeysOf(name).PrimaryKey, rotated.PlaintextKey);
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Equal(rotated.PlaintextKey, await _protector.UnprotectAsync(saved.ApimSubscriptionKey, CancellationToken.None));
+
+        // The stale secondary is still live, and both the audit row and the log say so.
+        Assert.Equal(secondaryBefore, _apim.KeysOf(name).SecondaryKey);
+        var audit = await SingleAuditAsync(AuditActions.KeyRotated, developer.UserId);
+        Assert.Contains("\"secondaryRotationError\":\"IOException\"", audit.Details, StringComparison.Ordinal);
+        Assert.Contains("\"keysRegenerated\":[\"primary\"]", audit.Details, StringComparison.Ordinal);
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotationFailed).ToListAsync());
+        Assert.Contains(_logs.Entries, entry => entry.Contains("secondary key could not be regenerated", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RevokeAsSystem_deletes_the_subscription_and_writes_a_system_audit_row_without_any_HTTP_caller()
     {
         var (service, _) = await CreateServiceAsync();
