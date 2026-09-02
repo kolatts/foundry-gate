@@ -130,6 +130,7 @@
     public EventCallback<QuotaIncreaseRequestResponse> OnReviewed { get; set; }
 
     private string? _reviewNotes;
+    private int _notesBelongToRequestId;
     private bool _busy;
 
     private bool IsPending => Request.StatusType == QuotaRequestStatusType.Pending;
@@ -143,10 +144,28 @@
 
     protected override void OnParametersSet()
     {
-        // A drawer reused for the next request must not carry the last one's draft notes.
-        if (!IsPending)
+        // Draft notes belong to the request they were typed against, and nothing else. The drawer
+        // on /requests is reused rather than unmounted — closing it by the scrim leaves the panel
+        // rendered — so "is this a different request than the one I hold notes for" is the only
+        // safe test. Keying on Pending was not: two pending requests in a row kept the first one's
+        // notes, and approving the second sent them to the wrong requester.
+        if (Request.QuotaIncreaseRequestId != _notesBelongToRequestId)
         {
             _reviewNotes = null;
+            _notesBelongToRequestId = Request.QuotaIncreaseRequestId;
+        }
+    }
+
+    /// <summary>
+    /// After a rejected verdict, replaces what is on screen with what the API now holds, so the
+    /// reviewer sees the other reviewer's decision instead of a stale set of live buttons.
+    /// </summary>
+    private async Task ReloadAfterConflictAsync()
+    {
+        var fresh = await Api.GetRequestAsync(Request.QuotaIncreaseRequestId);
+        if (fresh.IsSuccess && fresh.Value is not null)
+        {
+            await OnReviewed.InvokeAsync(fresh.Value);
         }
     }
 
@@ -168,16 +187,30 @@
             if (!result.IsSuccess)
             {
                 Snackbar.Add(result.Message ?? "That verdict didn't stick.", Severity.Error);
+
+                // A 409 means somebody else reviewed it first (api.md). Leaving the panel saying
+                // "Pending" with both buttons live invites pressing again — re-read and show what
+                // actually happened. ApiCallStatus folds every non-401/403/404 into Error, so the
+                // status code on the problem body is what distinguishes this one.
+                if (result.Error?.Status == 409)
+                {
+                    await ReloadAfterConflictAsync();
+                }
+
                 return;
             }
 
             Snackbar.Add(approve ? "Request approved." : "Request rejected.", Severity.Success);
 
+            // ReviewedDate is deliberately left as it was rather than stamped from the browser
+            // clock: the panel renders it as "Reviewed {time}", and a time this component invented
+            // is not the one the server recorded. Null falls through to the plain "Reviewed."
+            // wording until the next real read supplies the real instant. (It is also the only
+            // thing here that would have needed a naked UtcNow — CONVENTIONS.md forbids those.)
             var reviewed = Request with
             {
                 StatusType = approve ? QuotaRequestStatusType.Approved : QuotaRequestStatusType.Rejected,
                 ReviewNotes = review.ReviewNotes,
-                ReviewedDate = DateTimeOffset.UtcNow,
             };
 
             _reviewNotes = null;

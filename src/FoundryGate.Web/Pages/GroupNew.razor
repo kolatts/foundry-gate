@@ -1,6 +1,7 @@
 @page "/groups/new"
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 
@@ -69,11 +70,7 @@
 
     protected override async Task OnInitializedAsync()
     {
-        var tiers = await Api.GetQuotaTiersAsync();
-        if (tiers.IsSuccess && tiers.Value is not null)
-        {
-            _tiers = tiers.Value;
-        }
+        _tiers = await Tiers.GetAsync();
     }
 
     /// <summary>

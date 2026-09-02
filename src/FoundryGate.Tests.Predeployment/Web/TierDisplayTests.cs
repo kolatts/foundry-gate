@@ -1,6 +1,6 @@
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Quota;
-using FoundryGate.Web.Shared;
+using FoundryGate.Web.Services;
 
 namespace FoundryGate.Tests.Predeployment.Web;
 
@@ -65,7 +65,7 @@ public class TierDisplayTests
     [InlineData(2_000_000_000L, "2B tokens")]
     [InlineData(1_500L, "1,500 tokens")]
     public void Token_counts_read_the_way_an_admin_says_them(long tokens, string expected) =>
-        Assert.Equal(expected, TierDisplay.FormatTokens(tokens));
+        Assert.Equal(expected, TierDisplay.FormatTokensCompact(tokens));
 
     [Fact]
     public void Every_resolved_level_has_wording_that_says_where_the_budget_came_from()

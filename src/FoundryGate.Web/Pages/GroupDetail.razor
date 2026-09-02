@@ -1,6 +1,7 @@
 @page "/groups/{Id:int}"
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
 @inject IDialogService DialogService
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
@@ -208,11 +209,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        var tiers = await Api.GetQuotaTiersAsync();
-        if (tiers.IsSuccess && tiers.Value is not null)
-        {
-            _tiers = tiers.Value;
-        }
+        _tiers = await Tiers.GetAsync();
     }
 
     protected override Task OnParametersSetAsync() => LoadAsync();
@@ -317,7 +314,7 @@ else
 
     private async Task RemoveMemberAsync(GroupMemberResponse member)
     {
-        var confirmed = await ConfirmAsync(
+        var confirmed = await DialogService.ConfirmAsync(
             title: "Remove member",
             message: $"Remove {member.DisplayName} from {_group?.Name}?",
             detail: "Their own budget doesn't change; they just stop inheriting this group's. They keep their gateway key.",
@@ -332,6 +329,18 @@ else
 
     private async Task SyncFromEntraAsync()
     {
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Sync from Entra",
+            message: $"Replace {_group?.Name}'s roster with what Entra says it is?",
+            detail: "Members Entra doesn't list are removed and lose this group's budget from their next allocation; members it lists who exist here are added. Their own accounts and keys are untouched.",
+            confirmText: "Sync",
+            confirmColor: Color.Info);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
         _busy = true;
         try
         {
@@ -361,7 +370,7 @@ else
         }
 
         var hasMembers = _group.MemberCount > 0;
-        var confirmed = await ConfirmAsync(
+        var confirmed = await DialogService.ConfirmAsync(
             title: "Delete group",
             message: $"Delete {_group.Name}?",
             detail: hasMembers
@@ -394,21 +403,6 @@ else
         {
             _busy = false;
         }
-    }
-
-    private async Task<bool> ConfirmAsync(string title, string message, string detail, string confirmText, Color confirmColor)
-    {
-        var parameters = new DialogParameters<ConfirmDialog>
-        {
-            { x => x.Message, message },
-            { x => x.Detail, detail },
-            { x => x.ConfirmText, confirmText },
-            { x => x.ConfirmColor, confirmColor },
-        };
-
-        var dialog = await DialogService.ShowAsync<ConfirmDialog>(title, parameters);
-        var result = await dialog.Result;
-        return result is { Canceled: false };
     }
 
     private async Task<bool> MutateAsync(Func<Task<ApiCallResult<bool>>> mutation, string successMessage)

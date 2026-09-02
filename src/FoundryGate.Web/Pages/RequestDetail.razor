@@ -1,6 +1,7 @@
 @page "/requests/{Id:int}"
 @attribute [Authorize]
 @inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
 @inject ISnackbar Snackbar
 
 <PageTitle>Request #@Id — Foundry Gate</PageTitle>
@@ -59,11 +60,7 @@ else
             _isAdmin = state.User.IsInRole(RoleNames.Admin);
         }
 
-        var tiers = await Api.GetQuotaTiersAsync();
-        if (tiers.IsSuccess && tiers.Value is not null)
-        {
-            _tiers = tiers.Value;
-        }
+        _tiers = await Tiers.GetAsync();
     }
 
     protected override Task OnParametersSetAsync() => LoadAsync();
@@ -92,12 +89,10 @@ else
         _request = result.Value;
     }
 
-    private Task OnReviewedAsync(QuotaIncreaseRequestResponse reviewed)
-    {
-        // Show the verdict at once, then re-read so the reviewer and timestamp are the server's
-        // rather than this page's guess.
-        _request = reviewed;
-        StateHasChanged();
-        return LoadAsync();
-    }
+    /// <summary>
+    /// Unlike the drawer, this page re-reads straight away, so there is nothing for the optimistic
+    /// record to bridge — the reviewer and the timestamp come back from the server instead of
+    /// being guessed at for one render.
+    /// </summary>
+    private Task OnReviewedAsync(QuotaIncreaseRequestResponse reviewed) => LoadAsync();
 }

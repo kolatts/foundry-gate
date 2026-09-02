@@ -117,11 +117,17 @@ Every mutation re-reads the user afterwards, so nothing on screen is left stale.
 One button runs [`POST /users/sync`](/foundry-gate/reference/api/#users) and reports what it did.
 Two of the counts need more than a number, and the page gives them one:
 
-- **Group assignments skipped.** Access granted through an Entra *group* is not expanded to its
-  members yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)), so people who get in that
-  way are invisible to the sync — "not in the list" cannot mean "has left". Any run that sees group
-  assignments therefore deactivates nobody, and the page says so rather than letting a
-  `deactivatedCount: 0` read as "nobody left".
+- **Group assignments that could not be expanded.** Access granted through an Entra *group* is
+  expanded to that group's transitive members, so assigning developers through a group is a
+  first-class setup. A non-zero count is the groups whose expansion **failed** — Graph refused the
+  read (typically a missing `GroupMember.ReadBasic.All` on the API's managed identity), the group
+  has been deleted, or Graph was briefly unreachable. The run therefore saw only part of the
+  population, so "not in the list" cannot mean "has left" and departure detection is suspended for
+  it; people are still added and updated. The page says which fix applies — grant the role, or
+  unassign the deleted group — rather than letting a `deactivatedCount: 0` read as "nobody left".
+  On a healthy tenant the count is always zero
+  ([#120](https://github.com/kolatts/foundry-gate/issues/120) is the live-tenant checklist,
+  [#183](https://github.com/kolatts/foundry-gate/issues/183) the Graph paging caveat).
 - **Departures failed.** The gateway refused to delete somebody's subscription, so that person still
   holds a working key. That is an error, not a footnote; deprovisioning is idempotent, so the fix is
   to run the sync again.

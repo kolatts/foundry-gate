@@ -30,7 +30,7 @@
         @foreach (var tier in CappedTiers)
         {
             <MudSelectItem T="string" Value="@tier.ProductId">
-                @tier.DisplayName@(tier.MonthlyTokenQuota is { } cap ? $" — {TierDisplay.FormatTokens(cap)}" : string.Empty)
+                @tier.DisplayName@(tier.MonthlyTokenQuota is { } cap ? $" — {TierDisplay.FormatTokensCompact(cap)}" : string.Empty)
             </MudSelectItem>
         }
     </MudSelect>
@@ -75,6 +75,13 @@
     [Parameter]
     public string TestId { get; set; } = "quota";
 
+    /// <summary>
+    /// The cap that was selected when Unlimited was switched on, so switching it back off is an
+    /// undo rather than a reset to "Inherited". Null when the picker started out unlimited or
+    /// inheriting — there is nothing to come back to.
+    /// </summary>
+    private long? _capBeforeUnlimited;
+
     private IEnumerable<QuotaTierResponse> CappedTiers => Tiers.Where(t => !t.IsUnlimited);
 
     private string SelectedProductId =>
@@ -84,11 +91,24 @@
     {
         await IsUnlimitedChanged.InvokeAsync(isUnlimited);
 
-        // Unlimited wins over any cap (spec §3.2 step 1), so clear the number rather than
-        // leaving a stale one for whoever reads the request record next.
-        if (isUnlimited && MonthlyTokenQuota is not null)
+        if (isUnlimited)
         {
-            await MonthlyTokenQuotaChanged.InvokeAsync(null);
+            // Unlimited wins over any cap (spec §3.2 step 1), so clear the number rather than
+            // leaving a stale one for whoever reads the request record next — but remember it, so
+            // an accidental flick of the switch is undoable.
+            _capBeforeUnlimited = MonthlyTokenQuota;
+            if (MonthlyTokenQuota is not null)
+            {
+                await MonthlyTokenQuotaChanged.InvokeAsync(null);
+            }
+
+            return;
+        }
+
+        if (_capBeforeUnlimited is { } cap)
+        {
+            await MonthlyTokenQuotaChanged.InvokeAsync(cap);
+            _capBeforeUnlimited = null;
         }
     }
 

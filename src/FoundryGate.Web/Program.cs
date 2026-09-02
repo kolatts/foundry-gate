@@ -27,6 +27,10 @@ builder.Services.AddCascadingAuthenticationState();
 // rather than singleton — see DashboardStateService's remarks.
 builder.Services.AddScoped<DashboardStateService>();
 
+// The budget tiers, fetched once per session rather than by each of the seven admin pages that
+// render a tier name. Scoped for the same reason DashboardStateService is.
+builder.Services.AddScoped<QuotaTierCatalog>();
+
 builder.Services.AddMudServices(config =>
 {
     config.SnackbarConfiguration.PositionClass = MudBlazor.Defaults.Classes.Position.BottomRight;

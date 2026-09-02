@@ -196,17 +196,14 @@ else
 
     private async Task DeleteAsync(FoundryDeploymentResponse deployment)
     {
-        var parameters = new DialogParameters<ConfirmDialog>
-        {
-            { x => x.Message, $"Delete {deployment.AccountName}/{deployment.DeploymentName}?" },
-            { x => x.Detail, "Calls naming this deployment start failing as soon as ARM finishes. Nothing recreates it — you'd add it again by hand." },
-            { x => x.ConfirmText, "Delete" },
-            { x => x.ConfirmColor, Color.Error },
-        };
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Delete deployment",
+            message: $"Delete {deployment.AccountName}/{deployment.DeploymentName}?",
+            detail: "Calls naming this deployment start failing as soon as ARM finishes. Nothing recreates it — you'd add it again by hand.",
+            confirmText: "Delete",
+            confirmColor: Color.Error);
 
-        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Delete deployment", parameters);
-        var confirmation = await dialog.Result;
-        if (confirmation is not { Canceled: false })
+        if (!confirmed)
         {
             return;
         }

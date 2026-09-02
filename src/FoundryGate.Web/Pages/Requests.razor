@@ -1,7 +1,9 @@
 @page "/requests"
 @attribute [Authorize]
 @inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
 @inject ISnackbar Snackbar
+@inject NavigationManager Navigation
 
 <PageTitle>Requests — Foundry Gate</PageTitle>
 
@@ -85,7 +87,8 @@ else
         </PagerContent>
     </MudDataGrid>
 
-    <MudDrawer @bind-Open="_drawerOpen"
+    <MudDrawer Open="@_drawerOpen"
+               OpenChanged="@OnDrawerOpenChanged"
                Anchor="Anchor.End"
                Elevation="3"
                Variant="DrawerVariant.Temporary"
@@ -98,7 +101,8 @@ else
         <div class="pa-4">
             @if (_selected is { } selected)
             {
-                <RequestReviewPanel Request="@selected"
+                <RequestReviewPanel @key="selected.QuotaIncreaseRequestId"
+                                    Request="@selected"
                                     Tiers="@_tiers"
                                     CanReview="@_isAdmin"
                                     OnReviewed="@OnReviewedAsync" />
@@ -145,11 +149,7 @@ else
             _isAdmin = state.User.IsInRole(RoleNames.Admin);
         }
 
-        var tiers = await Api.GetQuotaTiersAsync();
-        if (tiers.IsSuccess && tiers.Value is not null)
-        {
-            _tiers = tiers.Value;
-        }
+        _tiers = await Tiers.GetAsync();
     }
 
     /// <summary>Keeps the filter in step with the query string, including a later in-app navigation to it.</summary>
@@ -193,23 +193,13 @@ else
             var query = new QuotaRequestQuery(_status, UserId: null);
             var result = await Api.GetRequestsAsync(query, new PagedRequest(state.Page + 1, state.PageSize), cancellationToken);
 
-            if (result.Status == ApiCallStatus.Forbidden)
+            if (result.IsSuccess)
             {
-                // ServerData is a callback from the grid, not a lifecycle method, so this page
-                // has to ask for its own re-render before AccessDenied replaces the grid.
-                _accessDenied = true;
-                StateHasChanged();
-                return new GridData<QuotaIncreaseRequestResponse> { Items = [], TotalItems = 0 };
+                // A real read supersedes every optimistic verdict this session recorded.
+                _reviewed.Clear();
             }
 
-            if (!result.IsSuccess || result.Value is null)
-            {
-                Snackbar.Add(result.Message ?? "Couldn't load requests.", Severity.Error);
-                return new GridData<QuotaIncreaseRequestResponse> { Items = [], TotalItems = 0 };
-            }
-
-            _reviewed.Clear();
-            return new GridData<QuotaIncreaseRequestResponse> { Items = result.Value.Items, TotalItems = result.Value.TotalCount };
+            return result.ToGridData(OnForbidden, Snackbar, "Couldn't load requests.");
         }
         finally
         {
@@ -219,17 +209,30 @@ else
 
     private Task OnStatusChangedAsync(QuotaRequestStatusType? status)
     {
+        if (status == _status)
+        {
+            return Task.CompletedTask;
+        }
+
         _status = status;
+
+        // Write the filter back into the URL so the page you are looking at is the page you can
+        // send someone — the deep link already worked inbound, this makes it work outbound too.
+        // Replacing rather than pushing keeps Back meaning "the page before this one".
+        Navigation.NavigateTo(
+            Navigation.GetUriWithQueryParameter("status", status?.ToString()),
+            forceLoad: false,
+            replace: true);
+
         return ReloadAsync();
     }
 
-    private async Task ReloadAsync()
+    private Task ReloadAsync() => _grid?.ReloadFromFirstPageAsync() ?? Task.CompletedTask;
+
+    private void OnForbidden()
     {
-        if (_grid is not null)
-        {
-            _grid.NavigateTo(Page.First);
-            await _grid.ReloadServerData();
-        }
+        _accessDenied = true;
+        StateHasChanged();
     }
 
     private void OnRowClick(DataGridRowClickEventArgs<QuotaIncreaseRequestResponse> args)
@@ -239,10 +242,20 @@ else
         _drawerOpen = true;
     }
 
-    private void CloseDrawer()
+    private void CloseDrawer() => OnDrawerOpenChanged(false);
+
+    /// <summary>
+    /// Every way the drawer closes — the button, the scrim, escape — clears the selection. Leaving
+    /// it set kept the previous request's panel mounted behind a hidden drawer, which is how one
+    /// person's draft review notes reached the next request.
+    /// </summary>
+    private void OnDrawerOpenChanged(bool open)
     {
-        _drawerOpen = false;
-        _selected = null;
+        _drawerOpen = open;
+        if (!open)
+        {
+            _selected = null;
+        }
     }
 
     private Task OnReviewedAsync(QuotaIncreaseRequestResponse reviewed)

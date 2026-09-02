@@ -1,6 +1,7 @@
 @page "/users"
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
 @inject NavigationManager Navigation
 @inject ISnackbar Snackbar
 
@@ -82,6 +83,18 @@ else
                     </MudChip>
                 </CellTemplate>
             </TemplateColumn>
+            <TemplateColumn Title="" Sortable="false">
+                <CellTemplate>
+                    @* RowClick is a mouse-only affordance — a <tr> takes no focus and carries no
+                       role — so every row also has a real control that keyboard and screen-reader
+                       users can reach. *@
+                    <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                   Size="Size.Small"
+                                   Href="@($"users/{context.Item.UserId}")"
+                                   aria-label="@($"Open {context.Item.DisplayName}")"
+                                   data-testid="@($"users-open-{context.Item.UserId}")" />
+                </CellTemplate>
+            </TemplateColumn>
             <TemplateColumn Title="Gateway key" Sortable="false">
                 <CellTemplate>
                     @if (context.Item.IsApiKeyProvisioned)
@@ -124,13 +137,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        // Tiers first: every budget cell renders a tier name, not a token count (D-013). A
-        // failure here is not fatal — TierDisplay falls back to the raw count.
-        var tiers = await Api.GetQuotaTiersAsync();
-        if (tiers.IsSuccess && tiers.Value is not null)
-        {
-            _tiers = tiers.Value;
-        }
+        _tiers = await Tiers.GetAsync();
     }
 
     /// <summary>
@@ -147,22 +154,7 @@ else
             var query = new UserListQuery(_search, _isActive);
             var result = await Api.GetUsersAsync(query, paging, cancellationToken);
 
-            if (result.Status == ApiCallStatus.Forbidden)
-            {
-                // ServerData is a callback from the grid, not a lifecycle method, so this page
-                // has to ask for its own re-render before AccessDenied replaces the grid.
-                _accessDenied = true;
-                StateHasChanged();
-                return new GridData<UserResponse> { Items = [], TotalItems = 0 };
-            }
-
-            if (!result.IsSuccess || result.Value is null)
-            {
-                Snackbar.Add(result.Message ?? "Couldn't load users.", Severity.Error);
-                return new GridData<UserResponse> { Items = [], TotalItems = 0 };
-            }
-
-            return new GridData<UserResponse> { Items = result.Value.Items, TotalItems = result.Value.TotalCount };
+            return result.ToGridData(OnForbidden, Snackbar, "Couldn't load users.");
         }
         finally
         {
@@ -182,14 +174,13 @@ else
         return ReloadAsync();
     }
 
-    private async Task ReloadAsync()
+    /// <summary>Back to page 1: page 3 of the old filter is rarely page 3 of the new one.</summary>
+    private Task ReloadAsync() => _grid?.ReloadFromFirstPageAsync() ?? Task.CompletedTask;
+
+    private void OnForbidden()
     {
-        if (_grid is not null)
-        {
-            // Back to page 1: page 3 of the old filter is rarely page 3 of the new one.
-            _grid.NavigateTo(Page.First);
-            await _grid.ReloadServerData();
-        }
+        _accessDenied = true;
+        StateHasChanged();
     }
 
     private void OnRowClick(DataGridRowClickEventArgs<UserResponse> args) =>

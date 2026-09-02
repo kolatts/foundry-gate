@@ -1,6 +1,7 @@
 @page "/users/{Id:int}"
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
@@ -92,7 +93,7 @@ else
                 </div>
 
                 <MudText Typo="Typo.body2" Class="mud-text-secondary">
-                    @TierDisplay.FormatTokens(allocation.TokensUsed) used this period
+                    @TierDisplay.FormatTokensExact(allocation.TokensUsed) used this period
                     (@allocation.PeriodYear-@allocation.PeriodMonth.ToString("00"))@(allocation.PercentUsed is { } pct ? $" — {pct:P0} of the budget" : string.Empty).
                 </MudText>
 
@@ -241,11 +242,7 @@ else
 
     protected override async Task OnInitializedAsync()
     {
-        var tiers = await Api.GetQuotaTiersAsync();
-        if (tiers.IsSuccess && tiers.Value is not null)
-        {
-            _tiers = tiers.Value;
-        }
+        _tiers = await Tiers.GetAsync();
     }
 
     /// <summary>Re-reads the whole user on every route change — <c>/users/{id}</c> is reused between users.</summary>
@@ -285,13 +282,13 @@ else
         }
 
         var confirmed = shouldBeActive
-            ? await ConfirmAsync(
+            ? await DialogService.ConfirmAsync(
                 title: "Activate user",
                 message: $"Activate {_detail.User.DisplayName}?",
                 detail: "Their quota is re-resolved and a fresh gateway key is minted. They reveal it themselves from My Account.",
                 confirmText: "Activate",
                 confirmColor: Color.Primary)
-            : await ConfirmAsync(
+            : await DialogService.ConfirmAsync(
                 title: "Deactivate user",
                 message: $"Deactivate {_detail.User.DisplayName}?",
                 detail: "Their APIM subscription is deleted, this month's allocation is hard-stopped and any pending quota requests are rejected. Calls through the gateway stop immediately.",
@@ -324,7 +321,7 @@ else
             return;
         }
 
-        var confirmed = await ConfirmAsync(
+        var confirmed = await DialogService.ConfirmAsync(
             title: "Provision key",
             message: $"Provision a gateway key for {_detail.User.DisplayName}?",
             detail: "An APIM subscription is created under their current tier. The key is shown once, here, and never again.",
@@ -344,7 +341,7 @@ else
             return;
         }
 
-        var confirmed = await ConfirmAsync(
+        var confirmed = await DialogService.ConfirmAsync(
             title: "Rotate key",
             message: $"Rotate {_detail.User.DisplayName}'s gateway key?",
             detail: "Both APIM keys are regenerated, so the old one stops working straight away. The new key is shown once, here, and never again.",
@@ -364,7 +361,7 @@ else
             return;
         }
 
-        var confirmed = await ConfirmAsync(
+        var confirmed = await DialogService.ConfirmAsync(
             title: "Revoke key",
             message: $"Revoke {_detail.User.DisplayName}'s gateway key?",
             detail: "Their APIM subscription is deleted and calls stop immediately. The account stays active and a new key can be provisioned later.",
@@ -375,21 +372,6 @@ else
         {
             await MutateAsync(() => Api.RevokeUserKeyAsync(Id), "Gateway key revoked.");
         }
-    }
-
-    private async Task<bool> ConfirmAsync(string title, string message, string detail, string confirmText, Color confirmColor)
-    {
-        var parameters = new DialogParameters<ConfirmDialog>
-        {
-            { x => x.Message, message },
-            { x => x.Detail, detail },
-            { x => x.ConfirmText, confirmText },
-            { x => x.ConfirmColor, confirmColor },
-        };
-
-        var dialog = await DialogService.ShowAsync<ConfirmDialog>(title, parameters);
-        var result = await dialog.Result;
-        return result is { Canceled: false };
     }
 
     /// <summary>

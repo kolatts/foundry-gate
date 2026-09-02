@@ -1,6 +1,7 @@
 @page "/users/sync"
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @inject IFoundryGateApiClient Api
+@inject IDialogService DialogService
 @inject ISnackbar Snackbar
 
 <PageTitle>Sync Entra Users — Foundry Gate</PageTitle>
@@ -15,9 +16,10 @@ else
     <MudText Typo="Typo.h4" Class="mb-2">Sync users from Entra</MudText>
     <MudText Typo="Typo.body1" Class="mud-text-secondary mb-6" Style="max-width: 44rem;">
         Reconciles the user list against the people assigned to the Foundry Gate application in
-        Entra. New assignees are added without a key, existing people have their name, email and
-        employee id refreshed, and people no longer assigned are deprovisioned — their gateway key
-        deleted and their account deactivated. Nothing is ever deleted, and nobody is re-activated
+        Entra — both those assigned directly and those assigned through a group, which is expanded
+        to its members. New assignees are added without a key, existing people have their name,
+        email and employee id refreshed, and people no longer assigned are deprovisioned: gateway
+        key deleted, account deactivated. Nothing is ever deleted, and nobody is re-activated
         automatically. Running it twice does nothing the second time.
     </MudText>
 
@@ -47,7 +49,7 @@ else
                 <li data-testid="sync-added">@result.AddedCount added</li>
                 <li data-testid="sync-updated">@result.UpdatedCount updated</li>
                 <li data-testid="sync-deactivated">@result.DeactivatedCount deactivated</li>
-                <li data-testid="sync-skipped">@result.SkippedGroupAssignmentCount group assignments skipped</li>
+                <li data-testid="sync-skipped">@result.SkippedGroupAssignmentCount group assignments could not be expanded</li>
                 <li data-testid="sync-failed">@result.FailedCount departures failed</li>
             </ul>
         </MudAlert>
@@ -64,15 +66,20 @@ else
 
         @if (result.SkippedGroupAssignmentCount > 0)
         {
-            <MudAlert Severity="Severity.Info" Class="mt-3" Style="max-width: 44rem;" data-testid="sync-skipped-explainer">
+            <MudAlert Severity="Severity.Warning" Class="mt-3" Style="max-width: 44rem;" data-testid="sync-skipped-explainer">
                 <MudText Typo="Typo.subtitle2" Class="mb-1">Nobody was deactivated on this run</MudText>
-                Access granted to the application through an Entra <em>group</em> isn't expanded to its
-                members yet, so people who get in that way are invisible to this sync. "Not in the
-                list" therefore can't mean "has left", and departure detection stays switched off for
-                any run that sees group assignments — additions and updates still applied.
-                Assign developers to the application individually if you need departures caught, or
-                follow
-                <MudLink Href="https://github.com/kolatts/foundry-gate/issues/121" Target="_blank">#121</MudLink>.
+                @result.SkippedGroupAssignmentCount group assignment(s) could not be expanded to their
+                members — Graph refused the read (usually a missing <code>GroupMember.ReadBasic.All</code>
+                on the API's managed identity), the group has been deleted, or Graph was briefly
+                unreachable. That means this run saw only part of the population, so "not in the list"
+                can't mean "has left" and departure detection was switched off for it; people were
+                still added and updated. The offending groups are named in the API log and in this
+                run's audit row. Grant the role (or unassign the deleted group) and run it again — on
+                a healthy tenant this count is always zero. See
+                <MudLink Href="https://github.com/kolatts/foundry-gate/issues/120" Target="_blank">#120</MudLink>
+                for the live-tenant checklist and
+                <MudLink Href="https://github.com/kolatts/foundry-gate/issues/183" Target="_blank">#183</MudLink>
+                for the Graph paging caveat.
             </MudAlert>
         }
     }
@@ -104,6 +111,20 @@ else
 
     private async Task RunAsync()
     {
+        // The only unconfirmed button in the admin surface used to be this one — and it is the one
+        // that deactivates accounts and deletes APIM subscriptions in bulk.
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Run Entra sync",
+            message: "Reconcile every user against Entra now?",
+            detail: "People no longer assigned to the application are deprovisioned: gateway key deleted, account deactivated, this month's allocation hard-stopped, pending requests rejected. New assignees are added and existing ones refreshed.",
+            confirmText: "Run sync",
+            confirmColor: Color.Warning);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
         _running = true;
         try
         {

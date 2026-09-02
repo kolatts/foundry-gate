@@ -77,5 +77,5 @@ Files expected to be created or modified:
 - [x] An Entra-linked group hides the add/remove controls and explains why (`GroupDetailPageTests`)
 - [x] `?status=Pending` — the dashboard badge's link — arrives as a filter (`RequestsPageTests`)
 - [x] `/users/sync` explains `skippedGroupAssignmentCount` (#121) and `failedCount` (`UsersSyncPageTests`)
-- [ ] Live: the pages against a real API + Entra tenant (manual, with #132's checklist)
+- [ ] Live: these five pages against a deployed API and a real Entra tenant — #192 (#132 is the APIM key lifecycle, which covers none of this)
 - [ ] `/users/sync` shows the *previous* run's time and result — no durable last-sync metadata exists yet, #171
