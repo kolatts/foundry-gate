@@ -25,9 +25,14 @@
     <None Update="host.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <!-- appsettings.json ships the quota tier table (Gateway:Tiers) the same way the Api's does;
-         GatewayOptionsTiersTests fails if the two files or infra/main.bicep's quotaTiers drift. -->
     <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <!-- The quota tier table (Gateway:Tiers) for DOTNET_ENVIRONMENT=local only — a deployed host
+         gets it from infra as Gateway__Tiers__{i}__* (#201). Kept identical to the Api's
+         appsettings.local.json; GatewayOptionsTiersTests and FunctionsAppSettingsTests fail if the
+         two files or infra/main.bicep's quotaTiers drift. -->
+    <None Update="appsettings.local.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <!-- Gitignored (it is where a developer's local SQL password ends up); local.settings.template.json

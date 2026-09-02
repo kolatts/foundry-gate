@@ -54,6 +54,9 @@ param foundryAccountNames array
 @description('The same per-tier alias map the gateway module turns into policy ({ <tier>: { <alias>: { deployment, pool, provider } } }). Flattened onto both hosts as Gateway__ModelAliases__{i}__* so GET /users/me can hand a developer the model names their tier actually permits (#153).')
 param productModelAliases object = {}
 
+@description('The same quota tiers the gateway module turns into APIM products ({ name, displayName, monthlyTokenQuota, tpm }). Projected onto both hosts as Gateway__Tiers__{i}__* so the tier table the control plane validates quotas against is the parameter that created the products (#201).')
+param quotaTiers array
+
 // ---- SQL ------------------------------------------------------------------------
 // NOTE: parameters here are pass-throughs and deliberately carry NO defaults. main.bicep
 // declares every default (and every @allowed list) once and passes all of them
@@ -242,6 +245,26 @@ var modelAliasConfig = flatten(map(range(0, length(modelAliasRows)), i => [
   { name: 'Gateway__ModelAliases__${i}__Provider', value: modelAliasRows[i].provider }
 ]))
 
+// The quota tier table, from the SAME parameter that creates the APIM products and renders their
+// llm-token-limit policies (modules/ai-gateway.bicep). A developer's budget IS a tier (D-013), so a
+// fork that overrides `quotaTiers` at deploy time would otherwise leave the control plane validating
+// quotas against caps the gateway has never heard of — SQL saying one thing, the gateway enforcing
+// another, with nothing to notice it (#201). Neither host ships the table any more: it is in each
+// one's appsettings.local.json for `local` only, so these variables are the only source on a
+// deployed host and there is no second copy to drift.
+var quotaTierRows = map(quotaTiers, tier => {
+  productId: tier.name
+  displayName: tier.displayName
+  monthlyTokenQuota: tier.monthlyTokenQuota
+})
+
+var quotaTierConfig = flatten(map(range(0, length(quotaTierRows)), i => [
+  { name: 'Gateway__Tiers__${i}__ProductId', value: quotaTierRows[i].productId }
+  { name: 'Gateway__Tiers__${i}__DisplayName', value: quotaTierRows[i].displayName }
+  // App settings are strings; the binder parses the long back out (Gateway:Tiers[i].MonthlyTokenQuota).
+  { name: 'Gateway__Tiers__${i}__MonthlyTokenQuota', value: string(quotaTierRows[i].monthlyTokenQuota) }
+]))
+
 module containerApp 'container-app.bicep' = {
   name: 'foundrygate-cp-containerapp'
   params: {
@@ -273,7 +296,8 @@ module containerApp 'container-app.bicep' = {
       ],
       sharedAppConfig,
       foundryAccountConfig,
-      modelAliasConfig
+      modelAliasConfig,
+      quotaTierConfig
     )
   }
   dependsOn: [rbac]
@@ -302,7 +326,8 @@ module functionApp 'function-app.bicep' = {
       ],
       sharedAppConfig,
       foundryAccountConfig,
-      modelAliasConfig
+      modelAliasConfig,
+      quotaTierConfig
     )
   }
   dependsOn: [rbac]
@@ -338,3 +363,6 @@ output functionsIdentityPrincipalId string = identities.outputs.functionsIdentit
 
 @description('The gateway alias map as the control plane receives it — one row per (tier, alias), matching the Gateway__ModelAliases__{i}__* settings on both hosts (#153).')
 output modelAliasRows array = modelAliasRows
+
+@description('The quota tier table as the control plane receives it — one row per tier, matching the Gateway__Tiers__{i}__* settings on both hosts (#201).')
+output quotaTierRows array = quotaTierRows

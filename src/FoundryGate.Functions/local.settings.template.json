@@ -5,7 +5,9 @@
     "gets from here. Both timers run on their real schedules locally: the reset only acts on",
     "SystemConfiguration[ResetDayOfMonth], and the usage sync no-ops with a warning while",
     "Gateway__LogAnalyticsWorkspaceId is empty (there is no local Log Analytics to query).",
-    "Never put a real secret in local.settings.json — cloud secrets are Key Vault references."
+    "Never put a real secret in local.settings.json — cloud secrets are Key Vault references.",
+    "The quota tier table is NOT here: appsettings.local.json carries it (#201), and setting it in",
+    "both places would give one table two sources. A deployed host gets it from infra instead."
   ],
   "IsEncrypted": false,
   "Values": {

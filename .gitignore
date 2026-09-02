@@ -35,6 +35,13 @@ appsettings.Secrets.json
 # default to exist in source so `AddFoundryGateData` has a connection string out of the box.
 !src/FoundryGate.Api/appsettings.Development.json
 
+# Same for both hosts' appsettings.local.json: since #201 they are the only place the quota tier
+# table lives for `ASPNETCORE_ENVIRONMENT`/`DOTNET_ENVIRONMENT` = local (a deployed host gets it from
+# infra as Gateway__Tiers__*), so a fork that cloned the repo and could not start locally would be
+# the cost of ignoring them. They carry the docker-compose SQL password and nothing else secret.
+!src/FoundryGate.Api/appsettings.local.json
+!src/FoundryGate.Functions/appsettings.local.json
+
 # ─── Docs site ───────────────────────────────────────────────
 docs-site/node_modules/
 docs-site/dist/

@@ -379,6 +379,10 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     foundryAccountNames: [for (region, i) in foundryRegions: foundry[i].outputs.accountName]
     // Same object the gateway module turns into policy — one source, two consumers (#153).
     productModelAliases: productModelAliases
+    // Same array the gateway module turns into APIM products — one source, two consumers (#201),
+    // so a fork that overrides quotaTiers cannot leave the control plane validating quotas
+    // against caps the gateway does not enforce.
+    quotaTiers: quotaTiers
     sqlAdminGroupObjectId: sqlAdminGroupObjectId
     sqlAdminGroupName: sqlAdminGroupName
     sqlDatabaseSku: sqlDatabaseSku
@@ -475,3 +479,6 @@ output functionsIdentityClientId string = controlPlane.?outputs.functionsIdentit
 output functionsIdentityPrincipalId string = controlPlane.?outputs.functionsIdentityPrincipalId ?? ''
 @description('The alias map as the control plane receives it — one row per (tier, alias), mirroring the Gateway__ModelAliases__{i}__* settings on both hosts (#153). Empty when the control plane is not deployed.')
 output modelAliasRows array = controlPlane.?outputs.modelAliasRows ?? []
+
+@description('The gateway quota tier table as the control plane receives it — one row per tier, matching the Gateway__Tiers__{i}__* settings on both hosts (#201).')
+output quotaTierRows array = controlPlane.?outputs.quotaTierRows ?? []

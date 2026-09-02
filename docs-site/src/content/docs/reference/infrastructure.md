@@ -331,15 +331,18 @@ is the single per-host table. A predeployment test (`GatewayInfraBindingTests`) 
 | `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | `true` / App Insights connection string |
 | `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl`, `Gateway__KeyEncryptionKeyUri`, `Gateway__FoundryAccountNames__{i}` | gateway addressing for the APIM key service, Foundry deployment service and reconciliation ([#108](https://github.com/kolatts/foundry-gate/issues/108)) |
 | `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | the workspace **GUID** (`customerId` — what `LogsQueryClient.QueryWorkspaceAsync` and `/v1/workspaces/{id}/query` mean by "workspace id") / the ARM resource id (`QueryResourceAsync`, management plane) |
-| `AzureWebJobsStorage__accountName` / `__credential=managedidentity` / `__clientId` (Functions) | identity-based host storage — also where the monthly reset takes its lock lease, so the reset needed no setting of its own |
+| `Gateway__Tiers__{i}__ProductId` / `__DisplayName` / `__MonthlyTokenQuota` | the quota tier table, projected from the same `quotaTiers` parameter that creates the APIM products and renders their `llm-token-limit` policies ([#201](https://github.com/kolatts/foundry-gate/issues/201)) |
+| `Gateway__ModelAliases__{i}__Tier` / `__Alias` / `__DeploymentName` / `__Provider` | the model alias map, flattened from `productModelAliases` ([#153](https://github.com/kolatts/foundry-gate/issues/153)) |
+| `AzureWebJobsStorage__accountName` / `__credential=managedidentity` / `__clientId` (Functions) | identity-based host storage — also where the scheduled jobs take their lock leases, so they needed no setting of their own |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` (Functions) | host telemetry |
 
-Everything in the `Gateway` section is set on **both** hosts from one shared block in the Bicep, so
-the API and the Functions host can never be told about different gateways. The one exception is the
-quota tier table (`Gateway__Tiers__*`), which infra does not emit at all: both hosts ship it in their
-own `appsettings.json` mirroring the `quotaTiers` parameter, so a fork that overrides that parameter
-must update them by hand — [#201](https://github.com/kolatts/foundry-gate/issues/201) tracks closing
-that gap.
+Every value in the `Gateway` section is set on **both** hosts from one shared block in the Bicep, so
+the API and the Functions host can never be told about different gateways — and since
+[#201](https://github.com/kolatts/foundry-gate/issues/201) that includes the quota tier table, which
+comes from the very `quotaTiers` parameter the APIM products are created from. A fork that overrides
+`quotaTiers` at deploy time therefore has nothing further to edit: the caps the gateway enforces and
+the caps the control plane validates budgets against are the same array. (A `local` host, which has
+no gateway, reads the table from each project's `appsettings.local.json` instead.)
 
 ## Outputs contract
 
@@ -361,6 +364,7 @@ empty strings when `deployControlPlane = false`.
 | `functionAppName`, `functionAppHostname`, `functionsStorageAccountName` | functions-deploy |
 | `staticWebAppName`, `staticWebAppHostname` | ui-deploy (deployment token lookup), CORS, Entra redirect URI |
 | `apiIdentityName` / `ClientId` / `PrincipalId`, `functionsIdentityName` / `ClientId` / `PrincipalId` | `_deploy-database.yml` (`api-identity-name` / `functions-identity-name`, and **required**: `api-identity-client-id` / `functions-identity-client-id` → CLI `db grant-identities`, which creates the contained users `WITH SID` — see [Why the client ids](#why-the-client-ids-not-from-external-provider)), Graph permission grants |
+| `modelAliasRows`, `quotaTierRows` | what the control plane was actually handed as `Gateway__ModelAliases__*` / `Gateway__Tiers__*` — readable after a deploy without opening the app settings blade, so a fork that overrode `productModelAliases` or `quotaTiers` can confirm the override landed |
 
 ## Health probes and serverless auto-pause
 

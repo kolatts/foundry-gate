@@ -38,8 +38,9 @@ public class AppSettings : IValidatableObject
 
     /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108 — optional as
     /// a whole; absent locally; <c>/foundry/*</c> and <c>/keys/*</c> need it) plus the always-required
-    /// quota <see cref="GatewayOptions.Tiers"/> (<c>Gateway:Tiers</c>, shipped in <c>appsettings.json</c>;
-    /// issue #32 / D-013). The type lives in <c>FoundryGate.Core</c> because the Functions host binds
+    /// quota <see cref="GatewayOptions.Tiers"/> (<c>Gateway__Tiers__{i}__*</c>, also set by infra — from
+    /// the same <c>quotaTiers</c> parameter that creates the APIM products, #201 — and locally from
+    /// <c>appsettings.local.json</c>; issue #32 / D-013). The type lives in <c>FoundryGate.Core</c> because the Functions host binds
     /// the same section (#119). See <see cref="GatewayOptions"/>.</summary>
     [Required]
     public GatewayOptions Gateway { get; set; } = new();

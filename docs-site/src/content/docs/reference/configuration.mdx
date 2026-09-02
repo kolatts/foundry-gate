@@ -52,7 +52,7 @@ deletions in its `-N` count); `GET /config` no longer lists them and `PUT /confi
 | Retired key | Read instead |
 |---|---|
 | `ApimGatewayUrl` | `Gateway__ApimGatewayUrl`, set on the container by infra from the APIM module's own output, so the address shown on `/me` can never drift from the gateway that was deployed |
-| `ApimProductId` | The per-tier APIM products (`Gateway__Tiers__*` / `quotaTiers` in `infra/main.bicep`; `GET /quota/tiers` lists them) — a subscription is issued against the product for the user's tier |
+| `ApimProductId` | The per-tier APIM products (`quotaTiers` in `infra/main.bicep`, emitted to both hosts as `Gateway__Tiers__*`; `GET /quota/tiers` lists them) — a subscription is issued against the product for the user's tier |
 | `EntraTenantId` | `AzureAd__TenantId`. Graph is called as the API's own identity, so the tenant is implied by the credential |
 
 <Aside type="caution">
@@ -62,17 +62,20 @@ nothing consumed it — but copy anything you want to keep before upgrading.
 
 ---
 
-## Gateway quota tiers (`Gateway:Tiers`)
+## Gateway quota tiers (`Gateway__Tiers__*`)
 
 **A developer's monthly budget is a gateway tier.** APIM's `token-quota` is a per-product
 literal, so the only budgets the gateway can enforce are the configured tier products — and
 therefore the only monthly token quotas the control plane accepts are a tier's exact cap or
-unlimited. The Api learns the tiers from the `Gateway:Tiers` section of `appsettings.json`
-(override per index with `Gateway__Tiers__{i}__ProductId` / `__DisplayName` /
-`__MonthlyTokenQuota`). The shipped values mirror `infra/main.bicep`'s `quotaTiers` parameter
-and a predeployment test (`GatewayOptionsTiersTests`) fails if the two drift. `Tiers` lives on the
+unlimited. Both hosts read the table from the `Gateway:Tiers` section, and on a deployed host infra
+sets it: `Gateway__Tiers__{i}__ProductId` / `__DisplayName` / `__MonthlyTokenQuota`, projected by
+`infra/modules/control-plane.bicep` from the **same `quotaTiers` parameter** that creates the APIM
+products and renders their `llm-token-limit` policies. One source, so the caps the control plane
+validates against and the caps the gateway enforces cannot disagree. Locally there is no gateway to
+emit anything, so each host carries the table in its own `appsettings.local.json`; a predeployment
+test (`GatewayOptionsTiersTests`) fails if those drift from the bicep defaults. `Tiers` lives on the
 same `Gateway` section as the `Gateway__*` addressing below, but unlike the addressing it is never
-optional — the Api refuses to start without at least one tier.
+optional — either host refuses to start without at least one tier.
 
 | ProductId | DisplayName | MonthlyTokenQuota | Meaning |
 |---|---|---|---|
@@ -83,20 +86,17 @@ optional — the Api refuses to start without at least one tier.
 Validated at startup (fail-fast): at least one tier, product ids ⊆ `GatewayTiers.All`, no
 duplicates, every cap in range, exactly one unlimited tier, and at least one finite tier.
 
-**Adding or changing a tier** means changing three things together: `quotaTiers` in
-`infra/main.bicep` (creates the APIM product and renders its `llm-token-limit` policy) and
-`Gateway:Tiers` in **both** hosts' `appsettings.json` (what the Api validates quotas against and
-serves from `GET /quota/tiers`, and what quota resolution in the Functions host maps onto). A new
-product id must also be added to `GatewayTiers.All` in Domain. Three predeployment tests keep the
-four in step, so getting this wrong fails the build rather than a deployment.
+**Adding or changing a tier** starts, and for a deployed fork usually ends, with `quotaTiers` in
+`infra/main.bicep`: it creates the APIM product, renders its `llm-token-limit` policy, and is
+projected onto both hosts as `Gateway__Tiers__*` — so overriding the parameter needs no second edit
+and cannot leave the control plane accepting budgets the gateway will not enforce. Two things still
+travel with it: a new product id must be added to `GatewayTiers.All` in Domain, and the `local`
+copies in both hosts' `appsettings.local.json` should be kept in step so a local run behaves like a
+deployed one. Predeployment tests cover all three, so getting this wrong fails the build rather than
+a deployment.
 
-`Gateway__Tiers__*` is the one part of the `Gateway` section infra does **not** set — every other
-value is an environment variable on both hosts (see below). A fork that overrides the `quotaTiers`
-parameter at deploy time therefore has to update both `appsettings.json` files by hand, or the gateway
-will enforce caps the control plane has never heard of;
-[#201](https://github.com/kolatts/foundry-gate/issues/201) tracks having infra emit them. Existing
-quotas that no longer match any tier are not rejected on read — they are enforced at the next tier up
-and flagged `isGatewayCapped` until an admin corrects them.
+Existing quotas that no longer match any tier are not rejected on read — they are enforced at the
+next tier up and flagged `isGatewayCapped` until an admin corrects them.
 
 ---
 
@@ -143,7 +143,7 @@ actually consumes each value.
 | `Gateway__LogAnalyticsWorkspaceId` | Functions | The workspace **GUID** — what the Log Analytics query API calls the "workspace id", not the ARM resource id. The only gateway value the usage reconciliation job needs; the host refuses to start if given anything that is not a GUID. Absent, the job logs a warning each pass and does nothing, which is right for a fork that has not enabled the gateway's GenAI diagnostic setting |
 | `Gateway__LogAnalyticsWorkspaceResourceId` | *(nothing yet)* | ARM resource id of the same workspace, for `QueryResourceAsync` and anything management-plane. Bound so nothing has to reconstruct it |
 | `Gateway__ModelAliases__{i}__Tier` / `__Alias` / `__DeploymentName` / `__Provider` | API | The gateway's model alias map, one indexed row per **tier + alias** — infra flattens `productModelAliases` from `infra/main.bicep` onto both hosts, so the map that becomes gateway policy and the map `GET /users/me` hands developers are the same object. `Tier` is a `quotaTiers` product id, `Provider` is `anthropic` or `openai` (case-insensitive). A tier the gateway does not create, a blank member, or the same tier+alias twice fails startup. Absent (a fork on an older deploy, or local) → `cliConfig.modelAliases` is `[]` and developers take model names from the CLI setup page |
-| `Gateway__Tiers__{i}__*` | API + Functions | **Not set by infra** — see [Gateway quota tiers](#gateway-quota-tiers-gatewaytiers) above. Both hosts ship the table in their own `appsettings.json`, mirroring `infra/main.bicep`'s `quotaTiers`; a fork that overrides `quotaTiers` at deploy time must edit both by hand until [#201](https://github.com/kolatts/foundry-gate/issues/201) has infra emit them |
+| `Gateway__Tiers__{i}__ProductId` / `__DisplayName` / `__MonthlyTokenQuota` | API + Functions | The quota tier table, one indexed row per tier — infra projects `quotaTiers` from `infra/main.bicep` onto both hosts, so the parameter that creates the APIM products is the one the control plane validates budgets against. `MonthlyTokenQuota` is a whole number of tokens, `0` meaning unlimited (bicep's own convention). Required: neither host starts without at least one tier, exactly one of them unlimited. Absent only on a `local` host, which reads `Gateway:Tiers` from `appsettings.local.json` instead. See [Gateway quota tiers](#gateway-quota-tiers-gateway__tiers__) above |
 
 ### API only
 

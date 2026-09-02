@@ -160,7 +160,12 @@ public class AppSettingsValidationTests
         var exception = Assert.Throws<ConfigurationValidationException>(appSettings.ValidateRecursively);
 
         Assert.Contains("Gateway.Tiers", exception.Message);
-        Assert.Contains("appsettings.json", exception.Message);
+
+        // Both places an operator could have to look, named in the message: the environment variables
+        // infra sets on a deployed host (#201) and the local file. "Set Gateway:Tiers" on its own sends
+        // whoever reads it hunting through an appsettings.json that no longer carries the table.
+        Assert.Contains("Gateway__Tiers__0__ProductId", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("appsettings.local.json", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -10,9 +10,9 @@ namespace FoundryGate.Tests.Predeployment.Functions.Configuration;
 
 /// <summary>
 /// The Functions host's fail-fast configuration (#38/#39): the same <c>ValidateRecursively()</c> call
-/// <c>Program.cs</c> makes, plus the parity check that keeps its shipped quota tiers identical to the
-/// Api's — two hosts resolving quota against different tier tables would be a silent divergence in the
-/// one number the whole product is about.
+/// <c>Program.cs</c> makes, plus the parity check that keeps its <c>local</c> quota tiers identical to
+/// the Api's — two hosts resolving quota against different tier tables would be a silent divergence in
+/// the one number the whole product is about. (Deployed, both read the table infra emits, #201.)
 /// </summary>
 public class FunctionsAppSettingsTests
 {
@@ -87,17 +87,39 @@ public class FunctionsAppSettingsTests
     }
 
     [Fact]
-    public void The_shipped_Functions_tier_table_is_identical_to_the_Apis()
+    public void The_local_Functions_tier_table_is_identical_to_the_Apis()
     {
+        // Both hosts get the deployed table from the same infra variable since #201, so the only copies
+        // left to disagree are the two appsettings.local.json files — and they must not, because a
+        // developer running the Api and `func start` side by side against one docker database would
+        // otherwise have the reset resolve budgets the Api refuses to accept.
         var repoRoot = FindRepoRoot();
 
-        var functionsTiers = TiersFrom(Path.Combine(repoRoot, "src", "FoundryGate.Functions", "appsettings.json"));
-        var apiTiers = TiersFrom(Path.Combine(repoRoot, "src", "FoundryGate.Api", "appsettings.json"));
+        var functionsTiers = TiersFrom(Path.Combine(repoRoot, "src", "FoundryGate.Functions", "appsettings.local.json"));
+        var apiTiers = TiersFrom(Path.Combine(repoRoot, "src", "FoundryGate.Api", "appsettings.local.json"));
 
         Assert.NotEmpty(apiTiers);
         Assert.Equal(apiTiers, functionsTiers);
     }
 
+    [Fact]
+    public void Neither_host_ships_a_tier_table_in_appsettings_json()
+    {
+        // The premise of #201's second half. Infra sets Gateway__Tiers__{i}__* on both hosts; a shipped
+        // copy would be a second source for one table, and on a fork whose quotaTiers has fewer entries
+        // than the shipped three, the leftover shipped index would survive as a phantom tier nothing
+        // created a product for.
+        var repoRoot = FindRepoRoot();
+
+        Assert.Empty(TiersFrom(Path.Combine(repoRoot, "src", "FoundryGate.Api", "appsettings.json")));
+        Assert.Empty(TiersFrom(Path.Combine(repoRoot, "src", "FoundryGate.Functions", "appsettings.json")));
+    }
+
+    /// <summary>
+    /// The tier table one appsettings file carries, or an empty list when it carries no
+    /// <c>Gateway</c> section at all — which is what "ships no tier table" looks like since #201, and
+    /// is why this does not assert the bound options are non-null.
+    /// </summary>
     private static List<(string ProductId, string DisplayName, long MonthlyTokenQuota)> TiersFrom(string appSettingsPath)
     {
         var options = new ConfigurationBuilder()
@@ -106,8 +128,7 @@ public class FunctionsAppSettingsTests
             .GetSection("Gateway")
             .Get<GatewayOptions>();
 
-        Assert.NotNull(options);
-        return [.. options.Tiers.Select(t => (t.ProductId, t.DisplayName, t.MonthlyTokenQuota))];
+        return [.. (options?.Tiers ?? []).Select(t => (t.ProductId, t.DisplayName, t.MonthlyTokenQuota))];
     }
 
     private static FunctionsAppSettings Valid() => new()

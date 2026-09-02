@@ -47,8 +47,8 @@ public class GatewayInfraBindingTests
     /// The three shapes a <c>Gateway</c> setting takes in the bicep:
     /// <c>Gateway__Member</c> (scalar), <c>Gateway__Member__${i}</c> (list of scalars, e.g.
     /// <c>FoundryAccountNames</c>), and <c>Gateway__Member__${i}__Field</c> (list of objects — the form
-    /// <c>Gateway__ModelAliases__${i}__Tier</c> takes in #211 and <c>Gateway__Tiers__${i}__ProductId</c>
-    /// would take under #201).
+    /// <c>Gateway__ModelAliases__${i}__Tier</c> (#211) and <c>Gateway__Tiers__${i}__ProductId</c>
+    /// (#201) take).
     /// </summary>
     private static readonly Regex GatewaySettingRegex = new(
         @"name:\s*'Gateway__(?<member>[A-Za-z0-9]+)(?<collection>__\$\{i\})?(?:__(?<field>[A-Za-z0-9]+))?'",
@@ -57,14 +57,9 @@ public class GatewayInfraBindingTests
     /// <summary>
     /// Members of <see cref="GatewayOptions"/> that infra deliberately does <b>not</b> set, and why.
     /// Anything not listed here must appear in the bicep — that is the whole point of the section.
+    /// Empty since #201 turned the tier table, the last holdout, into an infra-emitted setting.
     /// </summary>
-    private static readonly Dictionary<string, string> NotSetByInfra = new(StringComparer.Ordinal)
-    {
-        [nameof(GatewayOptions.Tiers)] =
-            "the tier table ships in both hosts' appsettings.json, mirroring infra/main.bicep's quotaTiers " +
-            "parameter (GatewayOptionsTiersTests and FunctionsAppSettingsTests keep the three in step). A fork " +
-            "that overrides quotaTiers at deploy time must still edit Gateway:Tiers by hand — see issue #201.",
-    };
+    private static readonly Dictionary<string, string> NotSetByInfra = new(StringComparer.Ordinal);
 
     [Fact]
     public void Every_Gateway_variable_infra_sets_binds_to_a_GatewayOptions_member()
@@ -76,11 +71,11 @@ public class GatewayInfraBindingTests
     }
 
     /// <summary>
-    /// The same machinery over settings the bicep does not carry yet, so the alarm is known to
-    /// understand the shapes arriving next (#204 review): the list-of-objects form that #211's
-    /// <c>Gateway__ModelAliases__${i}__*</c> and #201's <c>Gateway__Tiers__${i}__*</c> use. Bound against
-    /// <see cref="GatewayOptions.Tiers"/>, which exists today, so this is a real end-to-end proof that a
-    /// nested-field key reaches its property — not just that the regex matches it.
+    /// The same machinery over a hand-written snippet rather than the real bicep, so the alarm's grasp
+    /// of the list-of-objects shape is pinned independently of what any bicep happens to emit today
+    /// (#204 review). Bound against <see cref="GatewayOptions.Tiers"/>, so it is a real end-to-end
+    /// proof that a nested-field key reaches its property rather than only that the regex matches it —
+    /// which is what let #201 be written knowing the shape would bind.
     /// </summary>
     [Fact]
     public void A_nested_field_setting_binds_to_the_list_items_property()
@@ -161,15 +156,37 @@ public class GatewayInfraBindingTests
     }
 
     [Fact]
-    public void Infra_does_not_emit_the_tier_table()
+    public void Infra_emits_the_tier_table_with_every_field_a_GatewayTier_binds()
     {
-        // Pinned so the note in reference/configuration.mdx stays honest: if infra ever starts emitting
-        // Gateway__Tiers__*, the appsettings-is-the-source guidance (#201) has to change with it, and the
-        // binder appends configured list items to a pre-populated list rather than replacing it — so
-        // having both sources at once would silently duplicate every tier.
-        Assert.DoesNotContain(
+        // The inverse of what this test asserted before #201, and the reason the issue existed: a
+        // developer's budget IS a tier (D-013), so a fork that overrode `quotaTiers` at deploy time got
+        // APIM products and llm-token-limit caps the control plane had never heard of. Both now come
+        // from the one parameter. The field list is pinned as well as the presence: an infra that
+        // emitted only ProductId would bind a table of nameless zero-cap (= unlimited) tiers, which
+        // validates and is wrong.
+        var tiers = Assert.Single(
             ScrapeGatewaySettings(ControlPlaneBicep()),
             setting => setting.Member == nameof(GatewayOptions.Tiers));
+
+        Assert.True(tiers.IsCollection);
+        Assert.Equal(
+            [nameof(GatewayTier.ProductId), nameof(GatewayTier.DisplayName), nameof(GatewayTier.MonthlyTokenQuota)],
+            tiers.Fields);
+    }
+
+    [Fact]
+    public void The_tier_table_infra_emits_is_derived_from_the_quotaTiers_parameter()
+    {
+        // Names, not values: the bicep's `quotaTiers` default is checked against the local tier table by
+        // GatewayOptionsTiersTests and against GatewayTiers by GatewayTiersTests. What only this test
+        // can see is that the settings are *derived from the parameter* rather than typed out again — a
+        // second literal copy in control-plane.bicep would pass every other check in the repository
+        // while a fork's override silently failed to reach the control plane, which is the whole of
+        // #201.
+        var bicep = WithoutComments(ControlPlaneBicep());
+
+        Assert.Contains("param quotaTiers array", bicep, StringComparison.Ordinal);
+        Assert.Contains("map(quotaTiers, tier =>", bicep, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -187,8 +204,11 @@ public class GatewayInfraBindingTests
 
             // Every block the hosts are handed, not just the two that existed when this test was
             // written — otherwise a later change that wires a new block to one host slips through
-            // (#211 review). modelAliasConfig is the alias map (#153).
+            // (#211 review). modelAliasConfig is the alias map (#153); quotaTierConfig is the quota
+            // tier table (#201), and the Functions host needs it as much as the Api does — quota
+            // resolution runs in the monthly reset.
             Assert.Contains("modelAliasConfig", declaration, StringComparison.Ordinal);
+            Assert.Contains("quotaTierConfig", declaration, StringComparison.Ordinal);
         }
     }
 
