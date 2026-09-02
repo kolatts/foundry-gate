@@ -21,12 +21,16 @@ namespace FoundryGate.Cli.Commands.Db.Compare;
 /// </para>
 /// <para>
 /// One quirk needs fixing up after publish, discovered by this PR's own live proof: when a column
-/// changes, DacFx rewrites the whole <c>CREATE TABLE</c> batch with the primary key declared inline,
-/// but leaves this repo's original, separate <c>ALTER TABLE ... ADD CONSTRAINT [PK_x] PRIMARY KEY</c>
-/// batch sitting untouched below it — two declarations of the same constraint, which still parses (and
-/// still passes <c>SchemaParityTests</c>' first-match regex) but fails to deploy.
-/// <see cref="SqlTableFileNormalizer"/> strips the leftover duplicate from every file <c>Publish</c>
-/// touches.
+/// changes, DacFx rewrites the whole <c>CREATE TABLE</c> batch with every table-level constraint
+/// declared inline — primary key, foreign keys, <c>UNIQUE</c>, <c>CHECK</c>, column-level
+/// <c>DEFAULT</c> — but leaves this repo's original, separate <c>ALTER TABLE ... ADD CONSTRAINT</c>
+/// batches for those same constraints sitting untouched below it. Two declarations of the same
+/// constraint still parse (and, since <c>SchemaParityTests</c> only looks at the first match of each
+/// constraint name, still pass its parity check) but fail <c>dotnet build src/FoundryGate.Database</c>
+/// outright for any table with more than a single-column primary key and no foreign keys — i.e. most of
+/// the schema. <see cref="SqlTableFileNormalizer"/> strips the leftover duplicates, of any constraint
+/// kind, from every file <c>Publish</c> touches, and throws (naming the file) if it cannot verify the
+/// duplication is actually gone rather than silently leaving a broken file behind.
 /// </para>
 /// <para>
 /// This class is deliberately not unit tested: it is not logic, it is a thin call into native SQL
@@ -135,7 +139,7 @@ public sealed class DacFxSchemaComparer(string connectionString, string projectP
     private static void NormalizeFile(string path)
     {
         var original = File.ReadAllText(path);
-        var normalized = SqlTableFileNormalizer.RemoveDuplicatePrimaryKeyAlterStatement(original);
+        var normalized = SqlTableFileNormalizer.RemoveDuplicateInlineConstraints(original, path);
         if (!string.Equals(original, normalized, StringComparison.Ordinal))
         {
             File.WriteAllText(path, normalized);

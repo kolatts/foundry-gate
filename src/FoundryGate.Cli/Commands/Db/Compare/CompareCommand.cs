@@ -36,8 +36,12 @@ internal sealed class CompareCommand : Command
     {
         var connectionStringOption = new Option<string>("--connection-string")
         {
-            Description = "Connection string to the source database " +
-                $"(default: the local docker SQL Server, '{SetupCommand.LocalConnectionString}')",
+            // Deliberately does not interpolate SetupCommand.LocalConnectionString here: it carries the
+            // docker-compose-only local SA password (docker-compose.yml — not a real secret, but no
+            // reason to echo it in --help output either).
+            Description = "Connection string to the source database (default: the local docker SQL " +
+                "Server from docker-compose.yml, port 3433 — the same connection string " +
+                "`foundrygate local setup` uses)",
             DefaultValueFactory = _ => SetupCommand.LocalConnectionString
         };
 
