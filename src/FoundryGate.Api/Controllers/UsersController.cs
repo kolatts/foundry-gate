@@ -121,15 +121,15 @@ public sealed class UsersController(IUserService users, IEntraUserSyncService en
     /// <see cref="IEntraUserSyncService.SyncUsersAsync"/>.
     /// </summary>
     /// <response code="200">The run's counts.</response>
-    /// <response code="400">Entra sync is disabled on this host (<c>Entra:Enabled</c> is false).</response>
     /// <response code="403">The caller has no <c>User</c> row yet (call <c>GET /users/me</c> first) or is not an admin.</response>
     /// <response code="409">The directory returned no assigned users while active users exist locally; nothing was changed.</response>
+    /// <response code="503">Entra sync is disabled on this host (<c>Entra:Enabled</c> is false).</response>
     [HttpPost("sync")]
     [Authorize(Policy = PolicyNames.AdminOnly)]
     [ProducesResponseType<UserSyncResult>(StatusCodes.Status200OK)]
-    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public Task<UserSyncResult> SyncAsync(CancellationToken cancellationToken) =>
         entraUserSyncService.SyncUsersAsync(cancellationToken);
 }
