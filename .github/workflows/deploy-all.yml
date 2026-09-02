@@ -115,10 +115,6 @@ jobs:
       # identity) - #143.
       api-identity-client-id: ${{ needs.prepare-database.outputs.api-identity-client-id }}
       functions-identity-client-id: ${{ needs.prepare-database.outputs.functions-identity-client-id }}
-    secrets:
-      AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
-      AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
-      AZURE_SUBSCRIPTION_ID: ${{ needs.prepare-database.outputs.azure-subscription-id }}
 
   api:
     name: API

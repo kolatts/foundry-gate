@@ -36,6 +36,13 @@ name: Deploy Database (Reusable)
 #   are empty rather than silently falling back. A fork that HAS granted its server Directory Readers can
 #   set `allow-external-provider: true` to take the name-resolution path deliberately.
 #
+# OIDC identifiers: read from the target GitHub Environment's VARIABLES (#137), exactly like every
+# other `_deploy-*.yml`. `vars.AZURE_CLIENT_ID` / `_TENANT_ID` / `_SUBSCRIPTION_ID` resolve because
+# the `deploy` job below declares `environment: ${{ inputs.environment }}`; they are identifiers,
+# not secrets (masking GUIDs makes resource ids unreadable in logs — #68 / plans/22). This workflow
+# therefore takes NO `secrets:` inputs, and `_prepare-database.yml` no longer has to bridge them
+# through job outputs.
+#
 # OIDC permissions: a reusable workflow cannot grant itself `id-token: write` — GitHub only issues
 # the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN that azure/login@v2 needs when the CALLING workflow (or
 # job) declares `permissions: id-token: write, contents: read`. The `permissions:` block below is a
@@ -50,8 +57,9 @@ name: Deploy Database (Reusable)
 #         contents: read
 #       with: { ... }
 #
-# The "Verify OIDC permissions" step below fails fast with that exact guidance instead of letting
-# azure/login@v2 fail later with a cryptic AADSTS error.
+# The shared `.github/actions/azure-oidc-login` guard checks both the variables and the id-token
+# grant and fails fast with that exact guidance (pointing at #109) instead of letting azure/login@v2
+# fail later with a cryptic AADSTS error.
 
 on:
   workflow_call:
@@ -112,13 +120,6 @@ on:
         required: false
         type: number
         default: 2
-    secrets:
-      AZURE_CLIENT_ID:
-        required: true
-      AZURE_TENANT_ID:
-        required: true
-      AZURE_SUBSCRIPTION_ID:
-        required: true
 
 # One deploy at a time per target environment — a second run queued mid-deploy would race the
 # first over the same database (and its firewall rules — `ip cleanup` assumes no sibling run is live).
@@ -137,23 +138,12 @@ jobs:
     env:
       # Read by the CLI's ArmClient so firewall-rule calls target the same subscription azure/login
       # selected, rather than whichever subscription ARM happens to list first for the principal.
-      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       TARGET_ENVIRONMENT: ${{ inputs.environment }}
       SQL_SERVER_NAME: ${{ inputs.sql-server-name }}
       SQL_RESOURCE_GROUP: ${{ inputs.sql-resource-group }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Verify OIDC permissions are granted
-        run: |
-          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-            echo "::error::ACTIONS_ID_TOKEN_REQUEST_URL is not set. The workflow (or job) that calls" \
-              "_deploy-database.yml must declare 'permissions: id-token: write' and 'contents: read'" \
-              "— this reusable workflow's own 'permissions:' block can only narrow what the caller" \
-              "grants, it cannot add id-token access on its own. See this file's header comment for" \
-              "the exact snippet to add to the caller."
-            exit 1
-          fi
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -173,13 +163,17 @@ jobs:
           name: foundrygate-cli
           path: ./cli
 
-      - name: Azure Login
+      # The three identifiers come from the Environment this job targets (`environment:` above),
+      # so no caller has to pass them; the guard inside the action fails with an actionable
+      # ::error:: when the Environment is not configured yet (#109).
+      - name: Azure login (OIDC)
         id: login
-        uses: azure/login@v2
+        uses: ./.github/actions/azure-oidc-login
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
 
       - name: Resolve SQL Server connection details
         env:

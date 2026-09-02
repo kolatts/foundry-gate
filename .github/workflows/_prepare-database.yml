@@ -5,13 +5,13 @@ name: Prepare Database Deploy (Reusable)
 #   1. builds the two artifacts _deploy-database.yml downloads — `dacpac`
 #      (FoundryGate.Database.dacpac) and `foundrygate-cli` (framework-dependent publish of
 #      FoundryGate.Cli);
-#   2. resolves the SQL server / database / resource group from the infra deployment outputs
-#      (docs reference/infrastructure "Outputs contract") — its three `sql-*` inputs;
-#   3. surfaces the environment's OIDC identifiers as outputs, because _deploy-database.yml takes
-#      them as `secrets:` and a `uses:` job cannot read Environment-scoped variables itself
-#      (only jobs that declare `environment:` can). The ids are identifiers, not secrets, so
-#      passing them through job outputs is safe; #137 asks _deploy-database.yml to read the
-#      variables directly so this bridge can go.
+#   2. resolves the SQL server / database / resource group and the two identity client ids from the
+#      infra deployment outputs (docs reference/infrastructure "Outputs contract").
+#
+# It used to ALSO surface the environment's OIDC identifiers as outputs, because
+# _deploy-database.yml took them as `secrets:`. That bridge is gone (#137): _deploy-database.yml's
+# `deploy` job declares `environment:` and therefore reads `vars.AZURE_*` itself, like every other
+# `_deploy-*.yml`.
 #
 # Callers then do:
 #   database:
@@ -23,10 +23,6 @@ name: Prepare Database Deploy (Reusable)
 #       sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
 #       sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
 #       sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
-#     secrets:
-#       AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
-#       AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
-#       AZURE_SUBSCRIPTION_ID: ${{ needs.prepare-database.outputs.azure-subscription-id }}
 
 on:
   workflow_call:
@@ -42,12 +38,6 @@ on:
         value: ${{ jobs.prepare.outputs.sql-server-name }}
       sql-database-name:
         value: ${{ jobs.prepare.outputs.sql-database-name }}
-      azure-client-id:
-        value: ${{ jobs.prepare.outputs.azure-client-id }}
-      azure-tenant-id:
-        value: ${{ jobs.prepare.outputs.azure-tenant-id }}
-      azure-subscription-id:
-        value: ${{ jobs.prepare.outputs.azure-subscription-id }}
       api-identity-client-id:
         description: "apiIdentityClientId output - lets db grant-identities CREATE USER ... WITH SID (no Directory Readers needed)."
         value: ${{ jobs.prepare.outputs.api-identity-client-id }}
@@ -70,9 +60,6 @@ jobs:
       sql-database-name: ${{ steps.infra.outputs.sql-database-name }}
       api-identity-client-id: ${{ steps.infra.outputs.api-identity-client-id }}
       functions-identity-client-id: ${{ steps.infra.outputs.functions-identity-client-id }}
-      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
-      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v4
         with:
