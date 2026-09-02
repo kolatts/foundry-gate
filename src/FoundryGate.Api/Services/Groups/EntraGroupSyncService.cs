@@ -4,6 +4,7 @@ using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
@@ -212,7 +213,7 @@ public sealed class EntraGroupSyncService(
             ? []
             : await quotaResolution.ResolveManyAsync(reresolved, BillingPeriod.Current(timeProvider), cancellationToken);
         var gatewayMoved = resolutions.Any(resolution => resolution.TierSyncRequested);
-        var commitToken = gatewayMoved ? CancellationToken.None : cancellationToken;
+        var commitToken = CommitToken.For(gatewayMoved, cancellationToken);
 
         if (skippedUnknown > 0)
         {
