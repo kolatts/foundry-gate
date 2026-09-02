@@ -415,13 +415,25 @@ The predicate is a date bound rather than a substring match on the details JSON 
 same `TimeProvider`, `OccurredDate` is indexed, and matching `"periodYear":2026` as text would break
 the day the serializer's formatting changed); the details still carry the period for human readers.
 
-### D-019: Production keeps one Environment approval per stage
-**Date:** 2026-09-02 (#141)
-**Decision:** A full-stack production `deploy-all.yml` run asks for **five** approvals — infra,
-database prepare, database deploy, the three app tiers together, postdeployment tests — and that
-stays. What changes is legibility: an ungated `plan` job at the head of the chain prints the
-sequence and what each approval buys into the run summary before the first gate, and
+### D-019: Production keeps one Environment approval per gated job
+**Date:** 2026-09-02 (#141), corrected in the #198 review
+**Decision:** A full-stack production `deploy-all.yml` run asks for **six** approvals — infra
+deploy, database prepare, database deploy, API, Functions+UI together, postdeployment tests —
+and that stays. What changes is legibility: an ungated `plan` job at the head of the chain
+prints the sequence and what each approval buys into the run summary before the first gate, and
 `reference/ci-cd` documents the same table.
+**Correction (review of PR #198):** the first version of this entry, the `plan` job's table and
+two docs pages all said *five*, counted off the stage diagram. The real count comes off the JOB
+graph — every job declaring `environment:` in any reusable workflow the chain calls — and it was
+**seven**: `_deploy-api.yml` had two gated jobs (`build-push`, `deploy`), and `functions`/`ui`
+`needs: [database, api]` so they cannot be pending alongside `api`. Getting the number wrong
+defeats the entire deliverable of #141, which is a reviewer knowing what is coming. Two fixes:
+`_deploy-api.yml`'s two jobs became one (they were strictly sequential, and the second gate
+bought nothing), and every copy of the number now names the jobs rather than the stages, so the
+next drift is visible. Rows 4 and 5 stay separate deliberately — batching `functions`/`ui` with
+`api` would save the sixth click and reintroduce the day-0 race that ordering exists to prevent
+(the API stage re-runs the whole subscription deployment on a bootstrap run, and an infra re-run
+restarting the Function App mid-upload is a real flake).
 **Why not one gate:** #141's Option A was a single `approve-production` job followed by the real
 work against an unprotected `production-deploy` Environment carrying the same variables and its
 own federated credential. That does not collapse the gate, it *removes* it — any job in any

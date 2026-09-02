@@ -177,7 +177,7 @@ param sqlDatabaseSku object = {
 @description('Azure SQL backup storage redundancy: Local for dev, Geo for prod.')
 param sqlBackupStorageRedundancy string = 'Local'
 
-@description('Zone-redundant Azure SQL database (prod). Costs roughly the compute line again and needs a region with availability zones and a SKU that supports ZR; false for dev.')
+@description('Zone-redundant Azure SQL database (prod). Adds ~60% to the compute meter (eastus2 retail 2026-09-02: $0.152217/vCore-hr + $0.09133/vCore-hr ZR surcharge) and needs a region with availability zones and a SKU that supports ZR; false for dev.')
 param sqlZoneRedundant bool = false
 
 @description('Entra tenant the API validates bearer tokens against (AzureAd__TenantId).')
@@ -206,7 +206,7 @@ param containerAppCpu string = '0.25'
 @description('Memory per API replica — must be the pair of containerAppCpu (see above).')
 param containerAppMemory string = '0.5Gi'
 
-@description('Zone-redundant Container Apps environment. ARM rejects it without a VNet-integrated environment (infrastructureSubnetId), so it stays false until private networking (spec §11) lands — plumbed now so that change is one parameter, tracked in #196.')
+@description('Zone-redundant Container Apps environment. ARM rejects it without a VNet-integrated environment (infrastructureSubnetId), which infra/ does not declare anywhere yet, and the property is immutable — so turning this on is part of the private-networking change (spec §11) and RECREATES the environment, changing the Container App ingress FQDN. Tracked in #196; the parameter exists so that work does not also have to re-thread it.')
 param containerAppsZoneRedundant bool = false
 
 @allowed(['Standard_LRS', 'Standard_ZRS', 'Standard_GRS'])

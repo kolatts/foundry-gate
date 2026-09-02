@@ -26,7 +26,7 @@ merge to main ─► anything deployable → deploy-all.yml   : THE chain, again
               │     (infra/**, src/**, Directory.*.props, global.json, NuGet.config,
               │      .github/workflows/_deploy-*.yml, .github/scripts/**, .github/actions/**)
               │
-              │     infra → prepare-database → database → api → functions ∥ ui
+              │     plan → infra → prepare-database → database → api → functions ∥ ui
               │           → postdeployment tests → summary
               └─► docs-site/**       → docs-deploy.yml : GitHub Pages
 
@@ -91,7 +91,7 @@ children (`workflow_call`) that take `environment:` and are composed by `deploy-
 | File | Triggers | Jobs | Gate | Reads |
 |---|---|---|---|---|
 | `ci.yml` | PR, merge queue | `build-test` (**required check**), `docs-build` | — | — |
-| `deploy-all.yml` | **push `main`** (`infra/**`, `src/**`, `Directory.*.props`, `global.json`, `NuGet.config`, `.github/workflows/_deploy-*.yml`, `.github/scripts/**`, `.github/actions/**`) · dispatch (`environment`, `create-model-deployments`, `run-seed-test`) | infra → prepare-database → database → api → functions ∥ ui → postdeployment-tests → summary | the target environment, per stage | — |
+| `deploy-all.yml` | **push `main`** (`infra/**`, `src/**`, `Directory.*.props`, `global.json`, `NuGet.config`, `.github/workflows/_deploy-*.yml`, `.github/scripts/**`, `.github/actions/**`) · dispatch (`environment`, `create-model-deployments`, `run-seed-test`) | plan → infra → prepare-database → database → api → functions ∥ ui → postdeployment-tests → summary | the target environment, once per gated job (six for a full production run) | — |
 | `infra-deploy.yml` | PR `infra/**` → what-if comment · dispatch (`environment`, `create-model-deployments`) | calls `_deploy-infra.yml` | `dev-plan` (PR what-if) · `dev` / `production` (dispatch) | — |
 | `infra-destroy.yml` | dispatch only (`environment`, `confirmation`, `purge-soft-deleted`) | `validate-confirmation` → `list-resources` → `destroy` | `dev-destroy` / `prod-destroy` | `AZURE_*` on the destroy environment |
 | `api-deploy.yml` | PR touching the Dockerfile → image build check · dispatch (`environment`, `run-seed-test`) | `image-build` (PR, no Azure) · `_prepare-database` → `_deploy-database` → `_deploy-api` | `dev` / `production` | — |
@@ -104,17 +104,47 @@ children (`workflow_call`) that take `environment:` and are composed by `deploy-
 Nothing on the PR track can reach an identity with subscription access. The PR track is:
 `ci.yml`, `claude-review.yml`, `actionlint.yml`, the Docker image build (no credentials at all),
 the Astro build, a Bicep what-if under the read-only `dev-plan` identity, and the Static Web Apps
-preview under `ui-preview` — an identity whose only role assignment is **Static Web App
-Contributor on the dev Static Web App**.
+preview under `ui-preview`.
 
-That last one is the exception that proves the rule. A `pull_request` run executes the PR
-branch's own copy of the workflow files, so the workflow cannot protect anything — only the
-identity can. `ui-preview` is therefore scoped to one resource, and `ui-deploy.yml`'s preview
-jobs deliberately resolve nothing from the deployment outputs (an identity with a role on one
-Static Web App could not read them anyway): the app name, resource group and API base URL are
-`ui-preview` Environment variables. The only Azure call is `az staticwebapp secrets list`
-against that one app. A change that makes a PR-track job read subscription-scope state is a
-change that reopens the hole #144 closed.
+That last one is the exception that proves the rule, and it is worth stating precisely. A
+`pull_request` run executes the PR branch's own copy of the workflow files, so the workflow
+cannot protect anything — only the identity can.
+
+**Through ARM**, `ui-preview` holds exactly one role. There is no built-in one to hold:
+`Static Web App Contributor` does not exist, and no built-in role grants *any*
+`Microsoft.Web/staticSites` action, so the built-in answer would have been plain Contributor —
+Write and Delete on the site included. `infra/modules/swa-preview-role.bicep` defines
+`FoundryGate SWA Preview Publisher` instead: four actions (`staticSites/Read`,
+`staticSites/listsecrets/action`, `staticSites/builds/Read`, `staticSites/builds/Delete`),
+`assignableScopes` containing only the dev Static Web App, so it cannot be assigned anywhere
+else even deliberately.
+
+**Through the deployment token**, the boundary is softer, and the docs should not pretend
+otherwise: the token is **app-scoped, not slot-scoped**. Azure exposes no slot-scoped Static Web
+Apps credential, so a compromised PR-track run could publish to the dev site's *production*
+slot, not merely a preview slot — and that hostname is a registered MSAL redirect origin for the
+dev SPA app registration. FoundryGate accepts that explicitly as a **dev-only** risk: the
+production Static Web App is a different resource this identity has no role on, the dev site
+holds no data, and recovery is one `UI Deploy` dispatch. `deployment_environment: pr-<n>` makes
+the intended staging target explicit and auditable, but it is a convention, not an enforcement.
+
+The two invariants that keep the ARM half true: the preview jobs resolve nothing from the
+deployment outputs (app name, resource group and API base URL are `ui-preview` Environment
+variables — an identity with a role on one resource could not read those outputs anyway), and
+the only Azure calls are `az staticwebapp secrets list` / `environment list` against that one
+app, both inside `.github/actions/swa-preview-token`. A change that makes a PR-track job read
+subscription-scope state is a change that reopens the hole #144 closed.
+
+Two things a preview cannot do, both tracked on [#138](https://github.com/kolatts/foundry-gate/issues/138):
+sign-in fails (the preview hostname is not a registered redirect URI) and every API call is
+CORS-blocked (`control-plane.bicep` allows exactly one origin, the dev site's own). A preview is
+honest for layout and for routes that never call the API, and nothing more, until #138 lands
+wildcard-subdomain CORS on the API side as well as the redirect URIs.
+
+`stapp-foundrygate-dev` is Free tier, which allows **three** staging environments. The preview
+job counts them before it publishes and soft-skips with a `::notice::` at the limit rather than
+failing inside the deploy action after the token fetch — close a stale UI PR, or move the dev
+SWA to Standard.
 
 ### Reusable children (`workflow_call`)
 
@@ -139,7 +169,7 @@ issues `CREATE USER … WITH SID = <client id>, TYPE = E`. That is the path that
 Directory Readers on the SQL server identity — `CREATE USER … FROM EXTERNAL PROVIDER` (the
 `allow-external-provider` fallback) does, because Azure SQL then has to resolve the name in
 Entra on behalf of a service principal.
-| `_deploy-api.yml` | GitVersion → `docker build` (`src/FoundryGate.Api/Dockerfile`) → local `/health` smoke → `az acr login` + push → roll the Container App (`az containerapp update --image`, or an infra re-run with `FG_API_IMAGE` when the app still runs the bootstrap placeholder — that flips port 8080 and the probes together with the image) → wait for a Healthy revision → `GET /health` 200 over the FQDN (`/health/ready` reported, not gating — [#106](https://github.com/kolatts/foundry-gate/issues/106)) | `environment` | `image`, `api-base-url` |
+| `_deploy-api.yml` | **one gated job** (it was two until #198): GitVersion → `docker build` (`src/FoundryGate.Api/Dockerfile`) → local `/health` smoke → `az acr login` + push → roll the Container App (`az containerapp update --image`, or an infra re-run with `FG_API_IMAGE` when the app still runs the bootstrap placeholder — that flips port 8080 and the probes together with the image) → wait for a Healthy revision → `GET /health` 200 over the FQDN (`/health/ready` reported, not gating — [#106](https://github.com/kolatts/foundry-gate/issues/106)) | `environment` | `image`, `api-base-url` |
 | `_deploy-functions.yml` | `dotnet publish` (artifact keeps the hidden `.azurefunctions` folder) → `Azure/functions-action@v1` with `sku: flexconsumption`, `remote-build: false`, RBAC auth → `az functionapp show` state must be `Running` | `environment` | `function-app-hostname` |
 | `_deploy-ui.yml` | `dotnet publish` FoundryGate.Web → rewrites `wwwroot/appsettings.json` (`Api.BaseUrl` from the Container App FQDN, `AzureAd.Authority`/`ClientId` and `Api.Scopes` from variables; stale `.br`/`.gz` copies removed) → deployment token via `az staticwebapp secrets list` (masked, never stored) → `Azure/static-web-apps-deploy@v1` `upload` | `environment` | `static-web-app-hostname` |
 | `_postdeployment-tests.yml` | waits for `/health`, really runs `dotnet test` on `FoundryGate.Tests.Postdeployment` with `FG_API_BASE_URL` / `FG_UI_BASE_URL`, and reports the step’s actual outcome; the step is `continue-on-error` so a failure does not gate the chain until [#139](https://github.com/kolatts/foundry-gate/issues/139). The project holds only the scaffold smoke test, and the summary says so — a green line here is not evidence the stack works | `environment` | `summary` |
@@ -150,7 +180,8 @@ Entra on behalf of a service principal.
 |---|---|
 | `.github/actions/azure-oidc-login` | guard + `azure/login@v2` + dynamic CLI extension install; soft-skips on `pull_request` |
 | `.github/actions/version` | GitVersion setup/execute, `image-tag` output |
-| `.github/actions/build-api-image` | `docker build` of `src/FoundryGate.Api/Dockerfile` + local `/health` 200 smoke test; shared by the PR image check and the real build-and-push |
+| `.github/actions/build-api-image` | `docker build` of `src/FoundryGate.Api/Dockerfile`, then two checks on the built image: it ships no `appsettings.*.json` developer configuration (`.dockerignore` patterns are case-sensitive, so a mis-cased pattern fails silently — the check belongs on the artefact), and it answers `/health` 200 with configuration supplied **from the environment**, exactly as Container Apps supplies it. Shared by the PR image check and the real build-and-push |
+| `.github/actions/swa-preview-token` | the whole Azure surface of the PR-preview track in one place: `ui-preview` OIDC login, target check and `az staticwebapp secrets list`. Both preview jobs use it, so neither carries its own copy to drift |
 | `.github/scripts/infra/resolve-api-image.sh` | the `FG_API_IMAGE` the param files require: the Container App named by the deployment outputs and its current image, or the placeholder when the `foundrygate-{env}` deployment record does not exist yet. Everything else — auth, throttling, a resource group deleted behind the record, an app with no image — is **fatal**, and the value is written to `$GITHUB_OUTPUT` by the script so no caller can swallow the exit code |
 | `.github/scripts/infra/resolve-api-image.test.sh` | 11 offline cases over the above, driven by a stub `az` (`FG_AZ`); run by `actionlint.yml` and by `bash .github/scripts/infra/resolve-api-image.test.sh` locally |
 | `.github/scripts/infra/what-if.sh` | `az deployment sub what-if`, ANSI-stripped, summary line extracted |
@@ -163,7 +194,7 @@ Entra on behalf of a service principal.
 |---|---|---|---|
 | `dev` | none — automatic | **protected branches only** | every dev deploy |
 | `dev-plan` | none | any branch | the PR-track Bicep what-if **only**. Its identity is intended to hold **Reader** on the subscription and nothing else (#109) |
-| `ui-preview` | none | any branch | the PR-track Static Web Apps preview **only**. Its identity is intended to hold **Static Web App Contributor scoped to `stapp-foundrygate-dev`** and nothing else (#109) |
+| `ui-preview` | none | any branch | the PR-track Static Web Apps preview **only**. Its identity is intended to hold one custom role, **`FoundryGate SWA Preview Publisher`** (`infra/modules/swa-preview-role.bicep`), assignable on `stapp-foundrygate-dev` alone (#109) |
 | `production` | 1 required reviewer | protected branches (`main`) only | production deploys |
 | `dev-destroy` | required reviewer + 5 min wait | any branch | `infra-destroy.yml` (dev) |
 | `prod-destroy` | required reviewer + 30 min wait (a second reviewer is an owner action, #109) | protected branches only | `infra-destroy.yml` (production) |
@@ -176,18 +207,36 @@ deployment token. That is why the PR what-if runs under `dev-plan` and the PR pr
 `ui-preview`, each holding one narrow role: the workflow file is attacker-controlled on the PR
 track, so the identity is the only real boundary.
 
-### Production approvals: one per stage, deliberately
+### Production approvals: one per gated job, deliberately
 
-GitHub approves **pending jobs**, not whole runs, so a full-stack production `deploy-all.yml`
-run asks **five** times:
+GitHub approves **pending jobs**, not whole runs — and not stages either. The count is a
+property of the *job graph*: every job that declares `environment:` in any reusable workflow
+`deploy-all.yml` calls stops the run once. A full-stack production run asks **six** times:
 
 | # | Job(s) waiting | What you are approving |
 |---|---|---|
-| 1 | `infra` | the Bicep change — the what-if preview runs inside this job, so approving it is approving *running* the preview, not the result |
-| 2 | `prepare-database` | building the dacpac and reading the deployment outputs (no writes) |
-| 3 | `database` | the dacpac deploy, seeding and the SQL firewall window — the irreversible one |
-| 4 | `api`, `functions`, `ui` | rolling the three app tiers (three jobs, but they become pending together, so it is one visit) |
-| 5 | `postdeployment-tests` | read-only smoke tests |
+| 1 | `Infra - Deploy` | the Bicep change — the what-if preview runs inside this job, so approving it is approving *running* the preview, not the result. `Infra - Validate` is ungated and has already reported |
+| 2 | `Database - Prepare` | building the dacpac and reading the deployment outputs (no writes) |
+| 3 | `Database - Deploy` | the dacpac deploy, seeding and the SQL firewall window — the irreversible one |
+| 4 | `API - Build, push and deploy` | building the image, pushing it to ACR and rolling the Container App |
+| 5 | `Functions` + `UI` | two jobs, one visit — they become pending together |
+| 6 | `Postdeployment tests` | read-only smoke tests |
+
+Two of those are recent corrections, and both are worth knowing about because they are the kind
+of thing that silently drifts:
+
+- `_deploy-api.yml` used to have **two** gated jobs, `build-push` and `deploy`. They were
+  strictly sequential (`deploy` did `needs: build-push`, re-checked out, re-logged in and
+  re-read the same deployment outputs), so the second gate bought nothing and cost a reviewer
+  a click. They are one job now.
+- Rows 4 and 5 are separate visits, not one, because `functions` and `ui` declare
+  `needs: [database, api]`. Batching them with the API would save an approval and reintroduce
+  the day-0 race that ordering exists to prevent: on a bootstrap run the API stage re-runs the
+  whole subscription deployment to swap the placeholder image, and an infra re-run restarting
+  the Function App mid-upload is a real flake. One extra click is the cheaper side of that trade.
+
+If you add or remove a job that declares `environment:`, this table, the `plan` job in
+`deploy-all.yml`, D-019 and `plans/22` are all wrong until you update them together.
 
 This is the decision recorded as **D-019** ([#141](https://github.com/kolatts/foundry-gate/issues/141)):
 **keep per-stage approvals.** Each stage is independently re-runnable, and the gates are what
@@ -205,9 +254,10 @@ output. OIDC gives no third option — the token is minted per job and the Envir
 baked into its `subject`, so a job that does not declare `environment: production` cannot mint
 a token that federates to production, full stop.
 
-What we did instead is make the sequence legible: `deploy-all.yml` starts with an
-ungated `plan` job that writes the table above into the run summary before the first gate, so
-a reviewer knows how many approvals are coming and what each one buys.
+What we did instead is make the sequence legible and shorten it where it was genuinely
+redundant: `deploy-all.yml` starts with an ungated `plan` job (no `permissions:` at all) that
+writes the table above into the run summary before the first gate, so a reviewer knows how many
+approvals are coming and what each one buys — and the API's two gates became one.
 
 ### Variables (per Environment)
 
@@ -226,8 +276,8 @@ the deployment outputs every other workflow resolves names from:
 
 | Variable | Purpose |
 |---|---|
-| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | the preview app registration (Static Web App Contributor on `stapp-foundrygate-dev` only) |
-| `FG_STATIC_WEB_APP_NAME` / `FG_RESOURCE_GROUP` | which Static Web App to publish the preview slot to |
+| `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | the preview app registration (holds `FoundryGate SWA Preview Publisher` on `stapp-foundrygate-dev`, and nothing else) |
+| `FG_STATIC_WEB_APP_NAME` / `FG_RESOURCE_GROUP` | which Static Web App to publish the preview slot to — the preview never resolves these from the deployment outputs |
 | `FG_API_BASE_URL` | `Api.BaseUrl` in the preview's `appsettings.json`, e.g. `https://<dev container app fqdn>/api/v1/` |
 | `FG_ENTRA_WEB_CLIENT_ID` / `FG_ENTRA_API_CLIENT_ID` | same MSAL ids as `dev` |
 

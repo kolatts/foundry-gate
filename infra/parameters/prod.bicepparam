@@ -50,9 +50,17 @@ param sqlDatabaseSku = {
   family: 'Gen5'
   capacity: 2
 }
+// Geo: cross-region restore for the system of record. Note the asymmetry this creates with
+// the zone-redundant database below — RA-GRS backup storage is LRS *within* the primary
+// region, so a zone loss takes the primary backups with it while the database itself keeps
+// serving. 'GeoZone' (already in main.bicep's @allowed list) is the pairing that makes both
+// halves zone-tolerant; it is not the default here only because it costs more and the
+// restore path of last resort is the geo-secondary either way. Revisit with #105.
 param sqlBackupStorageRedundancy = 'Geo'
 // Zone-redundant database: survives the loss of one availability zone in eastus2 without a
-// restore. Roughly doubles the SQL compute line (docs reference/cost-and-capacity).
+// restore. Adds ~60% to the SQL compute line, not 2x — eastus2 retail (2026-09-02) is
+// $0.152217/vCore-hr plus a $0.09133/vCore-hr zone-redundancy surcharge
+// (docs reference/cost-and-capacity).
 param sqlZoneRedundant = true
 
 param entraApiClientId = readEnvironmentVariable('FG_ENTRA_API_CLIENT_ID', '00000000-0000-0000-0000-000000000000')
@@ -66,8 +74,11 @@ param containerAppMaxReplicas = 3
 param containerAppCpu = '0.5'
 param containerAppMemory = '1.0Gi'
 // Zone redundancy for the Container Apps environment is deliberately still false: ARM only
-// accepts zoneRedundant:true on a VNet-integrated environment (infrastructureSubnetId), which
-// arrives with private networking (spec §11). Flipping this to true is then a one-line change.
+// accepts zoneRedundant:true on a VNet-integrated environment (infrastructureSubnetId), and
+// infra/ declares no VNet at all yet. It is also IMMUTABLE, so this is not a flip-in-place:
+// turning it on is part of the private-networking change (spec §11), it recreates
+// cae-foundrygate-prod, and the Container App's ingress FQDN changes with it. The parameter
+// exists so that work inherits the wiring, not because the switch is cheap. #196.
 param containerAppsZoneRedundant = false
 // Zone-redundant Functions storage: the deployment package and the host's own state.
 param functionsStorageSku = 'Standard_ZRS'

@@ -291,15 +291,20 @@ subscription if a previous deprovision left one behind — and issues a new key.
 This is the pipeline FoundryGate is built around, as fixed in `CONVENTIONS.md` §CI/CD —
 GitHub Actions with OIDC federated credentials and no long-lived Azure secrets. **What
 runs today** on every pull request: `ci.yml` (build, tests, format), `claude-review.yml`, and —
-by path — `actionlint.yml`, the Docker image build and a Bicep what-if under a read-only
-identity. **What exists on `main`** for the merge path: one workflow, `deploy-all.yml`, which
+by path — `actionlint.yml`, the Docker image build, a Bicep what-if under a read-only
+identity, and a Static Web Apps preview of the UI. **What exists on `main`** for the merge path: one workflow, `deploy-all.yml`, which
 runs the whole ordered chain (infra → database → API → Functions ∥ UI → post-deploy tests →
 summary) against dev. The single-component workflows deliberately have no `push` trigger —
 they share a per-environment concurrency lock, and three of them racing meant one deploy was
 silently cancelled. They stay as `workflow_dispatch` buttons for redeploying one component.
-Gating it all: five GitHub Environments (`dev`, `dev-plan`, `production`, `dev-destroy`,
-`prod-destroy`); `dev` is restricted to protected branches, so nothing a pull request can run
-reaches it. **What has not happened yet**: a run against Azure. That needs the owner-side OIDC
+Gating it all: six GitHub Environments (`dev`, `dev-plan`, `ui-preview`, `production`,
+`dev-destroy`, `prod-destroy`); `dev` is restricted to protected branches, so no pull request
+can reach the identity that is Owner on the subscription. The two Environments a pull request
+*can* reach are deliberately tiny: `dev-plan` is Reader on the subscription and does nothing but
+a what-if, and `ui-preview` holds a single custom role — `FoundryGate SWA Preview Publisher`,
+defined in `infra/modules/swa-preview-role.bicep` — assignable only on the dev Static Web App.
+A pull request runs its own copy of the workflow files, so the identity, not the workflow, is
+the boundary. **What has not happened yet**: a run against Azure. That needs the owner-side OIDC
 setup (#109) and is the live validation tracked in #105. Badges on the diagram mark the
 difference; the [CI/CD reference](/foundry-gate/reference/ci-cd/) lists every workflow, trigger
 and variable.

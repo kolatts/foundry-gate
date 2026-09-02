@@ -52,12 +52,17 @@ param apimGatewayUrl string
 param foundryAccountNames array
 
 // ---- SQL ------------------------------------------------------------------------
+// NOTE: parameters here are pass-throughs and deliberately carry NO defaults. main.bicep
+// declares every default (and every @allowed list) once and passes all of them
+// unconditionally; a default here would be a third copy of a value that already exists in
+// main.bicep and in the leaf module, and the copy that silently wins when someone adds a
+// parameter to main.bicep and forgets to thread it. Omitting them makes that a build error.
 param sqlAdminGroupObjectId string
 param sqlAdminGroupName string
 param sqlDatabaseSku object
 param sqlBackupStorageRedundancy string
-@description('Spread the SQL database across availability zones (prod). Adds roughly the compute line again; the region must offer AZs and the SKU must support ZR.')
-param sqlZoneRedundant bool = false
+@description('Spread the SQL database across availability zones (prod). Adds ~60% to the compute meter (see main.bicep); the region must offer AZs and the SKU must support ZR.')
+param sqlZoneRedundant bool
 
 // ---- Entra (API app registration) -----------------------------------------------
 param entraTenantId string
@@ -70,15 +75,15 @@ param apiContainerImage string
 param containerAppMinReplicas int
 param containerAppMaxReplicas int
 @description('vCPU per API replica, as a decimal string. Consumption profile pairs only: 0.25/0.5Gi, 0.5/1.0Gi, 1.0/2.0Gi, ...')
-param containerAppCpu string = '0.25'
+param containerAppCpu string
 @description('Memory per API replica. Must be the pair of containerAppCpu above.')
-param containerAppMemory string = '0.5Gi'
+param containerAppMemory string
 @description('Zone-redundant Container Apps environment. Requires VNet integration, so false everywhere until private networking lands (#196).')
-param containerAppsZoneRedundant bool = false
+param containerAppsZoneRedundant bool
 @description('Functions storage account SKU. Standard_ZRS for prod; Standard_LRS is the cheap default.')
-param functionsStorageSku string = 'Standard_LRS'
+param functionsStorageSku string
 @description('Container registry SKU. Standard for prod (more included storage and throughput); Basic is the cheap default.')
-param containerRegistrySku string = 'Basic'
+param containerRegistrySku string
 param staticWebAppSku string
 param staticWebAppLocation string
 param functionsRuntimeVersion string

@@ -10,7 +10,8 @@ name: Deploy UI (Reusable)
 # Static Web Apps PR previews used to live here (`action: upload` on a pull_request event, plus
 # a `close` path) and were removed with the `dev` Environment lockdown. They now live in
 # `ui-deploy.yml` instead (#155), under a dedicated `ui-preview` Environment whose identity holds
-# only Static Web App Contributor on the dev Static Web App. They stay OUT of this file on
+# only the custom `FoundryGate SWA Preview Publisher` role (infra/modules/swa-preview-role.bicep),
+# assignable on the dev Static Web App alone. They stay OUT of this file on
 # purpose: this is the production deploy path, it runs under an identity with subscription
 # access, and a `pull_request` run executes the PR branch's own copy of whatever it reaches.
 

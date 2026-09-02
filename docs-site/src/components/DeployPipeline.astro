@@ -20,15 +20,23 @@ const pr: Stage[] = [
   { title: 'Claude review', detail: 'formal review on every PR, reads the test artifacts' },
 ];
 
-// PR-time stages that only fire on matching paths. None of them can mutate Azure: the image
-// build has no credentials at all, and the what-if runs under the read-only dev-plan identity.
+// PR-time stages that only fire on matching paths. None of them reaches an identity with
+// subscription access: the image build has no credentials at all, the what-if runs under the
+// read-only dev-plan identity, and the UI preview runs under ui-preview, whose custom role is
+// assignable only on the dev Static Web App (#155). The preview is the one PR-track stage that
+// writes to Azure at all — it publishes a staging slot on that one site.
 const prConditional: Stage[] = [
   { title: 'Bicep what-if', detail: 'infra/** — posted as a PR comment · read-only dev-plan identity' },
   { title: 'API image build', detail: 'Dockerfile — docker build + local /health 200, no Azure' },
+  { title: 'UI preview', detail: 'FoundryGate.Web/** — dev SWA staging slot · ui-preview identity, one resource' },
   { title: 'Workflow lint', detail: '.github/** — actionlint + shellcheck + script tests' },
 ];
 
 const main: Stage[] = [
+  {
+    title: 'Plan',
+    detail: 'ungated · no Azure · prints the production approval sequence before the first gate',
+  },
   {
     title: 'Infra',
     detail: 'Bicep, subscription scope · what-if first · model deployments create-once',
@@ -70,14 +78,18 @@ const main: Stage[] = [
     Two tracks. Track one runs on every pull request today (ci.yml and claude-review.yml): build with warnings as
     errors, predeployment tests, format check, Claude review. Depending on which paths a pull request touches it also
     gets a Bicep what-if posted as a comment, run under a read-only identity; a Docker image build with a local health
-    check, which uses no credentials at all; and actionlint over the workflow files. Nothing on the pull request track
-    can change Azure. Merging to main is pull-request-only. Track two, on merge, is one workflow, deploy-all.yml: the
-    fully automated deploy chain with OIDC and GitHub Environment gates from dev to production. Infra, then database
+    check, which uses no credentials at all; actionlint over the workflow files; and a Static Web Apps preview of the
+    UI. The preview is the only thing on the pull request track that writes to Azure, and all it can write is a staging
+    slot on the dev Static Web App: its identity holds one custom role assignable on that one resource and nothing
+    else. Merging to main is pull-request-only. Track two, on merge, is one workflow, deploy-all.yml: the
+    fully automated deploy chain with OIDC and GitHub Environment gates from dev to production. A plan stage that
+    touches nothing prints the approval sequence first, then infra, then database
     (whitelist runner IP, wait for firewall propagation, probe port 1433, deploy the dacpac with data-loss blocking,
     seed reference data and test data outside production, grant the API and Functions managed identities their
     contained database users, and remove the runner's firewall rule again), then the API, then Functions and UI in
     parallel, then post-deploy tests, then a summary. Functions and UI wait for the API because on the very first
-    deploy the API stage re-runs the infrastructure template to replace the placeholder image. Every workflow file
+    deploy the API stage re-runs the infrastructure template to replace the placeholder image. A production run stops
+    at the reviewer gate six times, once per pending job, and the plan stage lists them. Every workflow file
     exists on main; badges mark that none has yet run against Azure (live validation is #105).
   </p>
 

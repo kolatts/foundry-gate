@@ -93,6 +93,7 @@ runs:
         # Key Vault wrapping key (the real one is Gateway__KeyEncryptionKeyUri, an infra output).
         docker run -d --name "$container" -p 8080:8080 \
           -e 'KeyProtection__Provider=DataProtection' \
+          -e 'AzureAd__Instance=https://login.microsoftonline.com/' \
           -e ASPNETCORE_ENVIRONMENT=local \
           -e 'ConnectionStrings__FoundryGate=Server=localhost;Database=FoundryGate;Integrated Security=true;TrustServerCertificate=True' \
           -e 'AzureAd__TenantId=00000000-0000-0000-0000-000000000000' \

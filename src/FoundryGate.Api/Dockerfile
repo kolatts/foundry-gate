@@ -10,6 +10,7 @@
 #     -e AzureAd__ClientId=00000000-0000-0000-0000-000000000000 \
 #     -e AzureAd__Audience=api://00000000-0000-0000-0000-000000000000 \
 #     -e KeyProtection__Provider=DataProtection \
+#     -e AzureAd__Instance=https://login.microsoftonline.com/ \
 #     foundrygate-api:local
 #   curl -i http://localhost:8080/health          # 200 (hermetic liveness; no DB needed)
 #
@@ -34,8 +35,9 @@
 #   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0    --format '{{.Manifest.Digest}}'
 #   docker buildx imagetools inspect mcr.microsoft.com/dotnet/aspnet:10.0 --format '{{.Manifest.Digest}}'
 # paste both below, and let api-deploy.yml's PR image build prove /health still answers 200.
-# (MCR is not on Docker Hub, so Renovate/Dependabot need the `custom.regex`/docker datasource
-# pointed at mcr.microsoft.com — not wired up yet.)
+# Automating that refresh is #212 (MCR is not Docker Hub, so Renovate/Dependabot need the
+# docker datasource pointed at mcr.microsoft.com, or a regex manager keyed on the tag comments
+# above each FROM — which is why those comments are there).
 
 # ---- build -------------------------------------------------------------------------------
 # mcr.microsoft.com/dotnet/sdk:10.0 (resolved 2026-09-02)
