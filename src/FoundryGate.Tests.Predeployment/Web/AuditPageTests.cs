@@ -156,6 +156,26 @@ public class AuditPageTests : WebTestContext
     }
 
     [Fact]
+    public void An_action_query_parameter_filters_on_first_load()
+    {
+        // The dashboard's hard-stopped card links here as ?action=key.revoked (#190): a page that
+        // knows which action explains its number hands the admin the trail, not the whole log.
+        _ = RenderPage<Audit>(("ActionFilter", AuditActions.KeyRevoked));
+
+        Assert.Equal(AuditActions.KeyRevoked, Assert.Single(Api.AuditQueries).Query.Action);
+    }
+
+    [Fact]
+    public void An_action_query_parameter_the_log_does_not_know_is_ignored()
+    {
+        // A mistyped deep link shows the whole log rather than an empty grid filtered by a value the
+        // select cannot even render.
+        _ = RenderPage<Audit>(("ActionFilter", "not.an.action"));
+
+        Assert.Null(Assert.Single(Api.AuditQueries).Query.Action);
+    }
+
+    [Fact]
     public void Clearing_the_filters_reloads_with_none_of_them()
     {
         var page = RenderPage<Audit>();

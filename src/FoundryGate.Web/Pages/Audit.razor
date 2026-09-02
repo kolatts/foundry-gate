@@ -145,6 +145,15 @@
     /// <summary>The known <c>AuditLog.TargetType</c> values, straight off the Domain constants.</summary>
     public static readonly IReadOnlyList<string> TargetTypes = ConstantSet.StringConstants(typeof(AuditTargetTypes));
 
+    /// <summary>
+    /// <c>?action=</c> — a deep link into one kind of entry, so a page that knows which action
+    /// explains its number can hand the admin the trail rather than the whole log (the dashboard's
+    /// hard-stopped card links to <c>key.revoked</c>, #190). Applied on first render only; changing
+    /// the filter afterwards does not rewrite the URL.
+    /// </summary>
+    [Parameter, SupplyParameterFromQuery(Name = "action")]
+    public string? ActionFilter { get; set; }
+
     private MudDataGrid<AuditLogEntryResponse>? _grid;
     private string? _action;
     private string? _targetType;
@@ -203,6 +212,27 @@
     /// </summary>
     private DateTimeOffset ToInstant(DateTime localWallClock) =>
         new(DateTime.SpecifyKind(localWallClock, DateTimeKind.Unspecified), TimeProvider.LocalTimeZone.GetUtcOffset(localWallClock));
+
+    /// <summary>
+    /// Keeps the action filter in step with <c>?action=</c>, including a later in-app navigation to
+    /// it. An action the log's own constants don't name is ignored rather than being pushed into a
+    /// select that cannot render it — a mistyped deep link shows the whole log, not an empty grid
+    /// filtered by nothing that exists.
+    /// </summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        var fromQuery = Actions.FirstOrDefault(a => string.Equals(a, ActionFilter, StringComparison.OrdinalIgnoreCase));
+        if (fromQuery is null || string.Equals(fromQuery, _action, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _action = fromQuery;
+        if (_grid is not null)
+        {
+            await ReloadAsync();
+        }
+    }
 
     private async Task ApplyFilterAsync(Action mutate)
     {

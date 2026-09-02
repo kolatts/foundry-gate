@@ -61,7 +61,7 @@ answers `409` anyway, the page says so and locks the form instead of navigating 
 
 | Route | Auth | What it does |
 |---|---|---|
-| `/dashboard` | Admin | Fork-wide stats and the busiest consumers this period |
+| `/dashboard` | Admin | Fork-wide stats, who is cut off, and the busiest consumers this period |
 | `/users` | Admin | Searchable, server-paged list of everyone |
 | `/users/{id}` | Admin | One person: fields, budget, groups and gateway key |
 | `/users/sync` | Admin | Reconcile the user list against Entra |
@@ -77,13 +77,19 @@ answers `409` anyway, the page says so and locks the form instead of navigating 
 ### `/dashboard`
 
 `GET /dashboard` fills four stat cards — total users, active users (with the unlimited count),
-pending quota increase requests, and tokens used this period
-([#190](https://github.com/kolatts/foundry-gate/issues/190) adds the hard-stopped count the summary
-does not carry yet) — plus a top-ten consumers grid with a
+pending quota increase requests, and **hard-stopped** users — plus a top-ten consumers grid with a
 per-row usage bar. The pending count is a badge linking to the filtered review queue, and the same
 count badges the "All Requests" link in the nav. The page re-reads the summary every 60 seconds and
 stops the moment you navigate away; a failed background refresh leaves the last good numbers on
 screen rather than replacing them with an error.
+
+The hard-stopped card counts active users whose current allocation is hard-stopped — someone whose
+key was taken away while their account is still live, which is an outage for that developer — so a
+non-zero count is rendered as an alert and links to `/audit?action=key.revoked`, the only place that
+says who and when. Quota exhaustion never sets that flag: the gateway 403s an over-budget request
+itself. **Who has run out of tokens** is the separate `overBudgetUserCount`, shown with the tokens
+reconciled this period as a caption above the consumers grid — both are usage figures, so they sit
+next to the list they describe rather than in an enforcement-looking card.
 
 Every figure here is a reconciliation number from the Log Analytics sync, refreshed on that job's
 cadence — not a live view of gateway enforcement.
@@ -203,5 +209,7 @@ never holds more than one page of it. Filters are action, target type, an actor'
 ([#191](https://github.com/kolatts/foundry-gate/issues/191) turns that into a name type-ahead), and
 a date range read in the reader's own time zone whose end day is included in full. Changing any
 filter goes back to page one. The action and target-type choices come from the Domain constants the
-audit writers use, so the dropdowns cannot drift from what is actually written. Expanding a row shows its `details` blob, pretty-printed when it is JSON and verbatim when
+audit writers use, so the dropdowns cannot drift from what is actually written. `?action=` is a deep
+link into one kind of entry — how the dashboard's hard-stopped card hands over the revocations
+rather than the whole log; an action the constants do not name is ignored. Expanding a row shows its `details` blob, pretty-printed when it is JSON and verbatim when
 it is not — a viewer that hid malformed rows would hide exactly the rows worth reading.

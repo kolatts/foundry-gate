@@ -1,4 +1,5 @@
 using Bunit;
+using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Dashboard.Contracts;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
@@ -22,7 +23,8 @@ public class DashboardPageTests : WebTestContext
             activeUserCount: 118,
             unlimitedUserCount: 4,
             pendingRequestCount: 3,
-            totalTokensUsed: 987_654_321));
+            totalTokensUsed: 987_654_321,
+            hardStoppedUserCount: 2));
 
         var page = RenderPage<Dashboard>();
 
@@ -30,7 +32,69 @@ public class DashboardPageTests : WebTestContext
         Assert.Contains("118", page.Find("[data-testid='stat-active-users']").TextContent, StringComparison.Ordinal);
         Assert.Contains("4 unlimited", page.Find("[data-testid='stat-active-users']").TextContent, StringComparison.Ordinal);
         Assert.Contains("3", page.Find("[data-testid='stat-pending-requests']").TextContent, StringComparison.Ordinal);
+        Assert.Contains("2", page.Find("[data-testid='stat-hard-stopped']").TextContent, StringComparison.Ordinal);
         Assert.Contains("987,654,321", page.Find("[data-testid='stat-tokens-used']").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_fourth_card_is_hard_stopped_users_not_the_tokens_substitute()
+    {
+        // #54 asked for a hard-stopped card; #174 shipped "Tokens this period" in the slot because
+        // the summary carried no such figure (#190). Tokens stays on the page — next to the
+        // consumers list it describes — but the card is the one #54 named.
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(hardStoppedUserCount: 3));
+
+        var page = RenderPage<Dashboard>();
+
+        var card = page.Find("[data-testid='stat-hard-stopped']").TextContent;
+        Assert.Contains("Hard-stopped", card, StringComparison.Ordinal);
+        Assert.Contains("3", card, StringComparison.Ordinal);
+        Assert.Contains("no gateway key", card, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_non_zero_hard_stopped_count_reads_as_an_alert_and_links_to_the_revocations()
+    {
+        // A revoked key is an outage for that developer, and the audit log is the only place that
+        // says who and when — so the number is a link into it, not a dead figure.
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(hardStoppedUserCount: 1));
+
+        var page = RenderPage<Dashboard>();
+
+        var link = page.Find("[data-testid='stat-hard-stopped-link']");
+        Assert.Equal($"audit?action={AuditActions.KeyRevoked}", link.GetAttribute("href"));
+        Assert.Contains("mud-error-text", page.Find("[data-testid='stat-hard-stopped']").InnerHtml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Nobody_hard_stopped_says_so_without_alarming_anyone()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(hardStoppedUserCount: 0));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Contains("Nobody is cut off", page.Find("[data-testid='stat-hard-stopped']").TextContent, StringComparison.Ordinal);
+        Assert.Empty(page.FindAll("[data-testid='stat-hard-stopped-link']"));
+    }
+
+    [Fact]
+    public void Over_budget_users_are_reported_next_to_the_usage_they_describe()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(overBudgetUserCount: 7));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Contains("7 over budget", page.Find("[data-testid='stat-over-budget']").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Nobody_over_budget_says_so()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(overBudgetUserCount: 0));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Contains("nobody over budget", page.Find("[data-testid='stat-over-budget']").TextContent, StringComparison.Ordinal);
     }
 
     [Fact]

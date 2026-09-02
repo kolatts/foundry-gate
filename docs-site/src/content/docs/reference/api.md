@@ -419,7 +419,8 @@ keys that are missing.
 ### `GET /dashboard`
 
 Returns `{ totalUserCount, activeUserCount, unlimitedUserCount, pendingQuotaIncreaseRequestCount,
-totalTokensUsedThisPeriod, topConsumers }` for the current UTC calendar month.
+totalTokensUsedThisPeriod, topConsumers, hardStoppedUserCount, overBudgetUserCount }` for the
+current UTC calendar month.
 
 - `unlimitedUserCount` counts **active** unlimited users — a deactivated account consumes nothing.
 - `totalTokensUsedThisPeriod` sums every allocation in the period, deactivated users included: the
@@ -427,6 +428,14 @@ totalTokensUsedThisPeriod, topConsumers }` for the current UTC calendar month.
 - `topConsumers` is the ten busiest **active** users this period, each with `userId`, `userUnique`,
   `displayName`, `tokensUsed`, `allocatedTokens` and `percentUsed` — `null` for an unlimited user,
   `100` for a zero quota with any usage.
+- `hardStoppedUserCount` counts **active** users whose current-period allocation carries
+  `isHardStopped`. That flag is set by the deprovision pipeline and cleared by re-activation and by
+  the monthly reset; quota exhaustion never sets it. An active user carrying it is an
+  inconsistency — the allocation says "stopped" while the account says "live" — and is normally
+  zero.
+- `overBudgetUserCount` counts **active** users whose finite budget reconciled usage has reached or
+  passed (`tokensUsed >= allocatedTokens`): the "who has run out" figure. The gateway is already
+  refusing them with its own `403`. Unlimited allocations are never counted.
 
 Every usage figure here is a reconciliation number from the Log Analytics sync, refreshed on that
 job's cadence — not a live view of gateway enforcement.

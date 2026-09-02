@@ -220,14 +220,18 @@ public static class WebTestData
         int unlimitedUserCount = 3,
         int pendingRequestCount = 2,
         long totalTokensUsed = 123_456_789,
-        IReadOnlyList<TopConsumerResponse>? topConsumers = null) =>
+        IReadOnlyList<TopConsumerResponse>? topConsumers = null,
+        int hardStoppedUserCount = 0,
+        int overBudgetUserCount = 0) =>
         new(
             totalUserCount,
             activeUserCount,
             unlimitedUserCount,
             pendingRequestCount,
             totalTokensUsed,
-            topConsumers ?? [Consumer()]);
+            topConsumers ?? [Consumer()],
+            hardStoppedUserCount,
+            overBudgetUserCount);
 
     public static TopConsumerResponse Consumer(
         string displayName = "Heavy User",
