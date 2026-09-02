@@ -27,8 +27,10 @@ public interface IConfigService
     /// <param name="request">The new value. Validated and normalized per key before it is stored.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The row as it now stands.</returns>
-    /// <exception cref="KeyNotFoundException">No such configuration key (→ 404).</exception>
-    /// <exception cref="Domain.Exceptions.ConflictException">The key is retired and read-only (→ 409); the message names its replacement.</exception>
+    /// <exception cref="KeyNotFoundException">
+    /// No such configuration key (→ 404). A key retired by #164/#123 lands here too: the row is gone,
+    /// so there is nothing to distinguish it from a typo.
+    /// </exception>
     /// <exception cref="ArgumentException">The value breaks the key's rule (→ 400); the message states the rule.</exception>
     /// <exception cref="UnauthorizedAccessException">The calling admin has no <c>User</c> row yet (→ 403; call <c>GET /users/me</c> first).</exception>
     Task<SystemConfigEntryResponse> UpdateAsync(string key, UpdateSystemConfigRequest request, CancellationToken cancellationToken);

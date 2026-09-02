@@ -365,18 +365,15 @@ for one that does not (a quota, a reset day and a feature flag have no empty for
 | `DefaultMonthlyTokenQuota` | A non-negative whole number that is exactly one of the configured tier caps (`Gateway:Tiers`; `GET /quota/tiers` lists them). Same D-013 rule as every other quota write path — the gateway enforces a tier, not a number. Unlimited is not expressible fork-wide: it is set per user or per group |
 | `ResetDayOfMonth` | A whole number from 1 to 28 (28 is the last day every month has) |
 | `EntraGroupSyncEnabled` | `true` or `false` |
-| `ApimGatewayUrl` | An absolute `https` URL, or empty |
 | `ApimResourceId`, `FoundryResourceId` | An ARM resource id (`/subscriptions/{id}/resourceGroups/{group}/providers/{namespace}/{type}/{name}`), or empty. Shape only — whether the resource exists is Azure's answer, reported as `503` by the endpoints that use it |
 | Any other row a fork operator added | Free text, up to 4000 characters |
 
-Two seeded keys are **read-only (`409`)**, because editing them would be a silent no-op. They stay
-in the table only so re-seeding is idempotent, and the refusal names the replacement:
-
-- `ApimProductId` — quota tiers are APIM *products* now, so a developer's subscription is issued
-  against the product for their tier (`Gateway:Tiers` in the API, `quotaTiers` in `infra/main.bicep`),
-  not against one fork-wide product id.
-- `EntraTenantId` — Graph access is configured by the `Entra` options section over the host's
-  `AzureAd:TenantId` ([#123](https://github.com/kolatts/foundry-gate/issues/123)).
+Three keys that earlier versions seeded — `ApimGatewayUrl`, `ApimProductId`, `EntraTenantId` — are
+**retired** ([#164](https://github.com/kolatts/foundry-gate/issues/164),
+[#123](https://github.com/kolatts/foundry-gate/issues/123)). Nothing read them, so they briefly
+answered `409 read-only`; now the rows are gone entirely (the next `db seed-reference` deletes them),
+`GET /config` does not list them, and `PUT` on one is the ordinary `404`. What replaced each is in the
+[Configuration Reference](/foundry-gate/reference/configuration/#retired-keys).
 
 Every accepted edit stamps `updatedByUserId` (the calling admin) and `updatedDate`, and writes one
 `config.updated` audit row with `{ key, before, after }` — in the same transaction as the change, so

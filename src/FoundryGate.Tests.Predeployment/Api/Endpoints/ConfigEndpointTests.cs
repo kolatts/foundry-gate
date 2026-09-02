@@ -178,28 +178,30 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
     }
 
     [Theory]
-    [InlineData(SystemConfigurationKeys.ApimProductId, "Gateway:Tiers")]
-    [InlineData(SystemConfigurationKeys.EntraTenantId, "Entra:Enabled")]
-    public async Task Update_of_a_retired_key_returns_409_naming_its_replacement(string key, string replacementHint)
+    [InlineData("ApimGatewayUrl")]
+    [InlineData("ApimProductId")]
+    [InlineData("EntraTenantId")]
+    public async Task A_retired_key_is_neither_listed_nor_editable(string retiredKey)
     {
+        // #164/#123: these three used to be seeded and refused with a 409 "read-only". The rows are
+        // gone now, so there is nothing to list and nothing to edit — the same 404 any typo gets.
         var oid = Guid.NewGuid().ToString();
         _ = await factory.SeedUserAsync(oid);
-        var before = await ValueOfAsync(key);
 
         using var client = factory.CreateClientAs(oid, isAdmin: true);
-        var response = await PutAsync(client, key, "something-new");
+        var listed = await client.GetFromJsonAsync<List<SystemConfigEntryResponse>>(new Uri(ConfigPath, UriKind.Relative), JsonOptions);
+        Assert.DoesNotContain(listed!, entry => string.Equals(entry.Key, retiredKey, StringComparison.OrdinalIgnoreCase));
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
-        Assert.Contains(replacementHint, problem!.Detail, StringComparison.Ordinal);
-        Assert.Equal(before, await ValueOfAsync(key));
+        var response = await PutAsync(client, retiredKey, "something-new");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Theory]
     [InlineData(SystemConfigurationKeys.DefaultMonthlyTokenQuota, "1234567")]
     [InlineData(SystemConfigurationKeys.ResetDayOfMonth, "31")]
     [InlineData(SystemConfigurationKeys.EntraGroupSyncEnabled, "yes")]
-    [InlineData(SystemConfigurationKeys.ApimGatewayUrl, "http://ai.contoso.com")]
+    [InlineData(SystemConfigurationKeys.ApimResourceId, "not-an-arm-id")]
     [InlineData(SystemConfigurationKeys.FoundryResourceId, "not-an-arm-id")]
     public async Task Update_with_a_value_the_key_does_not_allow_returns_400_and_changes_nothing(string key, string value)
     {
@@ -229,7 +231,7 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
     }
 
     [Theory]
-    [InlineData(SystemConfigurationKeys.ApimGatewayUrl)]
+    [InlineData(SystemConfigurationKeys.ApimResourceId)]
     [InlineData(SystemConfigurationKeys.FoundryResourceId)]
     public async Task An_empty_value_clears_a_key_whose_rule_allows_it(string key)
     {
@@ -279,7 +281,7 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
         using var client = factory.CreateClientAs(oid, isAdmin: true);
         var response = await PutAsync(
             client,
-            SystemConfigurationKeys.ApimGatewayUrl,
+            SystemConfigurationKeys.ApimResourceId,
             new string('x', ValidationConstants.ConfigValueMaxLength + 1));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -294,8 +296,8 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
         // SystemConfiguration.Value/UpdatedDate/UpdatedByUserId are [DoNotUpdate], so the seeder only
         // inserts missing keys. Pinned here because the whole config editor is worthless if the next
         // deploy silently undoes it.
-        const string Key = SystemConfigurationKeys.ApimGatewayUrl;
-        const string EditedValue = "https://ai.contoso.example";
+        const string Key = SystemConfigurationKeys.ApimResourceId;
+        const string EditedValue = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-contoso/providers/Microsoft.ApiManagement/service/apim-contoso";
 
         var oid = Guid.NewGuid().ToString();
         var admin = await factory.SeedUserAsync(oid, displayName: "Grace Hopper");
