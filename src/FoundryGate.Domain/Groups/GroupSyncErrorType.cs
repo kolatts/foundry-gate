@@ -20,7 +20,7 @@ public enum GroupSyncErrorType
 
     /// <summary>
     /// The APIM tier move was <b>accepted</b> and the database write that records it then failed —
-    /// twice, since the save is retried once on <see cref="System.Threading.CancellationToken.None"/>.
+    /// twice, since the save is retried once on <see cref="CancellationToken.None"/>.
     /// The gateway and the control plane disagree: a member is on a product the
     /// <c>QuotaAllocation</c> row does not name, and this group's membership rows were not written.
     /// Logged at Error with the group's full identity, the way every commit-point failure is
