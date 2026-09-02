@@ -120,4 +120,10 @@ public record UpdateUserQuotaRequest
 /// not expanded yet (#121), so the sync cannot tell a departed user from one covered by such a group — when this
 /// is non-zero, departure detection is suspended for the run: nobody is deactivated, adds/updates still happen.
 /// </param>
-public record UserSyncResult(int AddedCount, int UpdatedCount, int DeactivatedCount, int SkippedGroupAssignmentCount);
+/// <param name="FailedCount">
+/// Departed users whose deprovision could not be completed because the gateway refused the deletion
+/// (a <c>502</c>-class failure). Each runs in its own unit of work, so a failure here costs only that
+/// user: everyone else is still processed, and the next run retries them (revocation is idempotent on
+/// a subscription that is already gone). Non-zero means someone still holds a working key.
+/// </param>
+public record UserSyncResult(int AddedCount, int UpdatedCount, int DeactivatedCount, int SkippedGroupAssignmentCount, int FailedCount);

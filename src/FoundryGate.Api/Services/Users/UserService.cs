@@ -80,8 +80,12 @@ public sealed class UserService(
                     $"Your FoundryGate account (user {user.UserId}) is deactivated, so it has no profile, quota or key. Ask an administrator to re-activate it.");
             }
 
-            RefreshFromClaims(user);
-            await dbContext.SaveChangesAsync(cancellationToken);
+            // Only when a claim actually differs: otherwise every profile load would be a row UPDATE on
+            // Users — the hottest table in the app, and the one the Entra sync writes to (#156 review).
+            if (RefreshFromClaims(user))
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
         }
 
         // Resolves and creates the row on the first call of a new month, and returns the existing one
@@ -178,25 +182,43 @@ public sealed class UserService(
         // is idempotent at the gateway.
         var resolution = await quotaResolution.ResolveAsync(userId, BillingPeriod.Current(timeProvider), cancellationToken);
 
-        _ = await audit.LogAsync(
-            AuditActions.UserQuotaChanged,
-            AuditTargetTypes.User,
-            userId.ToString(CultureInfo.InvariantCulture),
-            new
-            {
-                before,
-                after = new { user.IsUnlimited, user.MonthlyTokenQuota },
-                resolved = new
-                {
-                    resolution.Allocation.AllocatedTokens,
-                    resolution.Allocation.ResolvedLevelType,
-                    resolution.Allocation.TierProductId,
-                },
-                tierSyncRequested = resolution.TierSyncRequested,
-            },
-            cancellationToken);
+        // Past the commit point when resolution moved the subscription: the gateway is already enforcing
+        // the new tier, so the row that records it and the audit row that explains it must not be
+        // abandoned because the client hung up (CONVENTIONS.md; #156 review). Every refusal happened above.
+        var completionToken = resolution.TierSyncRequested ? CancellationToken.None : cancellationToken;
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            _ = await audit.LogAsync(
+                AuditActions.UserQuotaChanged,
+                AuditTargetTypes.User,
+                userId.ToString(CultureInfo.InvariantCulture),
+                new
+                {
+                    before,
+                    after = new { user.IsUnlimited, user.MonthlyTokenQuota },
+                    resolved = new
+                    {
+                        resolution.Allocation.AllocatedTokens,
+                        resolution.Allocation.ResolvedLevelType,
+                        resolution.Allocation.TierProductId,
+                    },
+                    tierSyncRequested = resolution.TierSyncRequested,
+                },
+                completionToken);
+
+            await dbContext.SaveChangesAsync(completionToken);
+        }
+        catch (Exception exception) when (resolution.TierSyncRequested)
+        {
+            logger.LogError(
+                exception,
+                "The gateway moved user {UserId}'s subscription to tier {TierProductId} but the quota change could not be saved; the database still shows the old budget. Re-apply it with PUT /users/{UserId}/quota — the move is idempotent.",
+                userId,
+                resolution.Allocation.TierProductId,
+                userId);
+            throw;
+        }
 
         logger.LogInformation(
             "Quota for user {UserId} set to {Quota} (unlimited: {IsUnlimited}); resolved to {AllocatedTokens} on tier {TierProductId}.",
@@ -226,27 +248,38 @@ public sealed class UserService(
     }
 
     /// <summary>
-    /// Keeps the display fields in step with the token on every visit (issue #28), so a rename in Entra
-    /// shows up without waiting for the next <c>POST /users/sync</c>. Only non-empty claims overwrite —
-    /// a token that omits a claim must not blank a value the directory sync filled in.
+    /// Keeps the display fields in step with the token (issue #28), so a rename in Entra shows up without
+    /// waiting for the next <c>POST /users/sync</c>. Only non-empty claims overwrite — a token that omits
+    /// a claim must not blank a value the directory sync filled in — and only a real difference counts,
+    /// so the common case (nothing changed) is a pure read.
     /// </summary>
-    private void RefreshFromClaims(User user)
+    /// <remarks>
+    /// <c>LastSyncedDate</c> is deliberately <b>not</b> stamped here: it means "when an Entra sync last
+    /// touched this row", which is what <c>UserContracts</c> documents and what an admin reads it as. A
+    /// separate <c>LastLoginDate</c> is the honest column for "this account is in use" — tracked as #157.
+    /// </remarks>
+    /// <returns><see langword="true"/> when a field changed and the row needs saving.</returns>
+    private bool RefreshFromClaims(User user)
     {
+        var changed = false;
+
         if (currentUser.DisplayName is { } displayName && !string.IsNullOrWhiteSpace(displayName))
         {
             var clamped = displayName.Length > DisplayNameMaxLength ? displayName[..DisplayNameMaxLength] : displayName;
             if (!string.Equals(user.DisplayName, clamped, StringComparison.Ordinal))
             {
                 user.DisplayName = clamped;
+                changed = true;
             }
         }
 
         if (currentUser.Email is { } email && !string.IsNullOrWhiteSpace(email) && !string.Equals(user.Email, email, StringComparison.Ordinal))
         {
             user.Email = email;
+            changed = true;
         }
 
-        user.LastSyncedDate = timeProvider.GetUtcNow();
+        return changed;
     }
 
     /// <summary>

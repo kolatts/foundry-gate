@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
+using Azure;
 using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Entra;
@@ -7,6 +8,7 @@ using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -135,7 +137,7 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         var oid = Guid.NewGuid().ToString();
-        _apim.ThrowOnCreate = new InvalidOperationException("ARM said no");
+        _apim.ThrowOnCreate = new RequestFailedException(403, "The client does not have authorization to perform action.");
         var service = CreateService(oid, name: "Never Created", email: "never@contoso.test");
 
         var exception = await Assert.ThrowsAsync<UpstreamDependencyException>(() =>
@@ -394,7 +396,7 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
         var developer = await SeedUserAsync("Stays Active");
         var service = CreateService(admin.EntraObjectId);
         _ = await service.ProvisionAsync(ProvisionTrigger.AdminProvision, ProvisionContext.ForUser(developer.UserId), CancellationToken.None);
-        _apim.ThrowOnDelete = new InvalidOperationException("ARM said no");
+        _apim.ThrowOnDelete = new RequestFailedException(429, "Too many requests.");
 
         var exception = await Assert.ThrowsAsync<UpstreamDependencyException>(() =>
             service.DeprovisionAsync(DeprovisionTrigger.AdminDeactivation, developer.UserId, CancellationToken.None));
@@ -439,10 +441,109 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
         Assert.NotEmpty(saved.ApimSubscriptionId);
         Assert.True(_apim.Contains(subscriptionName));
 
-        // The allocation stays hard-stopped until the next reset — reactivation re-resolves the budget,
-        // it does not clear an offboarding flag (that belongs to POST /quota/reset).
+        // Re-activation lifts the hard stop its own deactivation set (#156 review); without that, a
+        // deactivate-by-mistake would leave the developer showing hard-stopped for the rest of the month.
+        var allocation = await Context.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == developer.UserId);
+        Assert.False(allocation.IsHardStopped);
+    }
+
+    // -- Commit point: nothing an accepted gateway change did may be lost to a cancelled token -------
+
+    [Fact]
+    public async Task A_client_that_disconnects_the_instant_APIM_deletes_the_subscription_still_gets_a_full_deactivation()
+    {
+        // The reviewer's probe (#156 Major 1). Before the fix this left the subscription gone, the row
+        // still IsActive = true with a live-looking key ciphertext, and *zero* audit rows.
+        var admin = await SeedUserAsync("Ada Admin");
+        var developer = await SeedUserAsync("Disconnecting Client");
+        var service = CreateService(admin.EntraObjectId);
+        _ = await service.ProvisionAsync(ProvisionTrigger.AdminProvision, ProvisionContext.ForUser(developer.UserId), CancellationToken.None);
+        var subscriptionName = ApimSubscriptionNames.ForUser(developer.UserId);
+        _ = await SeedPendingRequestAsync(developer);
+
+        using var cts = new CancellationTokenSource();
+        _apim.AfterMutation = cts.Cancel;
+
+        await service.DeprovisionAsync(DeprovisionTrigger.AdminDeactivation, developer.UserId, cts.Token);
+
+        _apim.AfterMutation = null;
+        Assert.True(cts.IsCancellationRequested);
+        Assert.False(_apim.Contains(subscriptionName));
+
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.False(saved.IsActive);
+        Assert.Empty(saved.ApimSubscriptionId);
+        Assert.Empty(saved.ApimSubscriptionKey);
+
+        _ = await SingleAuditAsync(AuditActions.UserDeactivated, AuditTargetTypes.User, developer.UserId);
+        _ = await SingleAuditAsync(AuditActions.KeyRevoked, AuditTargetTypes.ApiKey, developer.UserId);
+
         var allocation = await Context.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == developer.UserId);
         Assert.True(allocation.IsHardStopped);
+        Assert.Equal(QuotaRequestStatusType.Rejected, (await Context.QuotaIncreaseRequests.AsNoTracking().SingleAsync(r => r.UserId == developer.UserId)).StatusType);
+    }
+
+    [Fact]
+    public async Task A_client_that_disconnects_the_instant_APIM_mints_the_key_still_gets_a_saved_user()
+    {
+        // Same probe on the other pipeline: an abandoned first login must not leave an orphan
+        // subscription plus an unaudited, un-keyed user row.
+        await SeedReferenceDataAsync();
+        var oid = Guid.NewGuid().ToString();
+        var service = CreateService(oid, name: "Hangs Up", email: "hangsup@contoso.test");
+
+        using var cts = new CancellationTokenSource();
+        _apim.AfterMutation = cts.Cancel;
+
+        var user = await service.ProvisionAsync(ProvisionTrigger.FirstLogin, ProvisionContext.FirstLogin(), cts.Token);
+
+        _apim.AfterMutation = null;
+        Assert.True(cts.IsCancellationRequested);
+
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == user.UserId);
+        Assert.NotEmpty(saved.ApimSubscriptionId);
+        Assert.NotEmpty(saved.ApimSubscriptionKey);
+        _ = await SingleAuditAsync(AuditActions.UserProvisioned, AuditTargetTypes.User, user.UserId);
+        _ = await SingleAuditAsync(AuditActions.KeyProvisioned, AuditTargetTypes.ApiKey, user.UserId);
+        Assert.True(_apim.Contains(ApimSubscriptionNames.ForUser(user.UserId)));
+    }
+
+    [Fact]
+    public async Task A_deactivation_whose_database_half_fails_leaves_a_recoverable_state_not_a_silent_one()
+    {
+        // Plan 21's documented residue: the APIM delete cannot be undone, so it runs first and outside
+        // the transaction. If the database steps then fail, the key is already revoked *and audited*,
+        // and re-running the deactivation is idempotent.
+        var admin = await SeedUserAsync("Ada Admin");
+        var developer = await SeedUserAsync("Half Failed");
+        var subscriptionName = ApimSubscriptionNames.ForUser(developer.UserId);
+        _ = await CreateService(admin.EntraObjectId)
+            .ProvisionAsync(ProvisionTrigger.AdminProvision, ProvisionContext.ForUser(developer.UserId), CancellationToken.None);
+
+        var failing = CreateService(admin.EntraObjectId, wrapAudit: inner => new FailingAuditService(inner)
+        {
+            FailOn = action => action == AuditActions.UserDeactivated,
+        });
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            failing.DeprovisionAsync(DeprovisionTrigger.AdminDeactivation, developer.UserId, CancellationToken.None));
+
+        // Step 1 committed on its own: subscription gone, key fields cleared, key.revoked recorded.
+        Assert.False(_apim.Contains(subscriptionName));
+        Context.ChangeTracker.Clear();
+        var midway = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Empty(midway.ApimSubscriptionId);
+        Assert.True(midway.IsActive); // the un-recorded half
+        _ = await SingleAuditAsync(AuditActions.KeyRevoked, AuditTargetTypes.ApiKey, developer.UserId);
+
+        // And the retry completes it, because revocation tolerates a subscription that is already gone.
+        await CreateService(admin.EntraObjectId).DeprovisionAsync(DeprovisionTrigger.AdminDeactivation, developer.UserId, CancellationToken.None);
+
+        Context.ChangeTracker.Clear();
+        Assert.False((await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId)).IsActive);
+        _ = await SingleAuditAsync(AuditActions.UserDeactivated, AuditTargetTypes.User, developer.UserId);
     }
 
     // -- Harness ------------------------------------------------------------------------------------
@@ -451,7 +552,8 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
         string callerOid,
         string? name = null,
         string? email = null,
-        IApimManagementClient? apim = null)
+        IApimManagementClient? apim = null,
+        Func<IAuditService, IAuditService>? wrapAudit = null)
     {
         var claims = new List<Claim>
         {
@@ -470,17 +572,18 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
 
         var identity = new ClaimsIdentity(claims, "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(new DefaultHttpContext { User = new ClaimsPrincipal(identity) }), Context);
-        return Build(accessor, apim ?? _apim);
+        return Build(accessor, apim ?? _apim, wrapAudit);
     }
 
     /// <summary>The shape a background job builds: no HTTP caller at all (plan 21 deprovision Trigger B).</summary>
     private UserLifecycleService CreateCallerlessService() =>
-        Build(new CurrentUserAccessor(new FixedHttpContextAccessor(null), Context), _apim);
+        Build(new CurrentUserAccessor(new FixedHttpContextAccessor(null), Context), _apim, wrapAudit: null);
 
-    private UserLifecycleService Build(ICurrentUserAccessor accessor, IApimManagementClient apim)
+    private UserLifecycleService Build(ICurrentUserAccessor accessor, IApimManagementClient apim, Func<IAuditService, IAuditService>? wrapAudit)
     {
         var writer = new AuditWriter(Context, _timeProvider);
-        var audit = new AuditService(Context, writer, accessor);
+        IAuditService audit = new AuditService(Context, writer, accessor);
+        audit = wrapAudit?.Invoke(audit) ?? audit;
         var keys = new ApimKeyService(
             Context,
             apim,
@@ -490,15 +593,21 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
             accessor,
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
+        var tierMapper = TestGatewayTiers.Mapper();
         var quotaResolution = new QuotaResolutionService(
             Context,
-            TestGatewayTiers.Mapper(),
+            tierMapper,
             new NullGatewayTierSync(NullLogger<NullGatewayTierSync>.Instance),
             NullLogger<QuotaResolutionService>.Instance);
+
+        // The real request service: deactivation delegates its pending-request cancellation to it
+        // (#148's CancelPendingForUserAsync), so a stub would prove nothing about what commits.
+        var quotaRequests = new QuotaRequestService(Context, quotaResolution, tierMapper, accessor, audit, _timeProvider);
 
         return new UserLifecycleService(
             Context,
             quotaResolution,
+            quotaRequests,
             keys,
             audit,
             writer,

@@ -524,6 +524,12 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
 
         Assert.Equal("unlimited", _apim.ProductOf(name));
         Assert.Equal(keysBefore, _apim.KeysOf(name)); // keys untouched by a tier move
+
+        // The row is added, not saved (#156 review): this runs inside quota resolution, in the middle of
+        // a caller's unit of work, so saving here would commit that caller's half-finished mutation.
+        Assert.Contains(Context.ChangeTracker.Entries<AuditLog>(), e => e.Entity.Action == AuditActions.KeyTierChanged && e.State == EntityState.Added);
+        _ = await Context.SaveChangesAsync();
+
         var audit = await SingleAuditAsync(AuditActions.KeyTierChanged, developer.UserId);
         Assert.Contains("\"before\":\"standard\"", audit.Details, StringComparison.Ordinal);
         Assert.Contains("\"after\":\"unlimited\"", audit.Details, StringComparison.Ordinal);
@@ -564,13 +570,10 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task ProvisionForUser_refuses_a_deactivated_user_and_an_unknown_user()
+    public async Task ForUser_operations_refuse_an_unknown_user()
     {
         var (service, _) = await CreateServiceAsync();
-        var inactive = await SeedUserAsync("Gone", "gone@contoso.test", isActive: false);
 
-        await Assert.ThrowsAsync<ConflictException>(() => service.ProvisionForUserAsync(inactive.UserId, GatewayTiers.Standard, CancellationToken.None));
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.ProvisionForUserAsync(999_999, GatewayTiers.Standard, CancellationToken.None));
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.RotateForUserAsync(999_999, CancellationToken.None));
         await Assert.ThrowsAsync<KeyNotFoundException>(() => service.RevokeForUserAsync(999_999, CancellationToken.None));
         Assert.Empty(_apim.Calls);

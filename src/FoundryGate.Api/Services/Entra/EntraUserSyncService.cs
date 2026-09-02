@@ -44,43 +44,26 @@ public sealed class EntraUserSyncService(
     {
         var now = timeProvider.GetUtcNow();
 
-        // One transaction for the whole run: the deprovision pipeline below saves per departed user, and
-        // those saves must not commit ahead of (or without) the adds, updates and the users.synced row.
-        // IUserLifecycleService and IApimKeyService both join an open transaction rather than nesting.
-        await using var transaction = dbContext.Database.CurrentTransaction is null
-            ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
-            : null;
-
         // Tracked on purpose: matched rows are updated in place and saved below. EntraObjectId is
         // unique, so the dictionary cannot collide. Case-insensitive because oids are GUID strings
         // whose casing varies by source (token claims vs. Graph vs. hand-seeded rows).
         var existingByOid = await dbContext.Users
             .ToDictionaryAsync(u => u.EntraObjectId, StringComparer.OrdinalIgnoreCase, cancellationToken);
 
+        // The whole-org Graph enumeration happens before any transaction is open and before anything is
+        // mutated, so a paged read of thousands of principals never sits inside a write lock (#156 review).
         var assigned = await directory.ListAssignedUsersAsync(cancellationToken);
 
+        // First pass decides only *who* is who; nothing is mutated yet, because the departures below run
+        // in their own units of work and must not flush half-applied adds into one of their transactions.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var addedOids = new List<string>();
-        var updated = 0;
+        var toApply = new List<EntraUser>();
 
         foreach (var entraUser in assigned.Users)
         {
-            if (!seen.Add(entraUser.ObjectId))
+            if (seen.Add(entraUser.ObjectId))
             {
-                continue; // a principal listed twice must count once
-            }
-
-            if (existingByOid.TryGetValue(entraUser.ObjectId, out var user))
-            {
-                ApplyDirectoryFields(user, entraUser, now);
-                updated++;
-            }
-            else
-            {
-                var newUser = new User { EntraObjectId = entraUser.ObjectId };
-                ApplyDirectoryFields(newUser, entraUser, now);
-                dbContext.Users.Add(newUser);
-                addedOids.Add(entraUser.ObjectId);
+                toApply.Add(entraUser); // a principal listed twice must count once
             }
         }
 
@@ -90,14 +73,14 @@ public sealed class EntraUserSyncService(
             .ToList();
 
         var skippedGroups = assigned.SkippedGroupAssignments;
-        List<User> deactivated;
+        var deactivated = new List<User>();
+        var failed = 0;
         if (skippedGroups.Count > 0)
         {
             // Users assigned through a group are invisible until #121 expands group assignees, so an
             // active user missing from the user list may simply be covered by one of these groups.
             // Departure detection is suspended for the run rather than flipping everyone to inactive
-            // (and, once #65 lands, deleting every APIM subscription) on a 200 with a clean audit row.
-            deactivated = [];
+            // and deleting every APIM subscription — on a 200 with a clean audit row.
             logger.LogWarning(
                 "Entra user sync skipped departure detection: {GroupCount} app-role assignment(s) are granted to groups, which are not expanded yet (#121). {ActiveAbsentCount} active user(s) absent from the assigned-user list were left active. Groups: {Groups}",
                 skippedGroups.Count,
@@ -115,20 +98,57 @@ public sealed class EntraUserSyncService(
         }
         else
         {
-            deactivated = activeAbsent;
-            foreach (var user in deactivated)
+            foreach (var user in activeAbsent)
             {
-                user.LastSyncedDate = now;
-
                 // Plan 21 deprovision Trigger B, in full (#65): the APIM subscription is deleted, the
                 // current allocation hard-stopped and pending increase requests rejected — not just a
                 // flag flip that would leave a departed employee holding a working gateway key. No HTTP
                 // caller is involved, so its audit rows are system-attributed.
-                await lifecycle.DeprovisionAsync(DeprovisionTrigger.EntraDeparture, user.UserId, cancellationToken);
+                //
+                // One unit of work per departure (#156 review). An APIM DELETE cannot be rolled back, so
+                // spanning N of them in a single transaction meant a 502 on the last one erased the
+                // database record of every earlier deletion. Each user now commits on its own and a
+                // failure is counted, logged and skipped — the rest of the run still lands, and the next
+                // run retries the failures (RevokeAsync is idempotent on a missing subscription).
+                user.LastSyncedDate = now;
+                try
+                {
+                    await lifecycle.DeprovisionAsync(DeprovisionTrigger.EntraDeparture, user.UserId, cancellationToken);
+                    deactivated.Add(user);
+                }
+                catch (UpstreamDependencyException exception)
+                {
+                    failed++;
+                    logger.LogError(
+                        exception,
+                        "Entra user sync could not deprovision departed user {UserId} ({EntraObjectId}); the run continues and the next one will retry.",
+                        user.UserId,
+                        user.EntraObjectId);
+                }
             }
         }
 
-        var result = new UserSyncResult(addedOids.Count, updated, deactivated.Count, skippedGroups.Count);
+        // Adds and updates only after the departures, so nothing half-applied is pending while a
+        // deprovision saves. The one SaveChangesAsync below commits them with the users.synced row.
+        var addedOids = new List<string>();
+        var updated = 0;
+        foreach (var entraUser in toApply)
+        {
+            if (existingByOid.TryGetValue(entraUser.ObjectId, out var user))
+            {
+                ApplyDirectoryFields(user, entraUser, now);
+                updated++;
+            }
+            else
+            {
+                var newUser = new User { EntraObjectId = entraUser.ObjectId };
+                ApplyDirectoryFields(newUser, entraUser, now);
+                dbContext.Users.Add(newUser);
+                addedOids.Add(entraUser.ObjectId);
+            }
+        }
+
+        var result = new UserSyncResult(addedOids.Count, updated, deactivated.Count, skippedGroups.Count, failed);
 
         // Audit before save, same context → commits atomically with the rows above (CONVENTIONS.md).
         // No single target: the whole table is the subject. Deactivated ids are known (saved rows);
@@ -143,6 +163,7 @@ public sealed class EntraUserSyncService(
                 result.UpdatedCount,
                 result.DeactivatedCount,
                 result.SkippedGroupAssignmentCount,
+                result.FailedCount,
                 DeactivatedUserIds = deactivated.Select(u => u.UserId).ToArray(),
                 AddedEntraObjectIds = addedOids.ToArray(),
                 DepartureDetectionSuspended = skippedGroups.Count > 0,
@@ -150,18 +171,17 @@ public sealed class EntraUserSyncService(
             },
             cancellationToken);
 
+        // One save, so the adds/updates and the users.synced row that describes them commit together. No
+        // explicit transaction: SaveChangesAsync is already atomic, and the departures above deliberately
+        // committed on their own (see the loop).
         _ = await dbContext.SaveChangesAsync(cancellationToken);
 
-        if (transaction is not null)
-        {
-            await transaction.CommitAsync(cancellationToken);
-        }
-
         logger.LogInformation(
-            "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated, {SkippedGroups} group assignment(s) skipped.",
+            "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated, {Failed} failed, {SkippedGroups} group assignment(s) skipped.",
             result.AddedCount,
             result.UpdatedCount,
             result.DeactivatedCount,
+            result.FailedCount,
             result.SkippedGroupAssignmentCount);
 
         return result;

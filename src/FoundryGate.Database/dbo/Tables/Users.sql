@@ -28,3 +28,11 @@ GO
 CREATE UNIQUE NONCLUSTERED INDEX [IX_Users_UserUnique]
     ON [dbo].[Users]([UserUnique] ASC);
 GO
+
+CREATE NONCLUSTERED INDEX [IX_Users_DisplayName]
+    ON [dbo].[Users]([DisplayName] ASC);
+GO
+
+CREATE NONCLUSTERED INDEX [IX_Users_IsActive_DisplayName]
+    ON [dbo].[Users]([IsActive] ASC, [DisplayName] ASC);
+GO

@@ -6,6 +6,7 @@ using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
@@ -156,6 +157,40 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
 
         var synced = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.UsersSynced);
         Assert.Equal(admin.UserId, synced.ActorUserId);
+    }
+
+    [Fact]
+    public async Task One_departure_the_gateway_refuses_is_counted_and_does_not_undo_the_others()
+    {
+        // #156 Major 3: N serial ARM deletes used to share one transaction, so a 502 on the last one
+        // erased the database record of every earlier deletion. Each departure is now its own unit of work.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        var succeeds = await SeedDepartedWithKeyAsync("oid-departs-ok");
+        var fails = await SeedDepartedWithKeyAsync("oid-departs-badly");
+        Apim.FailDeleteFor.Add(ApimSubscriptionNames.ForUser(fails.UserId));
+        _directory.AssignedUsers.Add(Present(admin));
+
+        var result = await CreateService(admin.EntraObjectId).SyncUsersAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.DeactivatedCount);
+        Assert.Equal(1, result.FailedCount);
+
+        // The one that worked is fully deprovisioned and stays that way.
+        Assert.False(Apim.Contains(ApimSubscriptionNames.ForUser(succeeds.UserId)));
+        var deprovisioned = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == succeeds.UserId);
+        Assert.False(deprovisioned.IsActive);
+        Assert.Empty(deprovisioned.ApimSubscriptionId);
+
+        // The one that failed is untouched — still active, still holding its key — so the next run retries it.
+        Assert.True(Apim.Contains(ApimSubscriptionNames.ForUser(fails.UserId)));
+        var untouched = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == fails.UserId);
+        Assert.True(untouched.IsActive);
+        Assert.NotEmpty(untouched.ApimSubscriptionId);
+
+        // And the run still landed its own record.
+        var synced = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.UsersSynced);
+        Assert.Contains("\"failedCount\":1", synced.Details, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -365,6 +400,19 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         Assert.Equal(0, await verification.AuditLogs.CountAsync());
     }
 
+    /// <summary>An active user with a real subscription in the fake APIM, ready to be departed.</summary>
+    private async Task<User> SeedDepartedWithKeyAsync(string entraObjectId)
+    {
+        var user = await SeedUserAsync(entraObjectId);
+        var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
+        _ = Apim.Seed(subscriptionName, GatewayTiers.Standard);
+        user.ApimSubscriptionId = Apim.GetSubscriptionResourceId(subscriptionName);
+        user.ApimSubscriptionKeyHint = "1a2b";
+        user.ApimKeyIssuedDate = Now;
+        _ = await Context.SaveChangesAsync();
+        return user;
+    }
+
     private static EntraUser Present(User user) => new(user.EntraObjectId, user.DisplayName, user.Email, user.EmployeeId);
 
     /// <summary>Wires the real accessor + audit service over this test's context, as DI would per request.</summary>
@@ -391,14 +439,17 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
             accessor,
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
+        var tierMapper = TestGatewayTiers.Mapper();
         var quotaResolution = new QuotaResolutionService(
             Context,
-            TestGatewayTiers.Mapper(),
+            tierMapper,
             new NullGatewayTierSync(NullLogger<NullGatewayTierSync>.Instance),
             NullLogger<QuotaResolutionService>.Instance);
+        var quotaRequests = new QuotaRequestService(Context, quotaResolution, tierMapper, accessor, audit, _timeProvider);
         var lifecycle = new UserLifecycleService(
             Context,
             quotaResolution,
+            quotaRequests,
             keys,
             audit,
             writer,

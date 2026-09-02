@@ -5,12 +5,14 @@ using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Api.Services.Users;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Keys;
 using FoundryGate.Domain.Users.Contracts;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
@@ -73,9 +75,11 @@ public class UserServiceTests : InMemoryDatabaseTest
         Assert.Equal("Synced Name", profile.DisplayName);
         Assert.Equal("synced@contoso.test", profile.Email);
 
-        // The visit is still recorded, so an admin can see the account is in use.
+        // LastSyncedDate means "an Entra sync touched this row" and /me is not a sync, so it stays null
+        // — and with nothing to change, the profile read never writes at all (#156 review; #157 adds the
+        // honest LastLoginDate column).
         var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == user.UserId);
-        Assert.Equal(Now, saved.LastSyncedDate);
+        Assert.Null(saved.LastSyncedDate);
     }
 
     [Fact]
@@ -128,7 +132,8 @@ public class UserServiceTests : InMemoryDatabaseTest
         string callerOid,
         string? name = "Token Name",
         string? email = "token@contoso.test",
-        string? gatewayUrl = "https://apim-foundrygate-test.azure-api.net")
+        string? gatewayUrl = "https://apim-foundrygate-test.azure-api.net",
+        Func<IAuditService, IAuditService>? wrapAudit = null)
     {
         var claims = new List<Claim> { new(ClaimConstants.Oid, callerOid), new(ClaimConstants.Roles, RoleNames.Admin) };
         if (name is not null)
@@ -149,7 +154,8 @@ public class UserServiceTests : InMemoryDatabaseTest
         var tierMapper = new GatewayTierMapper(gateway);
 
         var writer = new AuditWriter(Context, _timeProvider);
-        var audit = new AuditService(Context, writer, accessor);
+        IAuditService audit = new AuditService(Context, writer, accessor);
+        audit = wrapAudit?.Invoke(audit) ?? audit;
         var keys = new ApimKeyService(
             Context,
             _apim,
@@ -162,7 +168,7 @@ public class UserServiceTests : InMemoryDatabaseTest
         var quotaResolution = new QuotaResolutionService(
             Context,
             tierMapper,
-            new NullGatewayTierSync(NullLogger<NullGatewayTierSync>.Instance),
+            new ApimGatewayTierSync(keys, NullLogger<ApimGatewayTierSync>.Instance),
             NullLogger<QuotaResolutionService>.Instance);
         var quotaAllocations = new QuotaAllocationService(
             Context,
@@ -172,9 +178,11 @@ public class UserServiceTests : InMemoryDatabaseTest
             audit,
             _timeProvider,
             NullLogger<QuotaAllocationService>.Instance);
+        var quotaRequests = new QuotaRequestService(Context, quotaResolution, tierMapper, accessor, audit, _timeProvider);
         var lifecycle = new UserLifecycleService(
             Context,
             quotaResolution,
+            quotaRequests,
             keys,
             audit,
             writer,
@@ -196,6 +204,60 @@ public class UserServiceTests : InMemoryDatabaseTest
             accessor,
             _timeProvider,
             NullLogger<UserService>.Instance);
+    }
+
+    [Fact]
+    public async Task A_quota_change_whose_audit_row_cannot_be_written_is_not_committed()
+    {
+        // The reviewer's second probe (#156 Major 2). MoveToProductAsync used to end with its own
+        // SaveChangesAsync, so an audit failure left the new quota committed with nothing describing it.
+        var admin = await SeedUserAsync("Ada Admin");
+        var developer = await SeedUserAsync("Audit Fails");
+        var subscriptionName = ApimSubscriptionNames.ForUser(developer.UserId);
+        _ = await CreateService(admin.EntraObjectId).GetMyProfileAsync(CancellationToken.None); // admin row exists
+        _ = await BuildKeyServiceFor(admin).ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        _ = await Context.SaveChangesAsync();
+
+        var service = CreateService(admin.EntraObjectId, wrapAudit: inner => new FailingAuditService(inner)
+        {
+            FailOn = action => action == AuditActions.UserQuotaChanged,
+        });
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.UpdateQuotaAsync(developer.UserId, new UpdateUserQuotaRequest { MonthlyTokenQuota = TestGatewayTiers.PowerCap }, CancellationToken.None));
+
+        // The gateway did move — that is the accepted, self-healing direction — but the database did not
+        // record a budget nobody audited.
+        Assert.Equal(GatewayTiers.Power, _apim.ProductOf(subscriptionName));
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Null(saved.MonthlyTokenQuota);
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.UserQuotaChanged).ToListAsync());
+
+        // And the key.tier-changed row the move added was rolled back with it — no orphan audit row
+        // claiming a tier change the database never made.
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyTierChanged).ToListAsync());
+    }
+
+    /// <summary>A key service acting as <paramref name="actor"/>, for arranging a provisioned developer.</summary>
+    private ApimKeyService BuildKeyServiceFor(User actor)
+    {
+        var identity = new ClaimsIdentity(
+            [new Claim(ClaimConstants.Oid, actor.EntraObjectId), new Claim(ClaimConstants.Roles, RoleNames.Admin)],
+            "TestAuth",
+            nameType: ClaimConstants.Name,
+            roleType: ClaimConstants.Roles);
+        var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(new DefaultHttpContext { User = new ClaimsPrincipal(identity) }), Context);
+        var writer = new AuditWriter(Context, _timeProvider);
+        return new ApimKeyService(
+            Context,
+            _apim,
+            new DataProtectionKeyProtector(new EphemeralDataProtectionProvider()),
+            new AuditService(Context, writer, accessor),
+            writer,
+            accessor,
+            _timeProvider,
+            NullLogger<ApimKeyService>.Instance);
     }
 
     private async Task<User> SeedUserAsync(string displayName, string? email = null)

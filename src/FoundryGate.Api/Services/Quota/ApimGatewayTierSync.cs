@@ -1,5 +1,7 @@
+using Azure;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Data.Entities;
+using FoundryGate.Domain.Exceptions;
 
 namespace FoundryGate.Api.Services.Quota;
 
@@ -20,9 +22,10 @@ namespace FoundryGate.Api.Services.Quota;
 /// contract explicit rather than turning a race into a 404.
 /// </para>
 /// <para>
-/// <b>No audit row of its own.</b> <c>MoveToProductAsync</c> already writes <c>key.tier-changed</c> with
-/// the before/after product ids and saves it; writing another here would double-count every tier change
-/// in the audit trail.
+/// <b>No audit row of its own.</b> <c>MoveToProductAsync</c> already adds <c>key.tier-changed</c> with
+/// the before/after product ids; writing another here would double-count every tier change in the audit
+/// trail. That row is <em>added, not saved</em> — it commits with the calling unit of work, which is what
+/// keeps "the gateway moved" and "the audit trail says so" a single atomic fact (#156 review).
 /// </para>
 /// <para>
 /// <b>Failure is the caller's failure.</b> Resolution calls this <em>before</em> its own
@@ -45,6 +48,32 @@ public sealed class ApimGatewayTierSync(IApimKeyService keys, ILogger<ApimGatewa
             return;
         }
 
-        await keys.MoveToProductAsync(user, tierProductId, cancellationToken);
+        try
+        {
+            await keys.MoveToProductAsync(user, tierProductId, cancellationToken);
+        }
+        catch (Exception exception) when (IsUpstreamFailure(exception))
+        {
+            // Without this the ARM SDK's RequestFailedException (a missing role, a 429, a 500) escapes
+            // the handler as a bare 500 on PUT /users/{id}/quota, POST /users/{id}/activate and request
+            // approval — all three of which document 502 (#156 review). No "nothing was saved" claim
+            // here: the caller has already mutated its own rows in memory, and what is true is that it
+            // will not commit them, because this exception aborts the caller before its save.
+            throw new UpstreamDependencyException(
+                $"The API Management gateway did not accept moving user {user.UserId}'s subscription to the '{tierProductId}' tier, so the quota change was not applied. Please retry.",
+                exception);
+        }
     }
+
+    /// <summary>
+    /// The dependency-failed types (allowlist, matching <c>UserLifecycleService</c>): an ARM/transport
+    /// fault is the gateway's fault, while the key service's own <see cref="KeyNotFoundException"/> /
+    /// <see cref="ConflictException"/> / <see cref="ArgumentException"/> keep their 404/409/400 mapping
+    /// and a genuine bug keeps its 500.
+    /// </summary>
+    private static bool IsUpstreamFailure(Exception exception) =>
+        exception is RequestFailedException
+            or ApimSubscriptionNotFoundException
+            or HttpRequestException
+            or TimeoutException;
 }

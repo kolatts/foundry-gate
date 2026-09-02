@@ -43,9 +43,6 @@ public sealed class NeverCalledApimKeyService : IApimKeyService
     public Task<ApiKeyRevealResponse> RotateMineAsync(CancellationToken cancellationToken) => throw Unexpected();
 
     /// <inheritdoc />
-    public Task<ApiKeyRevealResponse> ProvisionForUserAsync(int userId, string tierProductId, CancellationToken cancellationToken) => throw Unexpected();
-
-    /// <inheritdoc />
     public Task<ApiKeyRevealResponse> RotateForUserAsync(int userId, CancellationToken cancellationToken) => throw Unexpected();
 
     /// <inheritdoc />

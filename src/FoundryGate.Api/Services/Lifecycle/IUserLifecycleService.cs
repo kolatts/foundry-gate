@@ -1,5 +1,6 @@
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Exceptions;
+using FoundryGate.Domain.Keys.Contracts;
 
 namespace FoundryGate.Api.Services.Lifecycle;
 
@@ -60,6 +61,25 @@ public interface IUserLifecycleService
     /// <exception cref="FeatureNotConfiguredException">APIM key management is not configured on this host (→ 503); nothing was persisted.</exception>
     /// <exception cref="UpstreamDependencyException">APIM (or, on first login, Microsoft Graph) failed (→ 502); nothing was persisted.</exception>
     Task<User> ProvisionAsync(ProvisionTrigger trigger, ProvisionContext context, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <c>POST /keys/{userId}/provision</c> (admin): the <see cref="ProvisionTrigger.AdminProvision"/>
+    /// pipeline for an existing, active user who holds no key, returning the plaintext once.
+    /// </summary>
+    /// <remarks>
+    /// This entry point lives here rather than on <c>IApimKeyService</c> because the tier a key is minted
+    /// under is the user's <em>resolved</em> tier, and resolution sits above the key service (which the
+    /// tier sync depends on, so the key service cannot depend back on it). There is deliberately no tier
+    /// parameter: a budget <em>is</em> a tier, so the way to mint a key on a different product is to set
+    /// the user's quota (<c>PUT /users/{id}/quota</c>) — which moves the gateway too. A caller-supplied
+    /// tier could disagree with the allocation the database records, which is the exact drift the tier
+    /// sync exists to prevent.
+    /// </remarks>
+    /// <exception cref="KeyNotFoundException">No such user (→ 404).</exception>
+    /// <exception cref="ConflictException">The user is deactivated (re-activate them instead) or already holds a key (→ 409).</exception>
+    /// <exception cref="FeatureNotConfiguredException">APIM key management is not configured on this host (→ 503).</exception>
+    /// <exception cref="UpstreamDependencyException">APIM failed (→ 502); nothing was persisted.</exception>
+    Task<ApiKeyRevealResponse> ProvisionKeyForUserAsync(int userId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Runs the deprovision pipeline for <paramref name="trigger"/> against <paramref name="userId"/>:
