@@ -219,6 +219,15 @@ public sealed class ApimKeyService(
             // should no longer arise here at all, and if one does it gets the same restore-and-audit
             // treatment as every other failure.
             await RecordRotationFailureAsync(user, subscriptionName, previous, rotatedRow, exception);
+
+            if (exception is ApimSubscriptionNotFoundException notFound)
+            {
+                // Deleted out from under us between the two ARM calls — vanishingly unlikely, but this
+                // keeps the 409 the method documents ("revoke and re-provision") for the whole of it,
+                // rather than the primary regeneration mapping and the rest falling through to a 500.
+                throw SubscriptionMissing(user, notFound);
+            }
+
             throw;
         }
 

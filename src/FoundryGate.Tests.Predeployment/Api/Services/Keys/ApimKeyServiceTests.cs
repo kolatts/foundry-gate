@@ -344,6 +344,29 @@ public class ApimKeyServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task Rotate_keeps_its_409_when_the_subscription_vanishes_between_the_two_ARM_calls()
+    {
+        // Splitting the two regenerations across the commit point (#168) put the second one in the
+        // compensating catch, where an ApimSubscriptionNotFoundException would have fallen through as a
+        // bare 500. The whole method still answers "revoke and re-provision" with a 409.
+        var (service, _) = await CreateServiceAsync();
+        var developer = await SeedUserAsync("Vanishes Mid-Rotate", "vanishes@contoso.test");
+        _ = await service.ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        var name = ApimSubscriptionNames.ForUser(developer.UserId);
+        _apim.AfterMutation = () => _apim.Remove(name);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() => service.RotateAsync(developer, CancellationToken.None));
+
+        _apim.AfterMutation = null;
+        Assert.IsType<ApimSubscriptionNotFoundException>(exception.InnerException);
+        Assert.Contains($"DELETE /keys/{developer.UserId}", exception.Message, StringComparison.Ordinal);
+
+        // Compensation still ran: the stale-but-consistent row, and a trail.
+        _ = await SingleAuditAsync(AuditActions.KeyRotationFailed, developer.UserId);
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyRotated).ToListAsync());
+    }
+
+    [Fact]
     public async Task RevokeAsSystem_deletes_the_subscription_and_writes_a_system_audit_row_without_any_HTTP_caller()
     {
         var (service, _) = await CreateServiceAsync();
