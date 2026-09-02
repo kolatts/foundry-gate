@@ -205,11 +205,17 @@ message is what the admin reads.
 ### `/audit`
 
 `GET /audit`, paged and filtered on the server: the log is append-only and unbounded, so the page
-never holds more than one page of it. Filters are action, target type, an actor's user id
-([#191](https://github.com/kolatts/foundry-gate/issues/191) turns that into a name type-ahead), and
+never holds more than one page of it. Filters are action, target type, an **actor type-ahead**, and
 a date range read in the reader's own time zone whose end day is included in full. Changing any
 filter goes back to page one. The action and target-type choices come from the Domain constants the
-audit writers use, so the dropdowns cannot drift from what is actually written. `?action=` is a deep
-link into one kind of entry — how the dashboard's hard-stopped card hands over the revocations
-rather than the whole log; an action the constants do not name is ignored. Expanding a row shows its `details` blob, pretty-printed when it is JSON and verbatim when
+audit writers use, so the dropdowns cannot drift from what is actually written.
+
+The actor filter searches [`GET /users?search=`](/foundry-gate/reference/api/#users) as you type
+(debounced, active and deactivated alike — a departed employee's entries are still in the log) and
+resolves the pick to `actorUserId`. An admin reading the log knows "Ada Lovelace", not "user 41".
+Typing a bare **id** still works: an all-digits term also asks `GET /users/{id}` and offers that
+person. Both query parameters are deep links — `?actor=41` applies the id and shows whose it is (and
+still filters if the name cannot be resolved), and `?action=` filters to one kind of entry, which is
+how the dashboard's hard-stopped card hands over the revocations rather than the whole log. An
+action the constants do not name is ignored. Expanding a row shows its `details` blob, pretty-printed when it is JSON and verbatim when
 it is not — a viewer that hid malformed rows would hide exactly the rows worth reading.

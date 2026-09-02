@@ -2,6 +2,7 @@ using Bunit;
 using FoundryGate.Domain.Audit.Contracts;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Users.Contracts;
 using FoundryGate.Web.Components;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
@@ -191,6 +192,94 @@ public class AuditPageTests : WebTestContext
     }
 
     [Fact]
+    public async Task The_actor_filter_searches_users_by_name()
+    {
+        // #191: the filter used to be a raw numeric field, so "who did this?" needed a detour
+        // through /users to look an id up — the opposite of what a filter is for.
+        Api.ArrangeUsers(WebTestData.User(userId: 41, displayName: "Ada Lovelace"));
+
+        var page = RenderPage<Audit>();
+        var matches = await SearchActorsAsync(page, "ada");
+
+        Assert.Equal(41, Assert.Single(matches).UserId);
+        var (query, paging) = Assert.Single(Api.UserListCalls);
+        Assert.Equal("ada", query.Search);
+        // Deactivated accounts still appear in the log, so the search must not filter them out.
+        Assert.Null(query.IsActive);
+        Assert.Equal(1, paging.Page);
+    }
+
+    [Fact]
+    public async Task Choosing_an_actor_filters_the_log_by_their_user_id()
+    {
+        var page = RenderPage<Audit>();
+
+        await SelectActorAsync(page, WebTestData.User(userId: 41, displayName: "Ada Lovelace"));
+
+        Assert.Equal(41, Api.AuditQueries[^1].Query.ActorUserId);
+    }
+
+    [Fact]
+    public async Task Clearing_the_actor_removes_the_filter()
+    {
+        var page = RenderPage<Audit>();
+        await SelectActorAsync(page, WebTestData.User(userId: 41));
+
+        await SelectActorAsync(page, null);
+
+        Assert.Null(Api.AuditQueries[^1].Query.ActorUserId);
+    }
+
+    [Fact]
+    public async Task A_numeric_search_term_falls_back_to_looking_the_id_up()
+    {
+        // The manual id path #191 asked to keep: an admin holding an id from an export or a
+        // colleague's message can type it straight in.
+        Api.UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page<UserResponse>());
+        Api.UserResult = ApiCallResult<UserDetailResponse>.Ok(
+            WebTestData.UserDetail(WebTestData.User(userId: 41, displayName: "Ada Lovelace")));
+
+        var page = RenderPage<Audit>();
+        var matches = await SearchActorsAsync(page, "41");
+
+        Assert.Equal("Ada Lovelace", Assert.Single(matches).DisplayName);
+    }
+
+    [Fact]
+    public async Task A_numeric_term_that_matches_no_user_offers_nothing_rather_than_failing()
+    {
+        Api.UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page<UserResponse>());
+        Api.UserResult = ApiCallResult<UserDetailResponse>.Fail(ApiCallStatus.NotFound, "That wasn't found.");
+
+        var page = RenderPage<Audit>();
+
+        Assert.Empty(await SearchActorsAsync(page, "999"));
+    }
+
+    [Fact]
+    public void An_actor_query_parameter_filters_on_first_load_and_names_the_person()
+    {
+        // A deep link into "everything this person did" has to survive being pasted into a chat.
+        Api.UserResult = ApiCallResult<UserDetailResponse>.Ok(
+            WebTestData.UserDetail(WebTestData.User(userId: 41, displayName: "Ada Lovelace")));
+
+        var page = RenderPage<Audit>(("ActorFilter", 41));
+
+        Assert.Equal(41, Assert.Single(Api.AuditQueries).Query.ActorUserId);
+        Assert.Contains("Ada Lovelace", page.FindComponent<MudAutocomplete<UserResponse>>().Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_actor_query_parameter_still_filters_when_the_name_cannot_be_resolved()
+    {
+        Api.UserResult = ApiCallResult<UserDetailResponse>.Fail(ApiCallStatus.NotFound, "That wasn't found.");
+
+        _ = RenderPage<Audit>(("ActorFilter", 41));
+
+        Assert.Equal(41, Assert.Single(Api.AuditQueries).Query.ActorUserId);
+    }
+
+    [Fact]
     public void Details_json_is_pretty_printed()
     {
         var formatted = AuditDetails.Prettify("""{"before":null,"after":20000000}""");
@@ -210,6 +299,29 @@ public class AuditPageTests : WebTestContext
         var formatted = AuditDetails.Prettify(details);
 
         Assert.Equal(string.IsNullOrWhiteSpace(details) ? string.Empty : details, formatted);
+    }
+
+    /// <summary>
+    /// Runs the actor autocomplete's own <c>SearchFunc</c>. MudBlazor opens its list through a
+    /// popover the headless renderer never shows, so the search is driven directly — the same way
+    /// the select filters are.
+    /// </summary>
+    private static async Task<IReadOnlyList<UserResponse>> SearchActorsAsync(IRenderedComponent<IComponent> page, string term)
+    {
+        // Declared non-nullable rather than `var`: the compiler resets a nullable local's flow state
+        // inside a lambda, so a null check outside the closure would not carry into it.
+        Func<string, CancellationToken, Task<IEnumerable<UserResponse>?>> search =
+            page.FindComponent<MudAutocomplete<UserResponse>>().Instance.SearchFunc!;
+
+        return await page.InvokeAsync(async () =>
+            (await search(term, CancellationToken.None))?.ToList() ?? []);
+    }
+
+    /// <summary>Picks (or clears) the actor the way the popover's click would.</summary>
+    private static async Task SelectActorAsync(IRenderedComponent<IComponent> page, UserResponse? actor)
+    {
+        var autocomplete = page.FindComponent<MudAutocomplete<UserResponse>>();
+        await page.InvokeAsync(() => autocomplete.Instance.ValueChanged.InvokeAsync(actor));
     }
 
     private static void SetSelect(IRenderedComponent<IComponent> page, int index, string value)

@@ -1,5 +1,6 @@
 @page "/audit"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@using System.Globalization
 @using FoundryGate.Domain.Audit.Contracts
 @using FoundryGate.Domain.Common
 @inject IFoundryGateApiClient ApiClient
@@ -60,14 +61,22 @@
             </MudItem>
 
             <MudItem xs="12" md="2">
-                <MudNumericField T="int?"
-                                 Label="Actor user id"
-                                 Value="@_actorUserId"
-                                 ValueChanged="@(value => ApplyFilterAsync(() => _actorUserId = value))"
-                                 Min="1"
+                @* An admin reading the log knows "Ada Lovelace", not "user 41" (#191). Typing a bare
+                   id still works: the search falls back to GET /users/{id} when the term is numeric
+                   and the name search has nothing for it, which is also how a ?actor= deep link
+                   recovers the name to show in the box. *@
+                <MudAutocomplete T="UserResponse"
+                                 Label="Actor"
+                                 Value="@_actor"
+                                 ValueChanged="@OnActorChangedAsync"
+                                 SearchFunc="@SearchActorsAsync"
+                                 ToStringFunc="@ActorLabel"
+                                 DebounceInterval="300"
+                                 ResetValueOnEmptyText="true"
                                  Clearable="true"
                                  Variant="Variant.Outlined"
                                  Margin="Margin.Dense"
+                                 HelperText="Name, email, or a user id"
                                  data-testid="audit-filter-actor" />
             </MudItem>
         </MudGrid>
@@ -139,6 +148,9 @@
 @code {
     private const int PageSize = 25;
 
+    /// <summary>How many people the actor type-ahead offers per keystroke — a shortlist, not a browser.</summary>
+    private const int ActorSuggestionCount = 10;
+
     /// <summary>The known <c>AuditLog.Action</c> values, straight off the Domain constants.</summary>
     public static readonly IReadOnlyList<string> Actions = ConstantSet.StringConstants(typeof(AuditActions));
 
@@ -154,10 +166,19 @@
     [Parameter, SupplyParameterFromQuery(Name = "action")]
     public string? ActionFilter { get; set; }
 
+    /// <summary>
+    /// <c>?actor=</c> — the id path #191 asked to keep working, so a link to "everything this person
+    /// did" survives being pasted into a chat. The name is looked up once so the box shows who it is
+    /// rather than a number; a user the API can't resolve still filters by the id.
+    /// </summary>
+    [Parameter, SupplyParameterFromQuery(Name = "actor")]
+    public int? ActorFilter { get; set; }
+
     private MudDataGrid<AuditLogEntryResponse>? _grid;
     private string? _action;
     private string? _targetType;
     private int? _actorUserId;
+    private UserResponse? _actor;
     private DateRange? _dateRange;
     private bool _loadFailed;
     private string _errorMessage = string.Empty;
@@ -214,25 +235,83 @@
         new(DateTime.SpecifyKind(localWallClock, DateTimeKind.Unspecified), TimeProvider.LocalTimeZone.GetUtcOffset(localWallClock));
 
     /// <summary>
-    /// Keeps the action filter in step with <c>?action=</c>, including a later in-app navigation to
-    /// it. An action the log's own constants don't name is ignored rather than being pushed into a
-    /// select that cannot render it — a mistyped deep link shows the whole log, not an empty grid
-    /// filtered by nothing that exists.
+    /// Keeps the query-string filters in step, including a later in-app navigation to them. An
+    /// action the log's own constants don't name is ignored rather than being pushed into a select
+    /// that cannot render it — a mistyped deep link shows the whole log, not an empty grid filtered
+    /// by nothing that exists. An <c>?actor=</c> id is taken at face value (the API is the authority
+    /// on whether that user exists) and its name resolved for the box.
     /// </summary>
     protected override async Task OnParametersSetAsync()
     {
-        var fromQuery = Actions.FirstOrDefault(a => string.Equals(a, ActionFilter, StringComparison.OrdinalIgnoreCase));
-        if (fromQuery is null || string.Equals(fromQuery, _action, StringComparison.Ordinal))
+        var changed = false;
+
+        var actionFromQuery = Actions.FirstOrDefault(a => string.Equals(a, ActionFilter, StringComparison.OrdinalIgnoreCase));
+        if (actionFromQuery is not null && !string.Equals(actionFromQuery, _action, StringComparison.Ordinal))
         {
-            return;
+            _action = actionFromQuery;
+            changed = true;
         }
 
-        _action = fromQuery;
-        if (_grid is not null)
+        if (ActorFilter is { } actorFromQuery && actorFromQuery != _actorUserId)
+        {
+            _actorUserId = actorFromQuery;
+            _actor = await TryLoadUserAsync(actorFromQuery);
+            changed = true;
+        }
+
+        if (changed && _grid is not null)
         {
             await ReloadAsync();
         }
     }
+
+    /// <summary>
+    /// The type-ahead over <c>GET /users?search=</c>. An all-digits term also asks
+    /// <c>GET /users/{id}</c>, so an admin who has an id — from a deep link, an export, a colleague's
+    /// message — can still use it without leaving for <c>/users</c>. Search failures return nothing
+    /// rather than throwing: the filter is a convenience, and the grid is the thing that reports a
+    /// dead API.
+    /// </summary>
+    private async Task<IEnumerable<UserResponse>> SearchActorsAsync(string? value, CancellationToken cancellationToken)
+    {
+        var term = value?.Trim() ?? string.Empty;
+
+        var result = await ApiClient.GetUsersAsync(
+            new UserListQuery(string.IsNullOrEmpty(term) ? null : term, IsActive: null),
+            new PagedRequest(1, ActorSuggestionCount),
+            cancellationToken);
+
+        var matches = result is { IsSuccess: true, Value: not null } ? result.Value.Items.ToList() : [];
+
+        if (int.TryParse(term, NumberStyles.None, CultureInfo.InvariantCulture, out var userId)
+            && !matches.Exists(u => u.UserId == userId))
+        {
+            var byId = await TryLoadUserAsync(userId, cancellationToken);
+            if (byId is not null)
+            {
+                matches.Insert(0, byId);
+            }
+        }
+
+        return matches;
+    }
+
+    /// <summary>One user by id, or <see langword="null"/> for any failure — a 404 for a typed id is an answer, not an error to report.</summary>
+    private async Task<UserResponse?> TryLoadUserAsync(int userId, CancellationToken cancellationToken = default)
+    {
+        var result = await ApiClient.GetUserAsync(userId, cancellationToken);
+        return result is { IsSuccess: true, Value: not null } ? result.Value.User : null;
+    }
+
+    private Task OnActorChangedAsync(UserResponse? actor) =>
+        ApplyFilterAsync(() =>
+        {
+            _actor = actor;
+            _actorUserId = actor?.UserId;
+        });
+
+    private static string ActorLabel(UserResponse? user) =>
+        user is null ? string.Empty : $"{user.DisplayName} (#{user.UserId})";
 
     private async Task ApplyFilterAsync(Action mutate)
     {
@@ -245,6 +324,7 @@
         _action = null;
         _targetType = null;
         _actorUserId = null;
+        _actor = null;
         _dateRange = null;
         await ReloadAsync();
     }
