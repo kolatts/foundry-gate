@@ -32,7 +32,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         await SeedUserAsync("Ada");
-        var resetLock = new FakeResetLock();
+        var resetLock = new FakeJobLock();
 
         var outcome = await CreateJob(resetLock).RunAsync(CancellationToken.None);
 
@@ -52,7 +52,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         await SeedUserAsync("Ada");
         await SetResetDayAsync("17");
         _clock.SetUtcNow(new DateTimeOffset(2026, 10, 3, 0, 1, 0, TimeSpan.Zero));
-        var resetLock = new FakeResetLock();
+        var resetLock = new FakeJobLock();
 
         var outcome = await CreateJob(resetLock).RunAsync(CancellationToken.None);
 
@@ -70,7 +70,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         await SeedUserAsync("Ada");
-        var resetLock = new FakeResetLock();
+        var resetLock = new FakeJobLock();
 
         _ = await CreateJob(resetLock).RunAsync(CancellationToken.None); // the 1st
 
@@ -91,7 +91,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         await SeedUserAsync("Ada");
         _clock.SetUtcNow(new DateTimeOffset(2026, 10, 2, 0, 1, 0, TimeSpan.Zero));
 
-        var outcome = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
         Assert.Equal(2, outcome.DayOfMonth);
@@ -107,10 +107,10 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         await SeedUserAsync("Ada");
 
         _clock.SetUtcNow(new DateTimeOffset(2026, 9, 1, 0, 1, 0, TimeSpan.Zero));
-        _ = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        _ = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         _clock.SetUtcNow(new DateTimeOffset(2026, 10, 1, 0, 1, 0, TimeSpan.Zero));
-        var october = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        var october = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         Assert.True(october.Ran);
         Assert.Equal(new BillingPeriod(2026, 10), october.Reset!.Value.Period);
@@ -134,7 +134,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         });
         await Context.SaveChangesAsync();
 
-        var outcome = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
     }
@@ -148,7 +148,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         await SetResetDayAsync("17");
         _clock.SetUtcNow(new DateTimeOffset(2026, 10, 17, 0, 1, 0, TimeSpan.Zero));
 
-        var outcome = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
         Assert.Equal(17, outcome.ConfiguredDayOfMonth);
@@ -166,7 +166,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         await SeedUserAsync("Ada");
         await SetResetDayAsync(value);
 
-        var outcome = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
         Assert.Equal(MonthlyResetJob.DefaultResetDayOfMonth, outcome.ConfiguredDayOfMonth);
@@ -179,7 +179,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         await SeedUserAsync("Ada");
         await SeedDefaultQuotaAsync();
 
-        var outcome = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
         Assert.Equal(MonthlyResetJob.DefaultResetDayOfMonth, outcome.ConfiguredDayOfMonth);
@@ -190,7 +190,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
     {
         await SeedReferenceDataAsync();
         await SeedUserAsync("Ada");
-        var resetLock = new FakeResetLock(acquire: false);
+        var resetLock = new FakeJobLock(acquire: false);
 
         var outcome = await CreateJob(resetLock).RunAsync(CancellationToken.None);
 
@@ -219,7 +219,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.StandardCap, GatewayTiers.Standard);
         await SetConfigAsync(SystemConfigurationKeys.DefaultMonthlyTokenQuota, TestGatewayTiers.PowerCap.ToString(CultureInfo.InvariantCulture));
 
-        var outcome = await CreateJob(new FakeResetLock(), TierSync(apim)).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock(), TierSync(apim)).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
         Assert.Equal(1, outcome.Reset!.Value.TierSyncCount);
@@ -259,7 +259,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         Assert.True(apim.Remove(ApimSubscriptionNames.ForUser(refused.UserId)));
 
         var logs = new CapturingLoggerProvider();
-        var outcome = await CreateJob(new FakeResetLock(), TierSync(apim), logs.CreateLogger<QuotaResetService>()).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock(), TierSync(apim), logs.CreateLogger<QuotaResetService>()).RunAsync(CancellationToken.None);
 
         Assert.True(outcome.Ran);
         Assert.Equal(1, outcome.Reset!.Value.TierSyncCount);
@@ -328,7 +328,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
             }
         };
 
-        var outcome = await CreateJob(new FakeResetLock(), TierSync(apim)).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock(), TierSync(apim)).RunAsync(CancellationToken.None);
 
         Assert.Equal(2, outcome.Reset!.Value.TierSyncCount);
         Assert.Equal(1, outcome.Reset!.Value.TierSyncFailureCount);
@@ -366,7 +366,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
         });
         await SeedAllocationAsync(dev, new BillingPeriod(2026, 9), TestGatewayTiers.PowerCap, GatewayTiers.Power);
 
-        var outcome = await CreateJob(new FakeResetLock()).RunAsync(CancellationToken.None);
+        var outcome = await CreateJob(new FakeJobLock()).RunAsync(CancellationToken.None);
 
         Assert.Empty(_tierSync.Calls);
         Assert.Equal(0, outcome.Reset!.Value.TierSyncCount);
@@ -381,7 +381,7 @@ public class MonthlyResetJobTests : InMemoryDatabaseTest
     private ApimGatewayTierSync TierSync(FakeApimManagementClient apim) =>
         new(apim, new AuditWriter(Context, _clock), new SystemGatewayTierSyncActor(), NullLogger<ApimGatewayTierSync>.Instance);
 
-    private MonthlyResetJob CreateJob(FakeResetLock resetLock, IGatewayTierSync? tierSync = null, ILogger<QuotaResetService>? resetLogger = null)
+    private MonthlyResetJob CreateJob(FakeJobLock resetLock, IGatewayTierSync? tierSync = null, ILogger<QuotaResetService>? resetLogger = null)
     {
         var sync = tierSync ?? _tierSync;
 

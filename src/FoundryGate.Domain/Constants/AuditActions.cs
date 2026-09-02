@@ -102,6 +102,17 @@ public static class AuditActions
     /// <summary>The Log Analytics → <c>QuotaAllocation.TokensUsed</c> reconciliation job (reconciliation, not enforcement).</summary>
     public const string UsageSynced = "usage.synced";
 
+    // -- Scheduled directory sync (issue #151) --
+
+    /// <summary>
+    /// One row per nightly <c>EntraSyncFunction</c> run, system-attributed, carrying both halves'
+    /// counts. Distinct from <see cref="UsersSynced"/> and <see cref="GroupEntraSynced"/> — which the
+    /// two sync services still write, exactly as they do for an admin's button — because the question
+    /// this answers is "did the schedule run last night, and what did the whole pass do", which a
+    /// per-group row cannot answer and a users row can only half-answer.
+    /// </summary>
+    public const string EntraScheduledSync = "entra.scheduled-sync";
+
     // -- Foundry model deployments (issue #61) --
 
     public const string FoundryDeploymentCreated = "foundry.deployment.created";

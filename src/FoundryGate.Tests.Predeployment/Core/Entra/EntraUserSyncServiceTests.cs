@@ -8,6 +8,7 @@ using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Entra;
 using FoundryGate.Core.Quota;
 using FoundryGate.Core.Requests;
 using FoundryGate.Data.Audit;
@@ -23,7 +24,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Identity.Web;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services.Entra;
+namespace FoundryGate.Tests.Predeployment.Core.Entra;
 
 /// <summary>
 /// The reconciliation contract of <see cref="EntraUserSyncService"/> (spec &#167;7.2, #40) against an
@@ -585,7 +586,16 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
             _timeProvider,
             NullLogger<UserLifecycleService>.Instance);
 
-        return new EntraUserSyncService(Context, _directory, lifecycle, audit, _timeProvider, NullLogger<EntraUserSyncService>.Instance);
+        // The Api's two seam implementations, so this class keeps testing exactly what an admin's
+        // POST /users/sync does — the sync moved to Core in #151 but the Api's behaviour did not.
+        return new EntraUserSyncService(
+            Context,
+            _directory,
+            new LifecycleDepartureHandler(lifecycle),
+            new CurrentUserEntraSyncActor(accessor),
+            writer,
+            _timeProvider,
+            NullLogger<EntraUserSyncService>.Instance);
     }
 
     private Task<User> SeedCallerAsync() => SeedUserAsync(Guid.NewGuid().ToString(), displayName: "Admin Caller", email: "admin@contoso.test");

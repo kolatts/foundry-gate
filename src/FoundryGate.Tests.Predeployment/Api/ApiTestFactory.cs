@@ -1,3 +1,4 @@
+using System.Globalization;
 using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Foundry;
 using FoundryGate.Core.Gateway;
@@ -211,6 +212,20 @@ public class ApiTestFactory : WebApplicationFactory<Program>
             ["Gateway:ModelAliases:2:Alias"] = "opus",
             ["Gateway:ModelAliases:2:DeploymentName"] = "claude-opus-4-5",
             ["Gateway:ModelAliases:2:Provider"] = "anthropic",
+            // The quota tier table, in the shape a DEPLOYED host receives it (#201): infra projects
+            // infra/main.bicep's `quotaTiers` onto both hosts as Gateway__Tiers__{i}__*, which is
+            // Gateway:Tiers:{i}:* once AddEnvironmentVariables has done its `__` → `:` pass. Stated here
+            // rather than left to appsettings.local.json so the endpoint tests exercise the deployed
+            // shape and the factory stays hermetic — the same reason every other Gateway value is here.
+            ["Gateway:Tiers:0:ProductId"] = GatewayTiers.Standard,
+            ["Gateway:Tiers:0:DisplayName"] = "Standard",
+            ["Gateway:Tiers:0:MonthlyTokenQuota"] = TestGatewayTiers.StandardCap.ToString(CultureInfo.InvariantCulture),
+            ["Gateway:Tiers:1:ProductId"] = GatewayTiers.Power,
+            ["Gateway:Tiers:1:DisplayName"] = "Power",
+            ["Gateway:Tiers:1:MonthlyTokenQuota"] = TestGatewayTiers.PowerCap.ToString(CultureInfo.InvariantCulture),
+            ["Gateway:Tiers:2:ProductId"] = GatewayTiers.Unlimited,
+            ["Gateway:Tiers:2:DisplayName"] = "Unlimited",
+            ["Gateway:Tiers:2:MonthlyTokenQuota"] = "0",
         };
         ConfigureSettings(settings);
 

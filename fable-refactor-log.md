@@ -451,6 +451,70 @@ result before approving the schema migration is the checkpoint that makes a sepa
 `dev-then-production` chain unnecessary. Revisit if the approval count grows without the number of
 genuinely distinct checkpoints growing with it.
 
+### D-020: The nightly Entra sync deprovisions for real, at the cost of a second pipeline
+**Date:** 2026-09-02 (#151)
+**Problem:** Scheduling the two Entra syncs (#151) meant moving them into `FoundryGate.Core` so the
+Functions worker could run them — the #119 pattern, and mostly mechanical. One dependency would not
+move: the user sync's departure path calls `IUserLifecycleService.DeprovisionAsync(EntraDeparture, …)`,
+plan 21's single orchestrator, which composes `IApimKeyService` and `IQuotaRequestService` — both
+Api-only, both carrying things (key protection, the request review pipeline) that have no business in
+a background worker. Core cannot reference the Api.
+**Options considered:**
+1. *Move the whole deprovision pipeline into Core* — the right end state, but it drags the key service
+   (and with it the key protector's shape), the quota request service and their tests across in a
+   change whose actual subject is a timer trigger.
+2. *Functions flags departures only* (`IsActive = false` + an audit row), full deprovision left to an
+   admin — smallest diff, and wrong: the admin UI would read "inactive" while the gateway still
+   honoured the developer's key. That is the exact "SQL says one thing, the gateway enforces another"
+   class `IsGatewayCapped` and the tier sync exist to make impossible, except here it would be the
+   *offboarding* that lied.
+3. *Functions suspends departure detection entirely* — honest, but then the nightly job adds and
+   updates forever and never removes anybody, which is most of why #151 was filed.
+4. *A one-method Core seam, `IDepartureHandler`, with two implementations*: the Api delegates to the
+   orchestrator, the Functions worker runs the same sequence over the pieces Core already owns (the
+   APIM management client from #194, `IAuditWriter`, the `AppDbContext`).
+**Decision:** Option 4, with option 1 filed as #214. `DeprovisioningDepartureHandler` deletes the APIM
+subscription, clears the key fields, deactivates, hard-stops the allocation and closes pending
+requests — the same end state, the same audit actions and details, the same commit-point discipline.
+The one piece that could be shared immediately was: the pending-request rule moved to Core's
+`IQuotaRequestExpiry.CancelPendingForUserAsync`, which the Api's `QuotaRequestService` now delegates to.
+**Why a second implementation was worth it here:** the alternative was not "less duplication", it was
+"a scheduled job whose output is a lie". A departed employee holding a working gateway key while the
+control plane reports them deactivated is worse than any amount of duplicated sequence, and the
+duplication is bounded, tested on both sides against the same assertions, and has an issue on it.
+**The other seam, and where it is called, is load-bearing.** `IEntraSyncActor` answers "whose audit row
+is this" (`IGatewayTierSyncActor`'s shape). Group sync resolves it *first* — an unprovisioned admin's
+403 must land before Graph is read. User sync resolves it *last*, exactly where `IAuditService.LogAsync`
+used to: the Api's accessor sees a `User` the run has just `Add`ed but not saved, which is what lets an
+admin whose own row is being imported by their first sync attribute that run to themselves rather than
+be refused by it. Moving that call to the top of the method would have been a silent behaviour change
+that no compiler and no obvious test would catch.
+**What a gateway-less host does with a departure, stated precisely** (PR #216 review corrected an
+earlier, softer wording here): the Functions host registers `UnconfiguredApimManagementClient` when
+`Gateway:*` does not address APIM, and its `FeatureNotConfiguredException` is **not** in
+`IsUpstreamFailure`'s allowlist and **not** caught by `EntraUserSyncService`'s per-departure handler.
+A departure that reached it would therefore abort the whole nightly pass as a failed invocation — the
+same thing the Api does on the same configuration, and not graceful degradation of any kind. It is
+also unreachable: no gateway means no `ApimSubscriptionId`, and `RevokeKeyAsync` returns `false`
+before the client is touched. The registration exists so a deliberately gateway-less host starts at
+all; loud-and-unreachable is the right shape for that, and nothing pretends such a host can offboard
+anybody.
+**Caught on the way (2), in review:** the first cut of the Core handler wrote `trigger = nameof(IDepartureHandler)`
+in the `user.deactivated` details where the Api writes `"EntraDeparture"` — so an operator filtering
+`details.trigger == "EntraDeparture"` would have seen every admin-found departure and none of the
+nightly ones. #214 had named exactly this drift as the risk and it happened before the PR merged,
+which settles the question of whether an XML-doc "matches …" comment is enough: it is not. The three
+strings the trail is made of now live in Core's `DepartureAudit` (the Api's constants are `const`
+aliases of them, so the compiler enforces two of the three), and `DepartureHandlerParityTests` runs
+both pipelines against one database on one clock and compares the two details objects field for
+field — verified by re-introducing the divergence and watching it fail.
+**Caught on the way (1), while moving:** moving `EntraOptions` to Core removed it from `ValidateRecursively()` on both
+hosts — the same silent gap D-014 recorded for `GatewayOptions`, rediscovered because only the Api's
+existing test noticed. `CoreOptionsValidation` now has `ValidateEntra` alongside `ValidateGateway` and
+both hosts yield it. The Graph client also had to stop reading `AzureAd:ClientId` (the Functions host
+binds no `AzureAd` section — nothing there serves a request), so the app registration id travels on
+`Entra:ApplicationClientId`, set by infra on both hosts and defaulted from `AzureAd:ClientId` on the Api.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the

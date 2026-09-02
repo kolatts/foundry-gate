@@ -3,6 +3,7 @@ using FoundryGate.Core.Quota;
 using FoundryGate.Data;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Quota;
+using FoundryGate.Functions.Services.Jobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -44,7 +45,7 @@ namespace FoundryGate.Functions.Services.Quota;
 public sealed class MonthlyResetJob(
     AppDbContext dbContext,
     IQuotaResetService quotaReset,
-    IResetLock resetLock,
+    IJobLock resetLock,
     TimeProvider timeProvider,
     ILogger<MonthlyResetJob> logger) : IMonthlyResetJob
 {

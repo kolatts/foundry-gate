@@ -10,10 +10,12 @@ namespace FoundryGate.Tests.Predeployment.Api.Configuration;
 
 /// <summary>
 /// The quota-tier half of <see cref="GatewayOptions"/> validation (the addressing half is in
-/// <see cref="AppSettingsValidationTests"/>), plus the parity check that the tier caps shipped in
-/// <c>appsettings.json</c> match the products <c>infra/main.bicep</c>'s <c>quotaTiers</c> actually
-/// creates — mirroring <c>GatewayTiersTests</c> for the ids. A cap that drifts between the two means
-/// resolution maps a quota onto a product whose policy enforces a different number.
+/// <see cref="AppSettingsValidationTests"/>), plus the parity check that the tier caps a
+/// <c>local</c> host reads from <c>appsettings.local.json</c> match the products
+/// <c>infra/main.bicep</c>'s <c>quotaTiers</c> actually creates — mirroring <c>GatewayTiersTests</c>
+/// for the ids. A cap that drifts between the two means resolution maps a quota onto a product whose
+/// policy enforces a different number. (A <em>deployed</em> host has no such copy to drift since
+/// #201: infra emits the table from the same parameter — <c>GatewayInfraBindingTests</c>.)
 /// </summary>
 public class GatewayOptionsTiersTests
 {
@@ -134,17 +136,22 @@ public class GatewayOptionsTiersTests
     }
 
     /// <summary>
-    /// Same scope caveat as <c>GatewayTiersTests</c>: this pins the bicep parameter's <em>default</em>
-    /// value against the Api's shipped <c>appsettings.json</c>. A fork that overrides <c>quotaTiers</c>
-    /// at deploy time must override <c>Gateway:Tiers</c> to match (#108 will have infra emit it).
+    /// Since #201 a <em>deployed</em> host gets its tier table from infra
+    /// (<c>Gateway__Tiers__{i}__*</c>, projected from the same <c>quotaTiers</c> parameter that creates
+    /// the products), so a fork that overrides the parameter can no longer drift — that binding is
+    /// guarded by <c>GatewayInfraBindingTests</c>. What is left to keep honest is the <c>local</c>
+    /// table: <c>appsettings.local.json</c> is the only copy of these numbers a human still maintains,
+    /// and a local host resolving quotas against caps the shipped bicep does not create would make
+    /// every local reproduction of a tier bug meaningless.
     /// </summary>
     [Fact]
-    public void Shipped_appsettings_tiers_match_infra_main_bicep_quotaTiers_ids_and_caps_in_order()
+    public void The_local_tier_table_matches_infra_main_bicep_quotaTiers_ids_and_caps_in_order()
     {
         var repoRoot = FindRepoRoot();
 
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(Path.Combine(repoRoot, "src", "FoundryGate.Api", "appsettings.json"), optional: false)
+            .AddJsonFile(Path.Combine(repoRoot, "src", "FoundryGate.Api", "appsettings.local.json"), optional: false)
             .Build();
         var options = configuration.GetSection("Gateway").Get<GatewayOptions>();
         Assert.NotNull(options);

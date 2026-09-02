@@ -29,17 +29,32 @@ public static class CoreOptionsValidation
     /// </summary>
     /// <param name="gateway">The bound <c>Gateway</c> section; <see langword="null"/> yields nothing (the host's own <c>[Required]</c> reports it).</param>
     /// <param name="memberPrefix">The host property's name — <c>Gateway</c>.</param>
-    public static IEnumerable<ValidationResult> ValidateGateway(GatewayOptions? gateway, string memberPrefix)
+    public static IEnumerable<ValidationResult> ValidateGateway(GatewayOptions? gateway, string memberPrefix) =>
+        Validate(gateway, memberPrefix);
+
+    /// <summary>
+    /// The same hop for the <c>Entra</c> section, which moved to Core with the directory client and
+    /// both sync services so the Functions host could run them (#151). The Api reaches
+    /// <see cref="EntraOptions"/>'s rules through <c>ValidateRecursively()</c> already — the type used
+    /// to live in its assembly — so this exists for the Functions host, whose <c>AppSettings</c> yields
+    /// it alongside <see cref="ValidateGateway"/>.
+    /// </summary>
+    /// <param name="entra">The bound <c>Entra</c> section; <see langword="null"/> yields nothing.</param>
+    /// <param name="memberPrefix">The host property's name — <c>Entra</c>.</param>
+    public static IEnumerable<ValidationResult> ValidateEntra(EntraOptions? entra, string memberPrefix) =>
+        Validate(entra, memberPrefix);
+
+    private static IEnumerable<ValidationResult> Validate(object? section, string memberPrefix)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(memberPrefix);
 
-        if (gateway is null)
+        if (section is null)
         {
             yield break;
         }
 
         var results = new List<ValidationResult>();
-        _ = Validator.TryValidateObject(gateway, new ValidationContext(gateway), results, validateAllProperties: true);
+        _ = Validator.TryValidateObject(section, new ValidationContext(section), results, validateAllProperties: true);
 
         foreach (var result in results)
         {

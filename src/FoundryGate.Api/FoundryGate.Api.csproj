@@ -10,7 +10,8 @@
     <PackageReference Include="Imagile.Framework.Configuration" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" />
-    <PackageReference Include="Microsoft.Graph" />
+    <!-- Microsoft.Graph moved to FoundryGate.Core with the directory client and both Entra sync
+         services (#151); it arrives transitively and nothing here references it directly. -->
     <PackageReference Include="Microsoft.Identity.Web" />
     <PackageReference Include="OpenTelemetry.Instrumentation.EntityFrameworkCore" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />

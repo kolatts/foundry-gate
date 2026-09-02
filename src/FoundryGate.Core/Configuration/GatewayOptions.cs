@@ -12,7 +12,7 @@ namespace FoundryGate.Core.Configuration;
 /// <c>Gateway__KeyEncryptionKeyUri</c>, <c>Gateway__FoundryAccountNames__{i}</c>, …
 /// (infra/modules/control-plane.bicep is the source of truth for the key names) so nobody types
 /// ARM resource ids into <c>SystemConfiguration</c> by hand — and the quota <see cref="Tiers"/>
-/// (<c>Gateway:Tiers</c>, issue #32 / D-013), which every allocation is resolved against.
+/// (<c>Gateway__Tiers__{i}__*</c>, issue #32 / D-013 / #201), which every allocation is resolved against.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -32,12 +32,18 @@ namespace FoundryGate.Core.Configuration;
 /// feature-specific member is present.
 /// </para>
 /// <para>
-/// <see cref="Tiers"/> is <em>always</em> required — quota resolution has no meaning without it — and
-/// the shipped values live in <c>appsettings.json</c>, mirroring <c>infra/main.bicep</c>'s
-/// <c>quotaTiers</c> (<c>GatewayOptionsTiersTests</c> cross-checks the two). They are deliberately
-/// <em>not</em> C# defaults: the configuration binder appends configured list items to a pre-populated
-/// list rather than replacing it, so C# defaults plus a fork's override would silently produce
-/// duplicate tiers. <c>ValidateRecursively()</c> does not recurse into list items, so
+/// <see cref="Tiers"/> is <em>always</em> required — quota resolution has no meaning without it. On a
+/// deployed host it comes from infra as <c>Gateway__Tiers__{i}__ProductId</c> / <c>__DisplayName</c> /
+/// <c>__MonthlyTokenQuota</c>, projected by <c>infra/modules/control-plane.bicep</c> from the very
+/// <c>quotaTiers</c> parameter that creates the APIM products and renders their <c>llm-token-limit</c>
+/// policies (#201) — one source, so a fork that overrides <c>quotaTiers</c> at deploy time cannot leave
+/// the control plane validating quotas against caps the gateway has never heard of. Neither host ships
+/// the table in <c>appsettings.json</c> any more; each carries it in <c>appsettings.local.json</c>, for
+/// the <c>local</c> environment where there is no gateway to emit anything
+/// (<c>GatewayOptionsTiersTests</c> cross-checks that file against the bicep defaults). The tiers are
+/// deliberately <em>not</em> C# defaults either: the configuration binder appends configured list items
+/// to a pre-populated list rather than replacing it, so C# defaults plus a fork's override would
+/// silently produce duplicate tiers. <c>ValidateRecursively()</c> does not recurse into list items, so
 /// <see cref="Validate"/> checks each <see cref="GatewayTier"/> itself.
 /// </para>
 /// </remarks>
@@ -109,7 +115,9 @@ public class GatewayOptions : IValidatableObject
     public List<string> FoundryAccountNames { get; set; } = [];
 
     /// <summary>
-    /// The gateway's quota tier products and their monthly token caps (<c>Gateway:Tiers</c>). A
+    /// The gateway's quota tier products and their monthly token caps
+    /// (<c>Gateway__Tiers__{i}__ProductId</c> / <c>__DisplayName</c> / <c>__MonthlyTokenQuota</c> from
+    /// infra, <c>Gateway:Tiers</c> in <c>appsettings.local.json</c>). A
     /// developer's monthly budget <em>is</em> one of these tiers (D-013): every numeric quota the control
     /// plane accepts must equal a configured cap or be unlimited, because APIM's <c>token-quota</c> is a
     /// per-product literal (#82) and the tier product a subscription sits on is what the gateway enforces.
@@ -276,7 +284,10 @@ public class GatewayOptions : IValidatableObject
         if (Tiers.Count == 0)
         {
             yield return new ValidationResult(
-                $"{nameof(Tiers)} must contain at least one tier (Gateway:Tiers); the shipped appsettings.json carries the infra/main.bicep defaults.",
+                $"{nameof(Tiers)} must contain at least one tier. On a deployed host infra sets them as " +
+                "Gateway__Tiers__0__ProductId / Gateway__Tiers__0__DisplayName / Gateway__Tiers__0__MonthlyTokenQuota (…__1__…, …) " +
+                "from infra/main.bicep's quotaTiers parameter; locally they come from appsettings.local.json's Gateway:Tiers. " +
+                "Neither is present here, and quota resolution has no meaning without a tier table.",
                 [nameof(Tiers)]);
             yield break;
         }

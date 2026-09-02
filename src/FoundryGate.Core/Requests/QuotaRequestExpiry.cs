@@ -79,4 +79,26 @@ public sealed class QuotaRequestExpiry(
 
         return stale.Count;
     }
+
+    /// <inheritdoc />
+    public async Task<int> CancelPendingForUserAsync(int userId, string note, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(note);
+
+        var pending = await dbContext.QuotaIncreaseRequests
+            .Where(r => r.UserId == userId && r.StatusType == QuotaRequestStatusType.Pending)
+            .ToListAsync(cancellationToken);
+
+        var now = timeProvider.GetUtcNow();
+        foreach (var request in pending)
+        {
+            // Rejected, with no ReviewedByUserId: the status enum has no "Cancelled" state and no
+            // human decided these — the note says a lifecycle event closed them.
+            request.StatusType = QuotaRequestStatusType.Rejected;
+            request.ReviewedDate = now;
+            request.ReviewNotes = note;
+        }
+
+        return pending.Count;
+    }
 }

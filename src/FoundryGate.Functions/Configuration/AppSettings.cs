@@ -31,7 +31,15 @@ public class AppSettings : IValidatableObject
     [Required]
     public GatewayOptions Gateway { get; set; } = new();
 
-    /// <summary>Where the monthly reset's distributed lock lives. Optional: absent, the reset falls back to a no-op lock (see <see cref="StorageOptions"/>).</summary>
+    /// <summary>
+    /// The same <c>Entra</c> section the Api binds (#151): Microsoft Graph directory access for the
+    /// nightly <c>EntraSyncFunction</c>, which runs the users sync and then the group sync. Off by
+    /// default (<c>Entra:Enabled</c>), in which case the job logs once and does nothing — a fork that
+    /// has not granted the Graph application roles must not see a failed invocation every night.
+    /// </summary>
+    public EntraOptions Entra { get; set; } = new();
+
+    /// <summary>Where the scheduled jobs' distributed locks live. Optional: absent, they fall back to a no-op lock (see <see cref="StorageOptions"/>).</summary>
     public StorageOptions Storage { get; set; } = new();
 
     /// <summary>OpenTelemetry → Azure Monitor for the worker. Off by default so `func start` needs no connection string.</summary>
@@ -41,12 +49,39 @@ public class AppSettings : IValidatableObject
     public AzureOptions Azure { get; set; } = new();
 
     /// <summary>
-    /// <see cref="Gateway"/>'s own rules — <c>ValidateRecursively()</c> only recurses into property
-    /// types from this assembly, and <see cref="GatewayOptions"/> lives in <c>FoundryGate.Core</c>
-    /// (#119; CONVENTIONS.md §Solution structure).
+    /// The rules of the two Core-owned sections — <c>ValidateRecursively()</c> only recurses into
+    /// property types from this assembly, and both <see cref="GatewayOptions"/> and
+    /// <see cref="EntraOptions"/> live in <c>FoundryGate.Core</c> (#119/#151;
+    /// CONVENTIONS.md §Solution structure) — plus the one Entra rule that belongs to <em>this</em>
+    /// host: with the directory enabled, something has to say which application's assignments define
+    /// the user population. The Api defaults that from <c>AzureAd:ClientId</c> when it builds the
+    /// directory client; nothing here serves a request, so there is no <c>AzureAd</c> section to fall
+    /// back to and the value has to be deployed (infra sets <c>Entra__ApplicationClientId</c>).
+    /// Catching it at startup beats finding out at 02:00 inside a timer trigger.
     /// </summary>
-    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext) =>
-        CoreOptionsValidation.ValidateGateway(Gateway, nameof(Gateway));
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        foreach (var result in CoreOptionsValidation.ValidateGateway(Gateway, nameof(Gateway)))
+        {
+            yield return result;
+        }
+
+        foreach (var result in CoreOptionsValidation.ValidateEntra(Entra, nameof(Entra)))
+        {
+            yield return result;
+        }
+
+        if (Entra.Enabled
+            && string.IsNullOrWhiteSpace(Entra.ApplicationClientId)
+            && string.IsNullOrWhiteSpace(Entra.ServicePrincipalObjectId))
+        {
+            yield return new ValidationResult(
+                $"{nameof(Entra)}.{nameof(EntraOptions.ApplicationClientId)} is required when {nameof(Entra)}.{nameof(EntraOptions.Enabled)} is true and no " +
+                $"{nameof(EntraOptions.ServicePrincipalObjectId)} is set: the FoundryGate service principal whose app-role assignments define the user " +
+                "population is resolved from it. infra/modules/control-plane.bicep sets Entra__ApplicationClientId on both hosts.",
+                [$"{nameof(Entra)}.{nameof(EntraOptions.ApplicationClientId)}"]);
+        }
+    }
 }
 
 /// <summary>Binds the standard ASP.NET Core <c>ConnectionStrings</c> configuration section.</summary>

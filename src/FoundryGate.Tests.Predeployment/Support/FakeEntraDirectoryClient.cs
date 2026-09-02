@@ -1,5 +1,5 @@
 using System.Runtime.CompilerServices;
-using FoundryGate.Api.Services.Entra;
+using FoundryGate.Core.Entra;
 
 namespace FoundryGate.Tests.Predeployment.Support;
 

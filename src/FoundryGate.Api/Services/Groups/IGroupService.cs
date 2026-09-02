@@ -1,3 +1,4 @@
+using FoundryGate.Core.Entra;
 using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Groups.Contracts;

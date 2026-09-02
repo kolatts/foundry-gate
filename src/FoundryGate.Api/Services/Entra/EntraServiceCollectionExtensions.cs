@@ -1,6 +1,5 @@
-using Azure.Core;
 using FoundryGate.Api.Configuration;
-using Microsoft.Graph;
+using FoundryGate.Core.Entra;
 
 namespace FoundryGate.Api.Services.Entra;
 
@@ -8,41 +7,39 @@ namespace FoundryGate.Api.Services.Entra;
 public static class EntraServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers <see cref="IEntraDirectoryClient"/> (singleton: <see cref="GraphEntraDirectoryClient"/>
-    /// over a <see cref="GraphServiceClient"/> authenticated with the app's <see cref="TokenCredential"/>
-    /// when <c>Entra:Enabled</c>, otherwise <see cref="DisabledEntraDirectoryClient"/>) and
-    /// <see cref="IEntraUserSyncService"/> (scoped — it shares the request's <c>AppDbContext</c> so the
-    /// sync and its audit row save atomically). Reads <see cref="AppSettings"/> and the
-    /// <see cref="TokenCredential"/> from the container, both registered by <c>Program.cs</c> before
-    /// the services call.
+    /// Registers the <c>Entra</c> options section, Core's directory client and the two sync services
+    /// (<c>AddEntraCore</c>, #151), and the Api's answers to the two host-shaped seams:
+    /// <see cref="CurrentUserEntraSyncActor"/> (a sync run belongs to the admin who asked for it) and
+    /// <see cref="LifecycleDepartureHandler"/> (a departure goes through plan 21's one orchestrator).
+    /// Both seams are scoped, like everything that shares the request's <c>AppDbContext</c>.
     /// </summary>
     public static IServiceCollection AddEntraServices(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton<IEntraDirectoryClient>(serviceProvider =>
+        services.AddSingleton(serviceProvider =>
         {
             var settings = serviceProvider.GetRequiredService<AppSettings>();
-            if (!settings.Entra.Enabled)
+
+            // The directory client resolves the FoundryGate service principal from
+            // Entra:ApplicationClientId, which lives on the Entra section because the Functions host —
+            // which now runs the same client — has no AzureAd section to read from (nothing there
+            // serves a request, so there is no token to validate). On the Api the two name the same app
+            // registration, so it is defaulted rather than made a second setting a fork could get wrong
+            // in one place only. Infra sets Entra__ApplicationClientId on both hosts, so this fallback
+            // is what keeps a local host and an older deployment working.
+            if (string.IsNullOrWhiteSpace(settings.Entra.ApplicationClientId))
             {
-                return new DisabledEntraDirectoryClient();
+                settings.Entra.ApplicationClientId = settings.AzureAd.ClientId;
             }
 
-            // GraphClientFactory's default pipeline (retry with Retry-After, redirect, compression)
-            // is what this constructor builds; see GraphEntraDirectoryClient remarks on retries.
-            var graph = new GraphServiceClient(
-                serviceProvider.GetRequiredService<TokenCredential>(),
-                [settings.Entra.GraphScope],
-                settings.Entra.GraphBaseUrl);
-
-            return new GraphEntraDirectoryClient(
-                graph,
-                settings.Entra,
-                settings.AzureAd,
-                serviceProvider.GetRequiredService<ILogger<GraphEntraDirectoryClient>>());
+            return settings.Entra;
         });
 
-        services.AddScoped<IEntraUserSyncService, EntraUserSyncService>();
+        _ = services.AddEntraCore();
+
+        services.AddScoped<IEntraSyncActor, CurrentUserEntraSyncActor>();
+        services.AddScoped<IDepartureHandler, LifecycleDepartureHandler>();
 
         return services;
     }

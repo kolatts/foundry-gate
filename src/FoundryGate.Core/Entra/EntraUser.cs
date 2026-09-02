@@ -1,4 +1,4 @@
-namespace FoundryGate.Api.Services.Entra;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// The directory's view of a person, already reduced to the fields FoundryGate stores on

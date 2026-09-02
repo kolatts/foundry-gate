@@ -1,12 +1,12 @@
 using System.Net;
-using FoundryGate.Api.Configuration;
-using FoundryGate.Api.Services.Entra;
+using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Entra;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Graph;
 using Microsoft.Kiota.Abstractions.Authentication;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services.Entra;
+namespace FoundryGate.Tests.Predeployment.Core.Entra;
 
 /// <summary>
 /// The real <see cref="GraphEntraDirectoryClient"/> over the real <see cref="GraphServiceClient"/>
@@ -341,10 +341,19 @@ public class GraphEntraDirectoryClientTests
     private GraphEntraDirectoryClient CreateClient(string? servicePrincipalObjectId)
     {
         var graph = new GraphServiceClient(new HttpClient(_http), new AnonymousAuthenticationProvider(), BaseUrl);
-        var entra = new EntraOptions { Enabled = true, ServicePrincipalObjectId = servicePrincipalObjectId, GraphBaseUrl = BaseUrl };
-        var azureAd = new AzureAdOptions { TenantId = Guid.Empty.ToString(), ClientId = ClientId, Audience = $"api://{ClientId}" };
+        // ApplicationClientId, not AzureAd:ClientId: the client moved to Core with the rest of the Entra
+        // area (#151) and the Functions host has no AzureAd section, so the app registration whose
+        // service principal is resolved now travels on the Entra section. The Api defaults it from
+        // AzureAd:ClientId when it registers the client, so the value is the same one.
+        var entra = new EntraOptions
+        {
+            Enabled = true,
+            ServicePrincipalObjectId = servicePrincipalObjectId,
+            GraphBaseUrl = BaseUrl,
+            ApplicationClientId = ClientId,
+        };
 
-        return new GraphEntraDirectoryClient(graph, entra, azureAd, NullLogger<GraphEntraDirectoryClient>.Instance);
+        return new GraphEntraDirectoryClient(graph, entra, NullLogger<GraphEntraDirectoryClient>.Instance);
     }
 
     private static string AssignmentsPage(IEnumerable<string> userIds, string? nextLink, string extra)

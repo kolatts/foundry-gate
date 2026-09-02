@@ -41,4 +41,23 @@ public interface IQuotaRequestExpiry
     /// <param name="current">The period that is still open — everything strictly before it expires.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<int> ExpireStaleAsync(BillingPeriod current, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Marks every <c>Pending</c> request belonging to <paramref name="userId"/> as <c>Rejected</c>
+    /// with <paramref name="note"/> and no reviewer — what a deprovision does to the queue of someone
+    /// who no longer has access. Returns how many were closed. Writes <b>no</b> audit row of its own:
+    /// unlike <see cref="ExpireStaleAsync"/> this is a step inside a larger pipeline, and the count is
+    /// reported by that pipeline's <c>user.deactivated</c> row.
+    /// </summary>
+    /// <remarks>
+    /// In Core for the same reason as <see cref="ExpireStaleAsync"/> and since the same issue (#151):
+    /// both hosts deprovision a departed user — the Api through <c>IUserLifecycleService</c>, the
+    /// Functions worker through <see cref="Entra.DeprovisioningDepartureHandler"/> — and "what happens to
+    /// their pending requests" must not fork between a button and a timer. The Api's
+    /// <c>IQuotaRequestService.CancelPendingForUserAsync</c> is now a delegation to this.
+    /// </remarks>
+    /// <param name="userId">The user being deprovisioned.</param>
+    /// <param name="note">The <c>ReviewNotes</c> to stamp, naming the lifecycle event that closed them.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<int> CancelPendingForUserAsync(int userId, string note, CancellationToken cancellationToken);
 }

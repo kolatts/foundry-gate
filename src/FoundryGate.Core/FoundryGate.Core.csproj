@@ -10,6 +10,11 @@
     <PackageReference Include="Imagile.Framework.Configuration" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <!-- The directory client and both Entra sync services moved here from the Api (#151) so the
+         nightly EntraSyncFunction can run them. Microsoft.Graph is a plain HTTP SDK over Kiota — no
+         ASP.NET Core — so it does not compromise what makes this project usable from the isolated
+         worker. -->
+    <PackageReference Include="Microsoft.Graph" />
   </ItemGroup>
 
   <ItemGroup>

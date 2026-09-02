@@ -1,4 +1,4 @@
-namespace FoundryGate.Api.Services.Entra;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// The thin seam between FoundryGate and Microsoft Graph. Every Entra-facing feature — bulk user

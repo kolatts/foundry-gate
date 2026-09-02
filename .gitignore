@@ -35,6 +35,16 @@ appsettings.Secrets.json
 # default to exist in source so `AddFoundryGateData` has a connection string out of the box.
 !src/FoundryGate.Api/appsettings.Development.json
 
+# Same for both hosts' appsettings.local.json: since #201 they are the only place the quota tier
+# table lives for `ASPNETCORE_ENVIRONMENT`/`DOTNET_ENVIRONMENT` = local (a deployed host gets it from
+# infra as Gateway__Tiers__*), so a fork that cloned the repo and could not start locally would be
+# the cost of ignoring them. Nothing new is exposed: the Api's file was already tracked (this line
+# only makes that explicit), and the Functions one is a tier table with no credential in it at all.
+# The dev-only docker password these ignore rules exist to guard is already committed in
+# docker-compose.yml, local.settings.template.json and the Api's own files.
+!src/FoundryGate.Api/appsettings.local.json
+!src/FoundryGate.Functions/appsettings.local.json
+
 # ─── Docs site ───────────────────────────────────────────────
 docs-site/node_modules/
 docs-site/dist/

@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using FoundryGate.Api.Services.Entra;
+using FoundryGate.Core.Entra;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;

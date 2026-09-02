@@ -1,9 +1,7 @@
 using System.Globalization;
-using FoundryGate.Api.Services.Audit;
-using FoundryGate.Api.Services.Entra;
-using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
+using FoundryGate.Data.Audit;
 using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
@@ -12,8 +10,9 @@ using FoundryGate.Domain.Groups;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Quota;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
-namespace FoundryGate.Api.Services.Groups;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// Default <see cref="IEntraGroupSyncService"/>. Scoped — it shares the request's
@@ -21,17 +20,24 @@ namespace FoundryGate.Api.Services.Groups;
 /// commit atomically. Semantics are documented on the interface.
 /// </summary>
 /// <remarks>
+/// <para>
 /// <b>Commit-point discipline</b> (CONVENTIONS.md): re-resolution can reach
 /// <see cref="IGatewayTierSync"/> and move members' APIM subscriptions, so the actor is resolved and
 /// every refusal is made before it, and the audit row and save run on
 /// <see cref="CancellationToken.None"/> once the gateway has actually been touched.
+/// </para>
+/// <para>
+/// Lives in Core, not the Api (#151): the nightly <c>EntraSyncFunction</c> runs the same
+/// reconciliation the admin's <c>POST /groups/sync-entra</c> does. The one host-shaped difference —
+/// whose <c>group.entra-synced</c> row this is — is <see cref="IEntraSyncActor"/>.
+/// </para>
 /// </remarks>
 public sealed class EntraGroupSyncService(
     AppDbContext dbContext,
     IEntraDirectoryClient directory,
     IQuotaResolutionService quotaResolution,
-    ICurrentUserAccessor currentUser,
-    IAuditService audit,
+    IEntraSyncActor syncActor,
+    IAuditWriter audit,
     TimeProvider timeProvider,
     ILogger<EntraGroupSyncService> logger) : IEntraGroupSyncService
 {
@@ -39,19 +45,20 @@ public sealed class EntraGroupSyncService(
     public async Task<GroupSyncResult> SyncAsync(int groupId, CancellationToken cancellationToken)
     {
         // Actor first: an unprovisioned admin's 403 must land before the directory read and long
-        // before ResolveManyAsync can move anybody's APIM product.
-        _ = await currentUser.GetRequiredUserAsync(cancellationToken);
+        // before ResolveManyAsync can move anybody's APIM product. A scheduled run resolves to null
+        // and every row it writes is system-attributed.
+        var actor = await syncActor.ResolveActorAsync(cancellationToken);
 
         var group = await dbContext.Groups.SingleOrDefaultAsync(g => g.GroupId == groupId, cancellationToken)
             ?? throw new KeyNotFoundException($"Group {groupId} was not found.");
 
-        return await SyncGroupAsync(group, usersByOid: null, cancellationToken);
+        return await SyncGroupAsync(group, usersByOid: null, actor, cancellationToken);
     }
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<GroupSyncResult>> SyncAllAsync(CancellationToken cancellationToken)
     {
-        _ = await currentUser.GetRequiredUserAsync(cancellationToken);
+        var actor = await syncActor.ResolveActorAsync(cancellationToken);
 
         var groups = await dbContext.Groups
             .Where(group => group.EntraGroupId != string.Empty)
@@ -70,7 +77,7 @@ public sealed class EntraGroupSyncService(
         {
             try
             {
-                results.Add(await SyncGroupAsync(group, usersByOid, cancellationToken));
+                results.Add(await SyncGroupAsync(group, usersByOid, actor, cancellationToken));
             }
             catch (GroupSyncPostCommitException exception)
             {
@@ -139,9 +146,11 @@ public sealed class EntraGroupSyncService(
     /// Reconciles one group against its linked Entra group, in one unit of work. Shared by both public
     /// entry points; <paramref name="usersByOid"/> is the run's shared oid → user snapshot when this is
     /// one group of a <c>SyncAllAsync</c> pass, and <see langword="null"/> for a single-group sync,
-    /// which reads its own (#149).
+    /// which reads its own (#149). <paramref name="actor"/> is the once-resolved
+    /// <see cref="IEntraSyncActor"/> answer for the whole run — <see langword="null"/> for a scheduled
+    /// one.
     /// </summary>
-    private async Task<GroupSyncResult> SyncGroupAsync(Group group, IReadOnlyDictionary<string, UserRow>? usersByOid, CancellationToken cancellationToken)
+    private async Task<GroupSyncResult> SyncGroupAsync(Group group, IReadOnlyDictionary<string, UserRow>? usersByOid, User? actor, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(group.EntraGroupId))
         {
@@ -238,7 +247,7 @@ public sealed class EntraGroupSyncService(
             ReresolvedUserIds = reresolved.ToArray(),
         };
 
-        await CommitAsync(group, details, gatewayMoved, reresolved, commitToken);
+        await CommitAsync(group, details, gatewayMoved, reresolved, actor, commitToken);
 
         logger.LogInformation(
             "Entra group sync for group {GroupId} ('{GroupName}'): {AddedCount} added, {RemovedCount} removed, {SkippedUnknownUserCount} skipped.",
@@ -274,16 +283,15 @@ public sealed class EntraGroupSyncService(
         object details,
         bool gatewayMoved,
         IReadOnlyList<int> reresolved,
+        User? actor,
         CancellationToken commitToken)
     {
         try
         {
-            _ = await audit.LogAsync(
-                AuditActions.GroupEntraSynced,
-                AuditTargetTypes.Group,
-                group.GroupId.ToString(CultureInfo.InvariantCulture),
-                details,
-                commitToken);
+            var targetId = group.GroupId.ToString(CultureInfo.InvariantCulture);
+            _ = actor is null
+                ? audit.AddSystem(AuditActions.GroupEntraSynced, AuditTargetTypes.Group, targetId, details)
+                : audit.Add(actor, AuditActions.GroupEntraSynced, AuditTargetTypes.Group, targetId, details);
 
             _ = await dbContext.SaveChangesAsync(commitToken);
         }

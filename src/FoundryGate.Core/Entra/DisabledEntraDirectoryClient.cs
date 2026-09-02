@@ -1,6 +1,6 @@
 using FoundryGate.Domain.Exceptions;
 
-namespace FoundryGate.Api.Services.Entra;
+namespace FoundryGate.Core.Entra;
 
 /// <summary>
 /// The <see cref="IEntraDirectoryClient"/> registered when <c>Entra:Enabled</c> is <c>false</c>
