@@ -1,6 +1,287 @@
 @page "/config"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@using FoundryGate.Domain.Config.Contracts
+@inject IFoundryGateApiClient ApiClient
+@inject ISnackbar Snackbar
+
+@* The fork-wide SystemConfiguration editor (#55). Edits are staged locally and reviewed as a diff
+   before anything is written: these rows steer quota resolution and gateway addressing, so
+   "which of these did I actually change?" has to be answerable before the PUTs go out, not after. *@
 
 <PageTitle>Configuration — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="System Configuration" />
+<div class="d-flex align-center justify-space-between mb-4">
+    <MudText Typo="Typo.h4">System configuration</MudText>
+    <MudStack Row="true" Spacing="2">
+        <MudButton Variant="Variant.Text"
+                   Disabled="@(_saving || DirtyEntries.Count == 0)"
+                   OnClick="DiscardChanges"
+                   data-testid="config-discard">
+            Discard
+        </MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Save"
+                   Disabled="@(_saving || DirtyEntries.Count == 0)"
+                   OnClick="@(() => _diffOpen = true)"
+                   data-testid="config-save">
+            Save changes@(DirtyEntries.Count > 0 ? $" ({DirtyEntries.Count})" : string.Empty)
+        </MudButton>
+    </MudStack>
+</div>
+
+@if (_loading)
+{
+    <MudSkeleton Height="400px" Width="100%" SkeletonType="SkeletonType.Rectangle" data-testid="config-loading" />
+}
+else if (_entries.Count == 0)
+{
+    <MudAlert Severity="@(_errorMessage is null ? Severity.Info : Severity.Error)"
+              Icon="@Icons.Material.Filled.CloudOff"
+              data-testid="config-error">
+        @(_errorMessage ?? "No configuration keys are defined.")
+    </MudAlert>
+}
+else
+{
+    <MudTable Items="@_entries" Hover="true" Dense="false" Elevation="2" data-testid="config-table">
+        <HeaderContent>
+            <MudTh>Key</MudTh>
+            <MudTh>Value</MudTh>
+            <MudTh>Last changed</MudTh>
+        </HeaderContent>
+        <RowTemplate Context="entry">
+            <MudTd DataLabel="Key" Style="vertical-align: top; width: 22rem;">
+                <MudText Typo="Typo.body2" Class="fg-mono-raw">@entry.Key</MudText>
+                @if (ReadOnlyReason(entry.Key) is { } reason)
+                {
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-1" data-testid="@($"config-readonly-{entry.Key}")">
+                        Read-only — @reason
+                    </MudText>
+                }
+                else if (IsDirty(entry))
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text" data-testid="@($"config-dirty-{entry.Key}")">
+                        Unsaved
+                    </MudChip>
+                }
+            </MudTd>
+            <MudTd DataLabel="Value">
+                <MudTextField T="string"
+                              Value="@Draft(entry.Key)"
+                              ValueChanged="@(value => SetDraft(entry.Key, value))"
+                              Immediate="true"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Class="fg-mono-raw"
+                              MaxLength="@ValidationConstants.ConfigValueMaxLength"
+                              Disabled="@(_saving || ReadOnlyReason(entry.Key) is not null)"
+                              data-testid="@($"config-value-{entry.Key}")" />
+                @if (_rowResults.TryGetValue(entry.Key, out var result))
+                {
+                    <MudText Typo="Typo.caption"
+                             Color="@(result.Succeeded ? Color.Success : Color.Error)"
+                             Class="d-block mt-1"
+                             data-testid="@($"config-result-{entry.Key}")">
+                        @result.Message
+                    </MudText>
+                }
+            </MudTd>
+            <MudTd DataLabel="Last changed" Style="vertical-align: top;">
+                <MudText Typo="Typo.caption" Class="mud-text-secondary">
+                    @entry.UpdatedDate.ToLocalTime().ToString("d MMM yyyy HH:mm")
+                </MudText>
+                <MudText Typo="Typo.caption" Class="mud-text-secondary d-block">
+                    @ChangedBy(entry)
+                </MudText>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+<MudDialog @bind-Visible="_diffOpen" data-testid="config-diff-dialog">
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.Difference" Class="mr-2" />
+            Review @DirtyEntries.Count change@(DirtyEntries.Count == 1 ? string.Empty : "s")
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudSimpleTable Dense="true" Bordered="false" data-testid="config-diff-table">
+            <thead>
+                <tr>
+                    <th>Key</th>
+                    <th>Before</th>
+                    <th>After</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var entry in DirtyEntries)
+                {
+                    <tr>
+                        <td class="fg-mono-raw">@entry.Key</td>
+                        <td class="fg-mono-raw mud-text-secondary">@Display(entry.Value)</td>
+                        <td class="fg-mono-raw">@Display(Draft(entry.Key))</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary mt-3">
+            Each key is written with its own <code>PUT /config/{key}</code>, so a value the API
+            refuses stops only that row — the rest still save, and every outcome is reported next to
+            its field.
+        </MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _diffOpen = false)" Disabled="@_saving" data-testid="config-diff-cancel">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="@_saving"
+                   OnClick="SaveAsync"
+                   data-testid="config-diff-confirm">
+            @(_saving ? "Saving…" : "Apply changes")
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private readonly Dictionary<string, string> _drafts = [];
+    private readonly Dictionary<string, RowResult> _rowResults = [];
+
+    private IReadOnlyList<SystemConfigEntryResponse> _entries = [];
+    private bool _loading = true;
+    private bool _saving;
+    private bool _diffOpen;
+    private string? _errorMessage;
+
+    private List<SystemConfigEntryResponse> DirtyEntries => _entries.Where(IsDirty).ToList();
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        var result = await ApiClient.GetConfigAsync();
+        _loading = false;
+
+        if (!result.IsSuccess || result.Value is null)
+        {
+            _errorMessage = result.Message ?? "Couldn't load the configuration.";
+            _entries = [];
+            return;
+        }
+
+        _errorMessage = null;
+        _entries = result.Value;
+        _drafts.Clear();
+        foreach (var entry in _entries)
+        {
+            _drafts[entry.Key] = entry.Value;
+        }
+    }
+
+    private string Draft(string key) => _drafts.TryGetValue(key, out var value) ? value : string.Empty;
+
+    private void SetDraft(string key, string? value)
+    {
+        _drafts[key] = value ?? string.Empty;
+        _ = _rowResults.Remove(key);
+    }
+
+    private bool IsDirty(SystemConfigEntryResponse entry) =>
+        ReadOnlyReason(entry.Key) is null &&
+        !string.Equals(Draft(entry.Key), entry.Value, StringComparison.Ordinal);
+
+    private void DiscardChanges()
+    {
+        foreach (var entry in _entries)
+        {
+            _drafts[entry.Key] = entry.Value;
+        }
+
+        _rowResults.Clear();
+    }
+
+    private async Task SaveAsync()
+    {
+        var dirty = DirtyEntries;
+        if (dirty.Count == 0)
+        {
+            _diffOpen = false;
+            return;
+        }
+
+        _saving = true;
+        _rowResults.Clear();
+
+        var succeeded = 0;
+        foreach (var entry in dirty)
+        {
+            var request = new UpdateSystemConfigRequest { Value = Draft(entry.Key) };
+            var result = await ApiClient.UpdateConfigAsync(entry.Key, request);
+
+            if (result.IsSuccess)
+            {
+                succeeded++;
+                _rowResults[entry.Key] = new RowResult(true, "Saved.");
+            }
+            else
+            {
+                _rowResults[entry.Key] = new RowResult(false, result.Message ?? "Couldn't save this key.");
+            }
+        }
+
+        _saving = false;
+        _diffOpen = false;
+
+        Snackbar.Add(
+            succeeded == dirty.Count
+                ? $"Saved {succeeded} configuration change{(succeeded == 1 ? string.Empty : "s")}."
+                : $"Saved {succeeded} of {dirty.Count} changes — see the messages next to the fields that failed.",
+            succeeded == dirty.Count ? Severity.Success : Severity.Warning);
+
+        // Reload so timestamps, editors and any server-side normalization (trimmed values,
+        // lower-cased booleans) are what the page shows, not what was typed.
+        var drafts = new Dictionary<string, string>(_drafts);
+        await LoadAsync();
+        foreach (var (key, value) in drafts)
+        {
+            if (_rowResults.TryGetValue(key, out var rowResult) && !rowResult.Succeeded)
+            {
+                // Keep a rejected edit in the box so the admin can fix it instead of retyping it.
+                _drafts[key] = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Which admin last changed a row. Today the API only carries their user id; when
+    /// <c>SystemConfigEntryResponse</c> gains <c>UpdatedByDisplayName</c> (#161/#172) this is the
+    /// one place that changes.
+    /// </summary>
+    private static string ChangedBy(SystemConfigEntryResponse entry) =>
+        entry.UpdatedByUserId is { } userId ? $"by user #{userId}" : "seeded — never edited";
+
+    /// <summary>
+    /// Keys the API refuses to update with a <c>409</c> (or whose row nothing reads any more), so
+    /// the field is disabled with the reason rather than offering an edit that can only fail. The
+    /// API is the authority — <c>SystemConfigValidator.EnsureEditable</c> and
+    /// <c>reference/api.md</c>'s <c>PUT /config/{key}</c> table — and a key added there later still
+    /// surfaces correctly here as a per-row save failure. #172 tracks moving the one list into
+    /// Domain so the two cannot drift.
+    /// </summary>
+    private static string? ReadOnlyReason(string key) => key switch
+    {
+        SystemConfigurationKeys.ApimProductId =>
+            "quota tiers are APIM products now, so a developer's subscription is issued against their tier's product, not this one id.",
+        SystemConfigurationKeys.EntraTenantId =>
+            "Graph access is configured by the API's Entra options over the host's AzureAd:TenantId.",
+        SystemConfigurationKeys.ApimGatewayUrl =>
+            "the gateway address comes from the APIM deployment's own output (Gateway:ApimGatewayUrl), so it can never drift from what was deployed.",
+        _ => null,
+    };
+
+    private static string Display(string value) => string.IsNullOrEmpty(value) ? "(empty)" : value;
+
+    private readonly record struct RowResult(bool Succeeded, string Message);
+}
