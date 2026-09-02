@@ -25,16 +25,70 @@ Errors: `400` when `Entra:Enabled` is false on the host, `403` when the calling 
 
 ## Groups
 
+A group is a budget policy for a set of people: levels 3-4 of the [quota resolution chain](#quota) read
+group membership, so every write on this surface can move a developer's allocation and the APIM tier
+product their key is scoped to. Every route is admin-only.
+
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/groups` | Admin | List all groups with member count |
-| `POST` | `/groups` | Admin | Create group |
-| `GET` | `/groups/{id}` | Admin | Group detail + member list |
-| `PUT` | `/groups/{id}` | Admin | Update name, description, quota |
-| `DELETE` | `/groups/{id}` | Admin | Delete group (does not delete members) |
-| `POST` | `/groups/{id}/members` | Admin | Add user to group |
-| `DELETE` | `/groups/{id}/members/{userId}` | Admin | Remove user from group |
-| `POST` | `/groups/{id}/sync-entra` | Admin | Sync members from linked Entra group |
+| `GET` | `/groups` | Admin | Groups ordered by name, paged (`?page=&pageSize=`), each with `memberCount`. `?search=` matches name and description, case-insensitively |
+| `POST` | `/groups` | Admin | Create a group. `201` with a `Location` header pointing at `GET /groups/{id}` |
+| `GET` | `/groups/{id}` | Admin | `{ group, members }` — the group plus its full roster, ordered by display name |
+| `PUT` | `/groups/{id}` | Admin | Update `name`, `description`, `isUnlimited`, `monthlyTokenQuota`. Returns the updated group |
+| `DELETE` | `/groups/{id}` | Admin | Delete the group and its memberships (`204`). Needs `?force=true` if it still has members |
+| `GET` | `/groups/{id}/members` | Admin | The roster, paged, ordered by display name |
+| `POST` | `/groups/{id}/members` | Admin | Add a user by `{ "userId": n }`. Returns the new membership |
+| `DELETE` | `/groups/{id}/members/{userId}` | Admin | Remove a membership (`204`) |
+| `POST` | `/groups/{id}/sync-entra` | Admin | Reconcile one group against its linked Entra group |
+| `POST` | `/groups/sync-entra` | Admin | Reconcile every Entra-linked group; one summary each |
+
+**Quota values are tiers.** `monthlyTokenQuota` on create and update must be `null` (unlimited) or
+exactly one configured tier cap, or the request is `400` listing the allowed values — the same rule
+`PUT /users/{id}/quota` follows. `GET /quota/tiers` is the list to offer.
+
+**Names are unique.** A duplicate is `409` — case-insensitively, and enforced by a unique index so two
+concurrent creates cannot both win.
+
+**Every quota-visible write re-resolves the members it affects**, in the same transaction as the
+mutation and its audit row: a quota change on `PUT /groups/{id}` re-resolves every current member;
+`DELETE /groups/{id}` re-resolves the former members *after* their memberships are removed (they fall
+back down the chain, usually to the system default); adding or removing one member re-resolves that
+one. Only **active** users are re-resolved — a deactivated developer has no key to enforce against, and
+`GET /quota/allocations/me` refuses to mint them an allocation either. Members whose tier actually
+changes have their APIM subscription moved to the new tier product; members whose tier is unchanged are
+not touched.
+
+**Deleting a group never deletes users**, and never clears their individual quota overrides — only the
+group's own contribution to their resolution goes away. `EntraGroupId` is set at creation and is not
+updatable: re-pointing a synced group at a different directory group would silently rewrite its whole
+roster on the next sync, so delete and recreate instead.
+
+Audit rows: `group.created`, `group.updated` (with before/after values), `group.deleted`,
+`group.member-added`, `group.member-removed`, `group.entra-synced` — all with `targetType: "Group"` and
+the group id as `targetId`.
+
+### Entra group sync
+
+`POST /groups/{id}/sync-entra` pulls the linked Entra group's membership (transitively, so nested
+groups flatten to their people) and reconciles it. Idempotent: a second run with an unchanged directory
+reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserCount }`.
+
+- Directory members missing from this group are added with **`addedByUserId: null`** — the system
+  actor. The directory chose the membership, not the calling admin, and the audit trail should not
+  claim otherwise; the UI can label such rows "from Entra".
+- Memberships whose user is no longer in the Entra group are deleted. The `User` row is untouched —
+  leaving a synced group is not leaving the company.
+- Directory members with **no FoundryGate `User` row** are skipped, never invented, and counted in
+  `skippedUnknownUserCount` (also logged at Warning). A non-zero count means those people have never
+  signed in and were not imported: run `POST /users/sync` first, then sync again.
+- Everyone whose membership changed is re-resolved, so a developer joining a Power group is on the
+  Power product by the time the response returns.
+
+`POST /groups/sync-entra` does the same for every group that has an `entraGroupId`, one unit of work
+each, in group-id order; groups with no link are skipped and do not appear in the result.
+
+Errors: `400` when the group has no `entraGroupId`, or when `Entra:Enabled` is false on the host (the
+message names the setting and the Graph roles to grant); `404` for an unknown group.
 
 ## Quota
 

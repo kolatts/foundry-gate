@@ -27,15 +27,27 @@ Files expected to be created or modified:
 ### Implement Entra group member sync (POST /groups/sync-entra) (#41)
 Add `POST /groups/sync-entra` (admin-only, or per-group via `POST /groups/{id}/sync-entra` as defined in epic #6). For each `Group` that has a non-null `EntraGroupId`, call `GET /groups/{entraGroupId}/members` via Graph and reconcile against `GroupMembership` rows: insert missing memberships and remove memberships for users no longer in the Entra group. Only process users who already exist in the Foundry Gate `Users` table (orphan Entra members are skipped with a warning, not errored). After reconciling memberships, trigger quota re-resolution for any user whose group membership changed, since their effective quota level may have shifted. Return a per-group summary.
 
+**As landed (#41):** `Services/Groups/IEntraGroupSyncService` with `SyncAsync(groupId)` behind
+`POST /groups/{id}/sync-entra` and `SyncAllAsync()` behind `POST /groups/sync-entra` (every group with
+an `EntraGroupId`, in id order, one unit of work each). Members are read **transitively**
+(`ListGroupMemberIdsAsync(entraGroupId, transitive: true)`) so a nested directory group flattens to its
+people. Added memberships carry `AddedByUserId = null` — the system actor, because the directory chose
+the membership and the audit trail must not credit the calling admin. Orphan Entra members (no local
+`User`) are skipped, logged at Warning and counted in `GroupSyncResult.SkippedUnknownUserCount`; a
+non-zero count means `POST /users/sync` should run first. Quota re-resolution covers every **active**
+user whose membership moved, in the same save. A group with no `EntraGroupId` is a `400`, as is a host
+with `Entra:Enabled` false (`DisabledEntraDirectoryClient`). One `group.entra-synced` audit row per
+group per run.
+
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/GroupsController.cs`
-- `src/FoundryGate.Api/Services/EntraGroupSyncService.cs` (extends epic #6 service)
+- `src/FoundryGate.Api/Services/Groups/EntraGroupSyncService.cs` (extends epic #6 service)
 
 ## Verification
 - [x] `dotnet build` passes
 - [x] Bulk user sync is idempotent when called twice with no changes between runs
 - [x] New Entra users appear as `User` rows after sync
 - [x] Bulk user sync handles more than one Graph page (250-user fake directory at the service level; stubbed `@odata.nextLink` paging and 15-id `in` chunks at the Graph client level)
-- [ ] Removed Entra group members have their `GroupMembership` row deleted after group sync
-- [ ] Quota re-resolution fires for users whose group membership changed
-- [ ] Graph paging is handled correctly (more than 100 users in a group)
+- [x] Removed Entra group members have their `GroupMembership` row deleted after group sync
+- [x] Quota re-resolution fires for users whose group membership changed
+- [x] Graph paging is handled correctly (more than 100 users in a group — a 250-member fake directory with duplicate ids across pages at the service level; the Graph client's own `@odata.nextLink` paging is covered by `GraphEntraDirectoryClientTests`)
