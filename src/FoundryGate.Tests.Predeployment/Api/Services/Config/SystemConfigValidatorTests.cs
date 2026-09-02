@@ -1,5 +1,6 @@
 using FoundryGate.Api.Services.Config;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Exceptions;
 using FoundryGate.Tests.Predeployment.Support;
 
 namespace FoundryGate.Tests.Predeployment.Api.Services.Config;
@@ -119,5 +120,39 @@ public class SystemConfigValidatorTests
         // The reference-data seeder's deleteFilter deliberately preserves rows a fork operator added
         // themselves; the editor must not refuse to edit what the seeder refuses to delete.
         Assert.Equal("anything at all", _validator.Normalize("Contoso:SupportEmail", "  anything at all  "));
+    }
+
+    [Theory]
+    [InlineData(SystemConfigurationKeys.LastUserSyncDate)]
+    [InlineData(SystemConfigurationKeys.LastUserSyncResult)]
+    [InlineData("lastusersyncdate")]
+    public void EnsureEditable_refuses_a_system_managed_key_and_says_why(string key)
+    {
+        // #171/#172: a 409, not a 403 — the caller's permissions are fine, the row is simply not
+        // theirs to set — and the message names the reason from the one Domain map the Web editor's
+        // IsReadOnly flag also comes from.
+        var exception = Assert.Throws<ConflictException>(() => SystemConfigValidator.EnsureEditable(key));
+
+        Assert.Contains("read-only", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("POST /users/sync", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(SystemConfigurationKeys.DefaultMonthlyTokenQuota)]
+    [InlineData(SystemConfigurationKeys.ResetDayOfMonth)]
+    [InlineData("Contoso:SupportEmail")]
+    public void EnsureEditable_lets_every_other_key_through(string key) =>
+        SystemConfigValidator.EnsureEditable(key);
+
+    [Fact]
+    public void Every_system_managed_key_is_refused_and_no_other_is()
+    {
+        // The tripwire for #172: the validator reads the Domain map rather than a list of its own, so
+        // adding a key there can never leave the API editing something the UI shows as read-only.
+        foreach (var key in SystemConfigurationKeys.All)
+        {
+            var refused = Record.Exception(() => SystemConfigValidator.EnsureEditable(key)) is ConflictException;
+            Assert.Equal(SystemConfigurationKeys.SystemManaged.ContainsKey(key), refused);
+        }
     }
 }

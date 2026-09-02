@@ -30,6 +30,9 @@ public sealed partial class FoundryGateApiClient
         return GetAsync<PagedResult<UserResponse>>($"users?{string.Join('&', parts)}", ct);
     }
 
+    public Task<ApiCallResult<UserSyncStatusResponse>> GetLastUserSyncAsync(CancellationToken ct = default) =>
+        GetAsync<UserSyncStatusResponse>("users/sync/last", ct);
+
     // Groups — api.md §Groups
 
     public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, bool force, CancellationToken ct = default) =>
@@ -39,6 +42,9 @@ public sealed partial class FoundryGateApiClient
 
     public Task<ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>> GetFoundryDeploymentsAsync(CancellationToken ct = default) =>
         GetAsync<IReadOnlyList<FoundryDeploymentResponse>>("foundry/deployments", ct);
+
+    public Task<ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>> GetFoundryCatalogAsync(CancellationToken ct = default) =>
+        GetAsync<IReadOnlyList<FoundryCatalogEntryResponse>>("foundry/catalog", ct);
 
     public Task<ApiCallResult<FoundryDeploymentResponse>> CreateFoundryDeploymentAsync(CreateFoundryDeploymentRequest request, CancellationToken ct = default)
     {

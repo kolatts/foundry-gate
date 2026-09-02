@@ -26,7 +26,7 @@ namespace FoundryGate.Api.Services.Config;
 /// <c>ExpectedUpdatedDate</c> keeps the original last-write-wins behaviour. The check lives in the
 /// request rather than in a <c>rowversion</c> column because <c>SystemConfiguration</c> is reference
 /// data whose columns are all <c>[DoNotUpdate]</c> — a real EF concurrency token would make the seeder
-/// more delicate for a nine-row table, and the contention here is between two humans with a form open.
+/// more delicate for a seven-row table, and the contention here is between two humans with a form open.
 /// It is a real guard, not a read-then-compare: the write is one conditional
 /// <c>UPDATE … WHERE UpdatedDate = @expected</c> (<see cref="ClaimAsync"/>), so two admins who genuinely
 /// race cannot both win.
@@ -49,17 +49,32 @@ public sealed class ConfigService(
     TimeProvider timeProvider) : IConfigService
 {
     /// <inheritdoc />
-    public async Task<IReadOnlyList<SystemConfigEntryResponse>> ListAsync(CancellationToken cancellationToken) =>
-        await dbContext.SystemConfigurations
+    public async Task<IReadOnlyList<SystemConfigEntryResponse>> ListAsync(CancellationToken cancellationToken)
+    {
+        // Projected to a row shape first: IsReadOnly comes from a Domain dictionary lookup, which no
+        // provider can translate, and the alternative — materializing the key list into the query — is
+        // a filter this seven-row table does not need.
+        var rows = await dbContext.SystemConfigurations
             .AsNoTracking()
             .OrderBy(c => c.Key)
-            .Select(c => new SystemConfigEntryResponse(
+            .Select(c => new
+            {
                 c.Key,
                 c.Value,
                 c.UpdatedDate,
                 c.UpdatedByUserId,
-                c.UpdatedByUser != null ? c.UpdatedByUser.DisplayName : null))
+                UpdatedByDisplayName = c.UpdatedByUser != null ? c.UpdatedByUser.DisplayName : null,
+            })
             .ToListAsync(cancellationToken);
+
+        return [.. rows.Select(r => new SystemConfigEntryResponse(
+            r.Key,
+            r.Value,
+            r.UpdatedDate,
+            r.UpdatedByUserId,
+            r.UpdatedByDisplayName,
+            SystemConfigurationKeys.SystemManagedReason(r.Key) is not null))];
+    }
 
     /// <inheritdoc />
     public async Task<SystemConfigEntryResponse> UpdateAsync(
@@ -70,7 +85,7 @@ public sealed class ConfigService(
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(request);
 
-        // Materialize the whole table (five rows on a shipped fork) and match in memory rather than
+        // Materialize the whole table (seven rows on a shipped fork) and match in memory rather than
         // translating the comparison: `Key == key` is case-insensitive under SQL Server's default
         // collation but case-sensitive under the SQLite the tests run on, and an endpoint that 404s
         // on one provider and succeeds on the other is a contract nobody can document. AsNoTracking:
@@ -79,6 +94,12 @@ public sealed class ConfigService(
         var entry = entries.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException(
                 $"There is no system configuration key '{key}'. GET /api/v1/config lists the keys this fork has.");
+
+        // Refusal order: 404 (above) → this 409 → the staleness 409 → the per-key 400. A
+        // system-managed key has no admin-settable value at all, so it is refused before anything is
+        // said about *this* write — telling a caller their view of a row is stale, when no view of it
+        // would have let them write, is the less useful of the two answers (#171/#172).
+        SystemConfigValidator.EnsureEditable(entry.Key);
 
         // The friendly refusal, and the one that runs before the value is even validated: a caller whose
         // view of the row is stale must go and re-read it, whatever they were trying to write. It is not
@@ -153,7 +174,16 @@ public sealed class ConfigService(
         // Built from what the claim actually wrote rather than re-read: those are the values the
         // conditional UPDATE committed, and a read-back on a cancelled token would report a change that
         // landed as an error.
-        return new SystemConfigEntryResponse(entry.Key, newValue, updatedDate, actor.UserId, actor.DisplayName);
+        return new SystemConfigEntryResponse(
+            entry.Key,
+            newValue,
+            updatedDate,
+            actor.UserId,
+            actor.DisplayName,
+            // Always false here — EnsureEditable above refuses every system-managed key — but read from
+            // the same Domain map rather than hard-coded, so this and the refusal cannot fall out of
+            // step (#172).
+            SystemConfigurationKeys.SystemManagedReason(entry.Key) is not null);
     }
 
     /// <summary>

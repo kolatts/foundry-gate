@@ -21,6 +21,24 @@ Blank values (`""`) are deliberate placeholders. Nothing breaks while they are b
 gateway is actually addressed by comes from the `Gateway__*` environment variables below, which infra
 sets automatically.
 
+### System-managed keys
+
+These rows are seeded like the others and listed by `GET /config`, but **FoundryGate writes them, not
+you**. `PUT /config/{key}` answers `409` naming the reason, and the `/config` editor disables the
+field — the row carries `isReadOnly: true` on the read, so the page never has to discover the refusal
+by attempting an edit, and never keeps a list of its own that could drift from the API's
+([#172](https://github.com/kolatts/foundry-gate/issues/172)).
+
+| Key | Default | Written by |
+|---|---|---|
+| `LastUserSyncDate` | `""` | `POST /users/sync`, as an ISO-8601 instant, in the same unit of work as the run's `users.synced` audit row |
+| `LastUserSyncResult` | `""` | The same run, as the JSON of its `UserSyncResult` (camelCase — the same shape the endpoint returns) |
+
+Both are blank until a fork has run a sync, and a fork whose last run predates
+[#171](https://github.com/kolatts/foundry-gate/issues/171) stays blank: nothing backfills a record
+that was never kept. Only the most recent run is kept — the audit log has the full history. Read them
+together from `GET /users/sync/last`, which is what `/users/sync` shows on a cold load.
+
 ### Retired keys
 
 Three keys were seeded by earlier versions and are **gone** as of

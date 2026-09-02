@@ -28,6 +28,15 @@ public interface IFoundryManagementClient
     /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
     Task<IReadOnlyList<FoundryDeploymentResponse>> ListDeploymentsAsync(string accountName, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// The models <paramref name="accountName"/> can serve, as ARM's account-model list reports them
+    /// (#173) — the same catalogue <c>az cognitiveservices model list</c> shows, scoped to the account
+    /// rather than to a region, so it already accounts for the account's kind and the subscription's
+    /// entitlements. One entry per model/version, each carrying its deployable SKUs.
+    /// </summary>
+    /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
+    Task<IReadOnlyList<FoundryCatalogEntryResponse>> ListCatalogAsync(string accountName, CancellationToken cancellationToken);
+
     /// <summary>One deployment, or <see langword="null"/> when no deployment of that name exists in the account.</summary>
     /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
     Task<FoundryDeploymentResponse?> GetDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken);

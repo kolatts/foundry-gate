@@ -35,6 +35,13 @@ public sealed class FakeEntraDirectoryClient : IEntraDirectoryClient
     /// <summary>How many times <see cref="ListAssignedUsersAsync"/> was enumerated.</summary>
     public int ListAssignedUsersCalls { get; private set; }
 
+    /// <summary>
+    /// Runs after <see cref="ListAssignedUsersAsync"/> has produced its answer — e.g. to cancel the
+    /// request token "while the run was working", which is how a commit point is tested from the far
+    /// side of the directory read.
+    /// </summary>
+    public Action? AfterListAssignedUsers { get; set; }
+
     /// <inheritdoc />
     public Task<EntraUser?> GetUserAsync(string objectId, CancellationToken cancellationToken) =>
         Task.FromResult(AssignedUsers.FirstOrDefault(u => string.Equals(u.ObjectId, objectId, StringComparison.OrdinalIgnoreCase)));
@@ -46,7 +53,9 @@ public sealed class FakeEntraDirectoryClient : IEntraDirectoryClient
         cancellationToken.ThrowIfCancellationRequested();
         await Task.Yield();
 
-        return new EntraAssignedUsers(AssignedUsers.ToList(), SkippedGroupAssignments.ToList());
+        var assigned = new EntraAssignedUsers(AssignedUsers.ToList(), SkippedGroupAssignments.ToList());
+        AfterListAssignedUsers?.Invoke();
+        return assigned;
     }
 
     /// <inheritdoc />

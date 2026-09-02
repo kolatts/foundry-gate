@@ -16,12 +16,20 @@ namespace FoundryGate.Domain.Config.Contracts;
 /// config editor (#55) can render "last changed by" without a second round trip per row. Null
 /// exactly when <paramref name="UpdatedByUserId"/> is.
 /// </param>
+/// <param name="IsReadOnly">
+/// True for a key the system writes for itself (<see cref="SystemConfigurationKeys.SystemManaged"/>):
+/// <c>PUT /config/{key}</c> answers <c>409</c> and the admin editor disables the field. Sent on the
+/// read so the UI never has to keep a list of its own — the duplication #172 was filed about — and
+/// never has to discover the refusal by attempting an edit. Appended to this positional record rather
+/// than inserted, because the Web client deserializes it by position.
+/// </param>
 public record SystemConfigEntryResponse(
     string Key,
     string Value,
     DateTimeOffset UpdatedDate,
     int? UpdatedByUserId,
-    string? UpdatedByDisplayName);
+    string? UpdatedByDisplayName,
+    bool IsReadOnly);
 
 /// <summary>PUT /config/{key} body. Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).</summary>
 public record UpdateSystemConfigRequest
@@ -55,7 +63,7 @@ public record UpdateSystemConfigRequest
     /// Optional, and therefore additive: a caller that omits it keeps the original last-write-wins
     /// behaviour. <c>SystemConfiguration</c> carries no <c>rowversion</c> — it is reference data whose
     /// columns are all <c>[DoNotUpdate]</c>, so a real EF concurrency token would complicate the seeder
-    /// for a nine-row table — and the contention this guards against is between two humans with the
+    /// for a seven-row table — and the contention this guards against is between two humans with the
     /// config form open, which is exactly where the caller has a timestamp to echo back.
     /// </para>
     /// <para>

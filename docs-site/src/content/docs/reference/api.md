@@ -16,6 +16,7 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 | `POST` | `/users/{id}/activate` | Admin | Re-activate user — runs the full provision pipeline |
 | `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription, hard-stops the allocation, rejects pending requests |
 | `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount, skippedGroupAssignmentCount, failedCount }` |
+| `GET` | `/users/sync/last` | Admin | When the last sync ran and what it did: `{ lastSyncDate, lastResult }`, both `null` if this fork has never run one |
 
 Every user shape carries three dates that are easy to confuse: `createdDate` (the row was made),
 `lastSyncedDate` (an Entra sync last touched it) and `lastLoginDate` (the person last loaded their own
@@ -98,6 +99,8 @@ product, delete the old one, and hand the developer a new key (audited `key.rota
 :::
 
 `POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned run the **same deprovision pipeline as `POST /users/{id}/deactivate`** — APIM subscription deleted, `isActive = false`, allocation hard-stopped, pending requests rejected — so a departed employee never keeps a working gateway key. Rows are never deleted and never auto-reactivated if the person later returns; an admin must re-activate them. Each departure is its own unit of work: one that the gateway refuses is counted in `failedCount`, logged, and skipped — the rest of the run still lands and the next run retries it, so a single bad ARM call can never undo deletions that already succeeded. Adds and updates then commit together with one `users.synced` audit row attributed to the caller; each departure writes system-attributed `user.deactivated` / `key.revoked` rows of its own.
+
+**The run records itself.** In that same unit of work the sync writes two `SystemConfiguration` rows — `LastUserSyncDate` (ISO-8601) and `LastUserSyncResult` (the JSON of the counts above) — so "the sync happened" and "here is when and what" can never disagree. `GET /users/sync/last` reads them back as `{ lastSyncDate, lastResult }`, which is how `/users/sync` shows the previous run on a cold page load, including one triggered outside the UI ([#171](https://github.com/kolatts/foundry-gate/issues/171)). Both are `null` on a fork that has never run a sync, and `lastResult` is `null` on its own if the stored JSON cannot be read — a broken souvenir of a past run is reported as "no result", never as an error. The status read works even where `Entra:Enabled` is `false`: it is a question about this database, not about the directory. The two rows are **system-managed** — `PUT /config/{key}` on either answers `409` and `GET /config` flags them `isReadOnly` — and only the most recent run is kept; the audit log has the history.
 
 **Group-assigned access is expanded.** An app-role assignment granted to a *group* — the common enterprise pattern of assigning `SG_AI_Developers` to the FoundryGate enterprise application — is flattened to that group's **transitive** user members (nested groups included) and merged with the directly assigned users, de-duplicated, before any of the reconciliation above runs ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Assigning developers through a group is a first-class configuration: adds, updates and departures all work.
 
@@ -382,6 +385,7 @@ The gateway runs one Azure AI Foundry account per region (`Gateway__FoundryAccou
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/foundry/models` | Any | Developer view: distinct deployment names with model, version, format and provisioning state. A model deployed in several regions is listed once — `Succeeded` if any region serves it. Served from a 30-second in-memory cache (invalidated by every create/delete); a configured account that is missing in Azure is skipped, not fatal. |
+| `GET` | `/foundry/catalog` | Admin | What the configured accounts **can** deploy: `{ modelFormat, modelName, modelVersion, skuNames, defaultCapacity, defaultSkuName, isDefaultVersion, lifecycleStatus, inferenceRetiresOn }` per model and version, merged across accounts with their SKUs unioned. Served from a 5-minute cache; a configured account missing in Azure is skipped, not fatal. |
 | `GET` | `/foundry/deployments` | Admin | Every deployment in every configured account (account, name, model format/name/version, SKU, capacity in thousands of TPM, provisioning state, created/modified). Primary account first, then by name. Always live (no cache). |
 | `GET` | `/foundry/deployments/{accountName}/{deploymentName}` | Admin | One deployment — poll this after a create until `provisioningState` is `Succeeded`. |
 | `POST` | `/foundry/deployments` | Admin | Create one **OpenAI-format** deployment in one account. Body: `accountName`, `deploymentName`, `modelFormat` (`OpenAI`; default), `modelName`, `modelVersion`, `skuName`, `capacity` (thousands of TPM). `201` + `Location`; the body reflects ARM's initial state (usually `Creating`). |
@@ -395,13 +399,52 @@ Rules the mutation paths enforce (CLAUDE.md "Anthropic deployments are create-on
 - **`503 Service Unavailable — feature not configured`** on every `/foundry/*` route when the `Gateway__*` section is absent (local dev without a gateway). The `detail` names the keys to set, so the UI can tell "not set up" from "broken".
 - Every create and delete writes an audit entry (`foundry.deployment.created` / `foundry.deployment.deleted`, target type `FoundryDeployment`, target id `{accountName}/{deploymentName}`). The admin must have loaded the app once (`GET /users/me`) so the entry has an actor — otherwise the mutation is refused (`403`) before Azure is touched. Once Azure has accepted the change, the audit entry is written regardless of the client disconnecting.
 
+### `GET /foundry/catalog`
+
+What the configured accounts **can** deploy, as opposed to what they already have — the values a
+create needs, from the same ARM account-model list `az cognitiveservices model list` shows, so it
+already accounts for each account's kind and the subscription's entitlements
+([#173](https://github.com/kolatts/foundry-gate/issues/173)).
+
+Entries are merged across accounts by `(modelFormat, modelName, modelVersion)` with their `skuNames`
+unioned: the gateway runs one account per region, a model is normally deployable in all of them, and
+the create form names one account at a time — a per-account breakdown would be a list of
+near-duplicates. A model only one region carries is still listed; ARM decides the create and refuses
+an account that cannot serve it, with a message the admin can act on.
+
+**ARM's own metadata comes with it**, because none of it can be worked out afterwards:
+
+- `isDefaultVersion` is how "which version of this model" is answered. Comparing version strings
+  orders `turbo-2024-04-09` above `2025-04-14` and `1106` above `0125`, so results are ordered by
+  model name, then ARM's default version first, and the version string is only a tiebreak where ARM
+  flags no default.
+- `defaultSkuName` is the first SKU ARM lists, and `defaultCapacity` (thousands of TPM) is **that
+  SKU's** suggested capacity. `skuNames` is sorted for a readable dropdown — sorting is a display
+  decision and must not become a choice, and since capacity limits are per-SKU, pairing the suggested
+  capacity with a different SKU is a head start on a create ARM refuses.
+- `lifecycleStatus` (`GenerallyAvailable`, `Preview`, `Deprecating`, `Deprecated`, …) and
+  `inferenceRetiresOn` say whether a model is on its way out. A `Deprecated` model, or one whose
+  retirement date has passed, is *retired*; the create dialog hides those behind a toggle rather than
+  offering them alongside the rest.
+
+Anthropic-format models are listed even though `POST /foundry/deployments` refuses to create one:
+what an account can serve is a fact worth showing, and the refusal explains itself. **The create
+dialog filters them out**, because its form submits `modelFormat: OpenAI` — offering one there would
+send an Anthropic create disguised as an OpenAI one, past the refusal that exists to keep a failed
+Anthropic create away from ARM. Nothing here validates a create.
+
+Cached for **5 minutes** — the answer changes when Microsoft ships a model, not when this fork deploys
+one, and every open of the create dialog asks for it. Nothing invalidates it early: deploying a model
+does not change what is deployable. An **empty** answer is not cached at all, so a transient window
+where every account 404s cannot pin "catalogue unavailable" on the dialog for five minutes.
+
 ## Admin
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/config` | Admin | Every `SystemConfiguration` key, ordered by key: `{ key, value, updatedDate, updatedByUserId, updatedByDisplayName }`. The last two are `null` for a seeded key no admin has edited |
+| `GET` | `/config` | Admin | Every `SystemConfiguration` key, ordered by key: `{ key, value, updatedDate, updatedByUserId, updatedByDisplayName, isReadOnly }`. The editor fields are `null` for a seeded key no admin has edited; `isReadOnly` marks a key the system writes for itself, which `PUT` refuses with `409` |
 | `PUT` | `/config/{key}` | Admin | Set one key's value. Returns the row as it now stands. Optional `expectedUpdatedDate` makes the write conditional (`409` if someone else got there first) |
-| `GET` | `/audit` | Admin | Audit log, paged. Filter: `?actor=&action=&from=&to=` |
+| `GET` | `/audit` | Admin | Audit log, paged. Filter: `?actorUserId=&action=&targetType=&targetId=&fromDate=&toDate=` |
 | `GET` | `/dashboard` | Admin | Summary stats for the dashboard. `?fresh=true` bypasses the 30-second cache |
 
 ### `PUT /config/{key}`
@@ -422,6 +465,7 @@ for one that does not (a quota, a reset day and a feature flag have no empty for
 | `ResetDayOfMonth` | A whole number from 1 to 28 (28 is the last day every month has) |
 | `EntraGroupSyncEnabled` | `true` or `false` |
 | `ApimResourceId`, `FoundryResourceId` | An ARM resource id (`/subscriptions/{id}/resourceGroups/{group}/providers/{namespace}/{type}/{name}`), or empty. Shape only — whether the resource exists is Azure's answer, reported as `503` by the endpoints that use it |
+| `LastUserSyncDate`, `LastUserSyncResult` | **Not editable.** System-managed: written by `POST /users/sync` itself, so a `PUT` is a `409` naming the reason. `GET /config` flags them `isReadOnly: true` so the editor disables the field rather than offering an edit that can only fail |
 | Any other row a fork operator added | Free text, up to 4000 characters |
 
 Three keys that earlier versions seeded — `ApimGatewayUrl`, `ApimProductId`, `EntraTenantId` — are
@@ -474,7 +518,8 @@ keys that are missing.
 ### `GET /dashboard`
 
 Returns `{ totalUserCount, activeUserCount, unlimitedUserCount, pendingQuotaIncreaseRequestCount,
-totalTokensUsedThisPeriod, topConsumers }` for the current UTC calendar month.
+totalTokensUsedThisPeriod, topConsumers, hardStoppedUserCount, overBudgetUserCount }` for the
+current UTC calendar month.
 
 - `unlimitedUserCount` counts **active** unlimited users — a deactivated account consumes nothing.
 - `totalTokensUsedThisPeriod` sums every allocation in the period, deactivated users included: the
@@ -482,6 +527,14 @@ totalTokensUsedThisPeriod, topConsumers }` for the current UTC calendar month.
 - `topConsumers` is the ten busiest **active** users this period, each with `userId`, `userUnique`,
   `displayName`, `tokensUsed`, `allocatedTokens` and `percentUsed` — `null` for an unlimited user,
   `100` for a zero quota with any usage.
+- `hardStoppedUserCount` counts **active** users whose current-period allocation carries
+  `isHardStopped`. That flag is set by the deprovision pipeline and cleared by re-activation and by
+  the monthly reset; quota exhaustion never sets it. An active user carrying it is an
+  inconsistency — the allocation says "stopped" while the account says "live" — and is normally
+  zero.
+- `overBudgetUserCount` counts **active** users whose finite budget reconciled usage has reached or
+  passed (`tokensUsed >= allocatedTokens`): the "who has run out" figure. The gateway is already
+  refusing them with its own `403`. Unlimited allocations are never counted.
 
 Every usage figure here is a reconciliation number from the Log Analytics sync, refreshed on that
 job's cadence — not a live view of gateway enforcement.

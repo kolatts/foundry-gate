@@ -48,12 +48,19 @@ public interface IConfigService
     /// </exception>
     /// <exception cref="ArgumentException">The value breaks the key's rule (→ 400); the message states the rule.</exception>
     /// <exception cref="ConflictException">
-    /// <c>ExpectedUpdatedDate</c> was supplied and does not match the stored row (→ 409): another admin
-    /// wrote the key first. The message carries the row's current value, its timestamp and — when it has
-    /// one — the editor's display name, so the caller can re-decide without another round trip. Checked
-    /// before the value is validated (a stale view has to be refreshed whatever it was trying to write),
-    /// and enforced by a conditional <c>UPDATE</c>, so it holds for two admins racing and not only for
-    /// two saving in turn.
+    /// Two distinct refusals, checked in this order and both before the value is validated:
+    /// <list type="number">
+    /// <item>The key is <b>system-managed</b> (#171) — written by a job rather than by an admin. Its rows
+    /// are flagged <c>IsReadOnly</c> on the read, so the editor disables the field rather than offering
+    /// an edit that can only fail. No view of the row would have permitted the write, so this outranks
+    /// the staleness check below.</item>
+    /// <item><b><c>ExpectedUpdatedDate</c></b> was supplied and does not match the stored row (#170):
+    /// another admin wrote the key first. The message carries the row's current value, its timestamp and
+    /// — when it has one — the editor's display name, so the caller can re-decide without another round
+    /// trip. A stale view has to be refreshed whatever it was trying to write, and the check is enforced
+    /// by a conditional <c>UPDATE</c>, so it holds for two admins racing and not only for two saving in
+    /// turn.</item>
+    /// </list>
     /// </exception>
     /// <exception cref="UnauthorizedAccessException">The calling admin has no <c>User</c> row yet (→ 403; call <c>GET /users/me</c> first).</exception>
     Task<SystemConfigEntryResponse> UpdateAsync(string key, UpdateSystemConfigRequest request, CancellationToken cancellationToken);

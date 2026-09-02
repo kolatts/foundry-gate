@@ -30,7 +30,63 @@ public class DashboardServiceTests : InMemoryDatabaseTest
         Assert.Equal(0, summary.UnlimitedUserCount);
         Assert.Equal(0, summary.PendingQuotaIncreaseRequestCount);
         Assert.Equal(0, summary.TotalTokensUsedThisPeriod);
+        Assert.Equal(0, summary.HardStoppedUserCount);
+        Assert.Equal(0, summary.OverBudgetUserCount);
         Assert.Empty(summary.TopConsumers);
+    }
+
+    [Fact]
+    public async Task Hard_stopped_counts_this_periods_stopped_allocations_of_active_users_only()
+    {
+        var stopped = await SeedUserAsync("Stopped");
+        var stoppedAndGone = await SeedUserAsync("Stopped and deactivated", isActive: false);
+        var running = await SeedUserAsync("Running");
+        await SeedAllocationAsync(stopped, tokensUsed: 10, allocatedTokens: 5_000_000, isHardStopped: true);
+        // Already off the gateway — counting them would bury the people an admin can still act for.
+        await SeedAllocationAsync(stoppedAndGone, tokensUsed: 10, allocatedTokens: 5_000_000, isHardStopped: true);
+        await SeedAllocationAsync(running, tokensUsed: 10, allocatedTokens: 5_000_000);
+        // Last month's hard stop is last month's problem.
+        await SeedAllocationAsync(running, tokensUsed: 10, allocatedTokens: 5_000_000, period: new BillingPeriod(2026, 8), isHardStopped: true);
+
+        var summary = await CreateService().GetSummaryAsync(fresh: true, CancellationToken.None);
+
+        Assert.Equal(1, summary.HardStoppedUserCount);
+    }
+
+    [Fact]
+    public async Task Over_budget_counts_finite_allocations_whose_reconciled_usage_reached_the_cap()
+    {
+        var atTheCap = await SeedUserAsync("Exactly at the cap");
+        var past = await SeedUserAsync("Past it");
+        var under = await SeedUserAsync("Under it");
+        var unlimited = await SeedUserAsync("Unlimited", isUnlimited: true);
+        var departed = await SeedUserAsync("Departed", isActive: false);
+
+        // The gateway refuses the request that would cross the cap, so reaching it is already cut off.
+        await SeedAllocationAsync(atTheCap, tokensUsed: 5_000_000, allocatedTokens: 5_000_000);
+        await SeedAllocationAsync(past, tokensUsed: 5_000_001, allocatedTokens: 5_000_000);
+        await SeedAllocationAsync(under, tokensUsed: 4_999_999, allocatedTokens: 5_000_000);
+        // Unlimited can never be over budget, however much it spends.
+        await SeedAllocationAsync(unlimited, tokensUsed: 99_000_000, allocatedTokens: null, tier: GatewayTiers.Unlimited);
+        await SeedAllocationAsync(departed, tokensUsed: 9_000_000, allocatedTokens: 5_000_000);
+
+        var summary = await CreateService().GetSummaryAsync(fresh: true, CancellationToken.None);
+
+        Assert.Equal(2, summary.OverBudgetUserCount);
+    }
+
+    [Fact]
+    public async Task Over_budget_and_hard_stopped_are_different_questions()
+    {
+        // Quota exhaustion is the gateway's 403 and never sets IsHardStopped (#7 direction update),
+        // so an over-budget developer is not a hard-stopped one — the dashboard must not conflate them.
+        var exhausted = await SeedUserAsync("Exhausted");
+        await SeedAllocationAsync(exhausted, tokensUsed: 6_000_000, allocatedTokens: 5_000_000);
+
+        var summary = await CreateService().GetSummaryAsync(fresh: true, CancellationToken.None);
+
+        Assert.Equal(1, summary.OverBudgetUserCount);
+        Assert.Equal(0, summary.HardStoppedUserCount);
     }
 
     [Fact]
@@ -200,7 +256,8 @@ public class DashboardServiceTests : InMemoryDatabaseTest
         long tokensUsed,
         long? allocatedTokens,
         BillingPeriod? period = null,
-        string tier = GatewayTiers.Standard)
+        string tier = GatewayTiers.Standard,
+        bool isHardStopped = false)
     {
         var target = period ?? BillingPeriod.FromInstant(Now);
 
@@ -211,6 +268,7 @@ public class DashboardServiceTests : InMemoryDatabaseTest
             PeriodMonth = target.Month,
             AllocatedTokens = allocatedTokens,
             TokensUsed = tokensUsed,
+            IsHardStopped = isHardStopped,
             ResolvedLevelType = QuotaLevelType.SystemDefault,
             TierProductId = tier,
         });

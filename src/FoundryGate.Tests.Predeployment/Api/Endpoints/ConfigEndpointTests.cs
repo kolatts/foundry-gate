@@ -322,6 +322,45 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
         Assert.Equal(SystemConfigurationKeys.All.Count, await dbContext.SystemConfigurations.CountAsync());
     }
 
+    [Theory]
+    [InlineData(SystemConfigurationKeys.LastUserSyncDate)]
+    [InlineData(SystemConfigurationKeys.LastUserSyncResult)]
+    public async Task A_system_managed_key_is_refused_with_409_and_the_reason(string key)
+    {
+        // #171: these rows are written by POST /users/sync itself. A 409, not a 403 — the caller's
+        // permissions are fine, the resource is not theirs to set — and not a 404 either: the row
+        // exists and is worth reading.
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+        _ = await factory.SeedUserAsync();
+        var before = await ValueOfAsync(key);
+
+        var response = await PutAsync(client, key, "tampered");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
+        Assert.Contains("read-only", problem?.Detail ?? string.Empty, StringComparison.Ordinal);
+        Assert.Equal(before, await ValueOfAsync(key));
+    }
+
+    [Fact]
+    public async Task The_list_flags_which_keys_the_editor_must_not_offer_to_change()
+    {
+        // #172: the Web page keeps no list of its own — this flag is what disables the field, and it
+        // comes from the same Domain map the 409 above does.
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var entries = await client.GetFromJsonAsync<IReadOnlyList<SystemConfigEntryResponse>>(
+            new Uri(ConfigPath, UriKind.Relative), JsonOptions);
+
+        Assert.NotNull(entries);
+        foreach (var entry in entries)
+        {
+            Assert.Equal(SystemConfigurationKeys.SystemManaged.ContainsKey(entry.Key), entry.IsReadOnly);
+        }
+
+        Assert.Contains(entries, e => e.IsReadOnly);
+    }
+
     [Fact]
     public async Task Update_with_a_matching_ExpectedUpdatedDate_succeeds()
     {

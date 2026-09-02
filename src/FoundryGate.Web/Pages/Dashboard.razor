@@ -84,11 +84,32 @@ else
         </MudItem>
 
         <MudItem xs="6" md="3">
-            <MudCard Elevation="2" data-testid="stat-tokens-used">
+            @* #190: the slot #54 asked for. A hard stop is an outage for that developer, so a non-zero
+               count is rendered as an alert and links to the audit trail of the pipeline that sets the
+               flag — `user.deactivated`, which carries `allocationHardStopped` in its details. Not
+               `key.revoked`: `DELETE /keys/{userId}` writes that too and explicitly does not hard-stop,
+               so it would land on a set that is mostly other people. #208 will replace this with a
+               link to the affected users themselves. *@
+            <MudCard Elevation="2"
+                     Outlined="@(_summary.HardStoppedUserCount > 0)"
+                     Class="@(_summary.HardStoppedUserCount > 0 ? "mud-border-error" : null)"
+                     data-testid="stat-hard-stopped">
                 <MudCardContent>
-                    <MudText Typo="Typo.subtitle2" Class="fg-label">Tokens this period</MudText>
-                    <MudText Typo="Typo.h4" Class="fg-mono">@_summary.TotalTokensUsedThisPeriod.ToString("N0")</MudText>
-                    <MudText Typo="Typo.caption" Class="mud-text-secondary">Reconciled from gateway logs</MudText>
+                    <MudText Typo="Typo.subtitle2" Class="fg-label">Hard-stopped</MudText>
+                    @if (_summary.HardStoppedUserCount > 0)
+                    {
+                        <MudLink Href="@($"audit?action={AuditActions.UserDeactivated}")" Underline="Underline.Hover" data-testid="stat-hard-stopped-link">
+                            <MudText Typo="Typo.h4" Class="fg-mono mud-error-text">@_summary.HardStoppedUserCount.ToString("N0")</MudText>
+                        </MudLink>
+                        <MudText Typo="Typo.caption" Color="Color.Error" Class="d-block">
+                            Active @(_summary.HardStoppedUserCount == 1 ? "developer has" : "developers have") no gateway key
+                        </MudText>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.h4" Class="fg-mono">0</MudText>
+                        <MudText Typo="Typo.caption" Class="mud-text-secondary">Nobody is cut off</MudText>
+                    }
                 </MudCardContent>
             </MudCard>
         </MudItem>
@@ -96,7 +117,21 @@ else
         <MudItem xs="12">
             <MudCard Elevation="2">
                 <MudCardContent>
-                    <MudText Typo="Typo.subtitle2" Class="fg-label mb-2">Top consumers this period</MudText>
+                    <MudText Typo="Typo.subtitle2" Class="fg-label mb-1">Top consumers this period</MudText>
+
+                    @* Tokens used stays on the page (it is a useful number, just not the one #54
+                       named for the fourth card) alongside the count of people the gateway is
+                       already refusing — both are reconciliation figures, so they belong next to
+                       the list they describe rather than in an enforcement-looking stat card. *@
+                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mb-2">
+                        <span class="fg-mono" data-testid="stat-tokens-used">@_summary.TotalTokensUsedThisPeriod.ToString("N0")</span>
+                        tokens reconciled from gateway logs ·
+                        <span data-testid="stat-over-budget">
+                            @(_summary.OverBudgetUserCount > 0
+                                ? $"{_summary.OverBudgetUserCount:N0} over budget — the gateway is already refusing them"
+                                : "nobody over budget")
+                        </span>
+                    </MudText>
 
                     @if (_summary.TopConsumers.Count == 0)
                     {

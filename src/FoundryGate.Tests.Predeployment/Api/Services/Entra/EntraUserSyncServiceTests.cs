@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
@@ -146,7 +147,7 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         Assert.True(allocation.IsHardStopped);
 
         // The departure's own rows are system-attributed; the users.synced row still names the caller.
-        var targetId = departed.UserId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var targetId = departed.UserId.ToString(CultureInfo.InvariantCulture);
         var deactivation = await Context.AuditLogs.AsNoTracking()
             .SingleAsync(a => a.Action == AuditActions.UserDeactivated && a.TargetId == targetId);
         Assert.Null(deactivation.ActorUserId);
@@ -419,6 +420,127 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
     private static EntraUser Present(User user) => new(user.EntraObjectId, user.DisplayName, user.Email, user.EmployeeId);
 
     /// <summary>Wires the real accessor + audit service over this test's context, as DI would per request.</summary>
+    [Fact]
+    public async Task Records_when_the_run_happened_and_what_it_did()
+    {
+        // #171: /users/sync showed only the run you triggered in this browser session and nothing on
+        // first load. The record is written into the run's own unit of work, so "the sync happened"
+        // and "here is when and what" cannot disagree.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+        _directory.AssignedUsers.Add(new EntraUser("oid-new-1", "New Joiner", "new1@contoso.test", "E100"));
+
+        var service = CreateService(admin.EntraObjectId);
+        var result = await service.SyncUsersAsync(CancellationToken.None);
+
+        var status = await service.GetLastSyncStatusAsync(CancellationToken.None);
+
+        Assert.Equal(Now, status.LastSyncDate);
+        Assert.Equal(result, status.LastResult);
+
+        // ...and it is on the row a reload (or another host) would read, not just in memory.
+        await using var verification = CreateVerificationContext();
+        var date = await verification.SystemConfigurations.AsNoTracking()
+            .SingleAsync(c => c.Key == SystemConfigurationKeys.LastUserSyncDate);
+        Assert.Equal(Now.ToString("O", CultureInfo.InvariantCulture), date.Value);
+
+        // Nobody edited it: the admin who ran the sync is on the users.synced audit row, which is
+        // where "who did this" belongs.
+        Assert.Null(date.UpdatedByUserId);
+    }
+
+    [Fact]
+    public async Task A_run_that_revoked_a_key_records_itself_even_if_the_caller_disconnects()
+    {
+        // CONVENTIONS.md's commit-point rule. The departure loop has already deleted an APIM
+        // subscription, which cannot be rolled back — so a client that gives up mid-run must not be
+        // able to abandon the record of a run that really did revoke keys.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        var departing = await SeedUserAsync("oid-departing", displayName: "Departing Dana");
+        var subscriptionName = ApimSubscriptionNames.ForUser(departing.UserId);
+        _ = Apim.Seed(subscriptionName, GatewayTiers.Standard);
+        departing.ApimSubscriptionId = Apim.GetSubscriptionResourceId(subscriptionName);
+        _ = await Context.SaveChangesAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+
+        // Cancelled the instant APIM has accepted the deletion — the client giving up exactly when
+        // the irreversible thing has already happened.
+        using var cancellation = new CancellationTokenSource();
+        Apim.AfterMutation = cancellation.Cancel;
+
+        var service = CreateService(admin.EntraObjectId);
+        var result = await service.SyncUsersAsync(cancellation.Token);
+
+        Assert.Equal(1, result.DeactivatedCount);
+
+        var status = await service.GetLastSyncStatusAsync(CancellationToken.None);
+        Assert.Equal(Now, status.LastSyncDate);
+        Assert.Equal(result, status.LastResult);
+    }
+
+    [Fact]
+    public async Task A_run_that_revoked_nothing_still_honours_a_cancelled_caller()
+    {
+        // The predicate is "we reached the external system", not "we ran": a run that deleted no
+        // subscription is an abandonable request and stops.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+
+        using var cancellation = new CancellationTokenSource();
+        _directory.AfterListAssignedUsers = cancellation.Cancel;
+
+        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CreateService(admin.EntraObjectId).SyncUsersAsync(cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Records_the_run_even_on_a_database_that_predates_the_keys()
+    {
+        // A fork that syncs before its next deploy re-seeds has no rows to update — the run should
+        // still be remembered rather than silently dropped.
+        var admin = await SeedCallerAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+
+        var service = CreateService(admin.EntraObjectId);
+        _ = await service.SyncUsersAsync(CancellationToken.None);
+
+        var status = await service.GetLastSyncStatusAsync(CancellationToken.None);
+        Assert.Equal(Now, status.LastSyncDate);
+        Assert.NotNull(status.LastResult);
+    }
+
+    [Fact]
+    public async Task A_fork_that_has_never_synced_reports_nothing_rather_than_a_zero_run()
+    {
+        // An invented timestamp would be a lie about a sync that never happened.
+        await SeedReferenceDataAsync();
+
+        var status = await CreateService(Guid.NewGuid().ToString()).GetLastSyncStatusAsync(CancellationToken.None);
+
+        Assert.Null(status.LastSyncDate);
+        Assert.Null(status.LastResult);
+    }
+
+    [Fact]
+    public async Task A_stored_result_that_cannot_be_read_is_reported_as_no_result_not_an_error()
+    {
+        await SeedReferenceDataAsync();
+        var date = await Context.SystemConfigurations.SingleAsync(c => c.Key == SystemConfigurationKeys.LastUserSyncDate);
+        date.Value = Now.ToString("O", CultureInfo.InvariantCulture);
+        var stored = await Context.SystemConfigurations.SingleAsync(c => c.Key == SystemConfigurationKeys.LastUserSyncResult);
+        stored.Value = "{ this is not json";
+        _ = await Context.SaveChangesAsync();
+
+        var status = await CreateService(Guid.NewGuid().ToString()).GetLastSyncStatusAsync(CancellationToken.None);
+
+        // The timestamp survives its neighbour: a broken souvenir must not take the page down with it.
+        Assert.Equal(Now, status.LastSyncDate);
+        Assert.Null(status.LastResult);
+    }
+
     private EntraUserSyncService CreateService(string callerOid)
     {
         var identity = new ClaimsIdentity(

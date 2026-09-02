@@ -157,6 +157,20 @@ public class FoundryGateApiClientRouteTests
     }
 
     [Fact]
+    public async Task GetLastUserSyncAsync_reads_the_sync_status_route()
+    {
+        var (client, handler) = CreateClient(Json(new UserSyncStatusResponse(
+            new DateTimeOffset(2026, 9, 1, 7, 0, 0, TimeSpan.Zero),
+            new UserSyncResult(1, 2, 3, 0, 0))));
+
+        var result = await client.GetLastUserSyncAsync();
+
+        AssertSent(handler, HttpMethod.Get, "users/sync/last");
+        Assert.True(result.IsSuccess);
+        Assert.Equal(3, result.Value?.LastResult?.DeactivatedCount);
+    }
+
+    [Fact]
     public async Task ProvisionUserKeyAsync_sends_no_tier_query()
     {
         // ?tier= was removed with #156; the provision call takes the user's resolved tier.

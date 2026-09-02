@@ -21,6 +21,14 @@ public partial interface IFoundryGateApiClient
     /// </summary>
     Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(UserListQuery query, PagedRequest paging, CancellationToken ct = default);
 
+    /// <summary>
+    /// <c>GET /users/sync/last</c> — when <c>POST /users/sync</c> last ran and what it did (#171).
+    /// Read from configuration rows the sync writes itself, so <c>/users/sync</c> can show the previous
+    /// run on a cold load, including one triggered outside this browser. Both fields are null on a fork
+    /// that has never run one.
+    /// </summary>
+    Task<ApiCallResult<UserSyncStatusResponse>> GetLastUserSyncAsync(CancellationToken ct = default);
+
     // Groups — api.md §Groups
 
     /// <summary>
@@ -34,6 +42,13 @@ public partial interface IFoundryGateApiClient
 
     /// <summary><c>GET /foundry/deployments</c> — every deployment in every configured account (admin).</summary>
     Task<ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>> GetFoundryDeploymentsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /foundry/catalog</c> — the models the configured accounts can serve, with their SKUs
+    /// and a suggested capacity (#173). What the create dialog's pickers offer instead of a hardcoded
+    /// array. A failure here is not fatal to the dialog: both fields still accept anything typed.
+    /// </summary>
+    Task<ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>> GetFoundryCatalogAsync(CancellationToken ct = default);
 
     /// <summary>
     /// <c>POST /foundry/deployments</c> — create one OpenAI-format deployment. The API refuses

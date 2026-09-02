@@ -1,5 +1,6 @@
 @page "/audit"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@using System.Globalization
 @using FoundryGate.Domain.Audit.Contracts
 @using FoundryGate.Domain.Common
 @inject IFoundryGateApiClient ApiClient
@@ -60,14 +61,25 @@
             </MudItem>
 
             <MudItem xs="12" md="2">
-                <MudNumericField T="int?"
-                                 Label="Actor user id"
-                                 Value="@_actorUserId"
-                                 ValueChanged="@(value => ApplyFilterAsync(() => _actorUserId = value))"
-                                 Min="1"
+                @* An admin reading the log knows "Ada Lovelace", not "user 41" (#191). Typing a bare
+                   id still works, but it is resolved when the field loses focus rather than while
+                   typing: GET /users/{id} is the detail endpoint (memberships, allocation, masked
+                   key), far too heavy to fire at every pause in typing "412". The name search runs as
+                   you type; the id lookup happens once, when you have finished. *@
+                <MudAutocomplete T="UserResponse"
+                                 Label="Actor"
+                                 Value="@_actor"
+                                 ValueChanged="@OnActorChangedAsync"
+                                 SearchFunc="@SearchActorsAsync"
+                                 ToStringFunc="@ActorLabel"
+                                 DebounceInterval="300"
+                                 ResetValueOnEmptyText="true"
                                  Clearable="true"
                                  Variant="Variant.Outlined"
                                  Margin="Margin.Dense"
+                                 TextChanged="@OnActorTextChanged"
+                                 OnBlur="@ResolveTypedActorIdAsync"
+                                 HelperText="Name or email; or a user id, then tab out"
                                  data-testid="audit-filter-actor" />
             </MudItem>
         </MudGrid>
@@ -139,16 +151,40 @@
 @code {
     private const int PageSize = 25;
 
+    /// <summary>How many people the actor type-ahead offers per keystroke — a shortlist, not a browser.</summary>
+    private const int ActorSuggestionCount = 10;
+
     /// <summary>The known <c>AuditLog.Action</c> values, straight off the Domain constants.</summary>
     public static readonly IReadOnlyList<string> Actions = ConstantSet.StringConstants(typeof(AuditActions));
 
     /// <summary>The known <c>AuditLog.TargetType</c> values, straight off the Domain constants.</summary>
     public static readonly IReadOnlyList<string> TargetTypes = ConstantSet.StringConstants(typeof(AuditTargetTypes));
 
+    /// <summary>
+    /// <c>?action=</c> — a deep link into one kind of entry, so a page that knows which action
+    /// explains its number can hand the admin the trail rather than the whole log (the dashboard's
+    /// hard-stopped card links to <c>key.revoked</c>, #190). Applied on first render only; changing
+    /// the filter afterwards does not rewrite the URL.
+    /// </summary>
+    [Parameter, SupplyParameterFromQuery(Name = "action")]
+    public string? ActionFilter { get; set; }
+
+    /// <summary>
+    /// <c>?actor=</c> — the id path #191 asked to keep working, so a link to "everything this person
+    /// did" survives being pasted into a chat. The name is looked up once so the box shows who it is
+    /// rather than a number; a user the API can't resolve still filters by the id.
+    /// </summary>
+    [Parameter, SupplyParameterFromQuery(Name = "actor")]
+    public int? ActorFilter { get; set; }
+
     private MudDataGrid<AuditLogEntryResponse>? _grid;
     private string? _action;
     private string? _targetType;
     private int? _actorUserId;
+    private UserResponse? _actor;
+
+    /// <summary>What is currently typed in the actor box, so a bare id can be resolved on blur.</summary>
+    private string _actorText = string.Empty;
     private DateRange? _dateRange;
     private bool _loadFailed;
     private string _errorMessage = string.Empty;
@@ -204,6 +240,91 @@
     private DateTimeOffset ToInstant(DateTime localWallClock) =>
         new(DateTime.SpecifyKind(localWallClock, DateTimeKind.Unspecified), TimeProvider.LocalTimeZone.GetUtcOffset(localWallClock));
 
+    /// <summary>
+    /// Applies the query-string filters, once, on the page's own initialization. Deliberately not
+    /// <c>OnParametersSetAsync</c>: nothing rewrites the URL when a filter changes, so re-applying on
+    /// every parameter set quietly restores the deep-link value the admin has just cleared. An action
+    /// the log's own constants don't name is ignored rather than being pushed into a select that
+    /// cannot render it — a mistyped deep link shows the whole log, not an empty grid filtered by
+    /// nothing that exists. An <c>?actor=</c> id is taken at face value (the API is the authority on
+    /// whether that user exists) and its name resolved for the box.
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        _action = Actions.FirstOrDefault(a => string.Equals(a, ActionFilter, StringComparison.OrdinalIgnoreCase));
+
+        if (ActorFilter is { } actorFromQuery)
+        {
+            _actorUserId = actorFromQuery;
+            _actor = await TryLoadUserAsync(actorFromQuery);
+        }
+
+        // No reload: the grid has not made its first ServerData call yet, and it will read these.
+    }
+
+    /// <summary>
+    /// The type-ahead over <c>GET /users?search=</c> — names and emails only. A bare id is <em>not</em>
+    /// resolved here: <c>GET /users/{id}</c> is the detail endpoint (memberships, allocation, masked
+    /// key material), and firing it at every debounce tick while someone types "412" spends three
+    /// round trips a keystroke to render one label. <see cref="ResolveTypedActorIdAsync"/> does it once,
+    /// on blur. Search failures return nothing rather than throwing: the filter is a convenience, and
+    /// the grid is the thing that reports a dead API.
+    /// </summary>
+    private async Task<IEnumerable<UserResponse>> SearchActorsAsync(string? value, CancellationToken cancellationToken)
+    {
+        var term = value?.Trim() ?? string.Empty;
+
+        var result = await ApiClient.GetUsersAsync(
+            new UserListQuery(string.IsNullOrEmpty(term) ? null : term, IsActive: null),
+            new PagedRequest(1, ActorSuggestionCount),
+            cancellationToken);
+
+        return result is { IsSuccess: true, Value: not null } ? result.Value.Items : [];
+    }
+
+    private void OnActorTextChanged(string? text) => _actorText = text ?? string.Empty;
+
+    /// <summary>
+    /// The manual id path (#191), run when the field loses focus: an admin holding an id — from an
+    /// export, a colleague's message, a deep link they are retyping — types it and tabs out. Only
+    /// when nothing was picked from the list and the text is all digits, and only once, so the
+    /// heavyweight detail read happens for a finished id rather than for each of its prefixes. An id
+    /// nothing resolves leaves the filter alone: the grid would otherwise empty itself over a typo.
+    /// </summary>
+    private async Task ResolveTypedActorIdAsync()
+    {
+        if (_actor is not null
+            || !int.TryParse(_actorText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var userId))
+        {
+            return;
+        }
+
+        var user = await TryLoadUserAsync(userId);
+        if (user is null)
+        {
+            return;
+        }
+
+        await OnActorChangedAsync(user);
+    }
+
+    /// <summary>One user by id, or <see langword="null"/> for any failure — a 404 for a typed id is an answer, not an error to report.</summary>
+    private async Task<UserResponse?> TryLoadUserAsync(int userId, CancellationToken cancellationToken = default)
+    {
+        var result = await ApiClient.GetUserAsync(userId, cancellationToken);
+        return result is { IsSuccess: true, Value: not null } ? result.Value.User : null;
+    }
+
+    private Task OnActorChangedAsync(UserResponse? actor) =>
+        ApplyFilterAsync(() =>
+        {
+            _actor = actor;
+            _actorUserId = actor?.UserId;
+        });
+
+    private static string ActorLabel(UserResponse? user) =>
+        user is null ? string.Empty : $"{user.DisplayName} (#{user.UserId})";
+
     private async Task ApplyFilterAsync(Action mutate)
     {
         mutate();
@@ -215,6 +336,8 @@
         _action = null;
         _targetType = null;
         _actorUserId = null;
+        _actor = null;
+        _actorText = string.Empty;
         _dateRange = null;
         await ReloadAsync();
     }

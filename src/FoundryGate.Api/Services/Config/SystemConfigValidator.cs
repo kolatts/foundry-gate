@@ -1,6 +1,7 @@
 using System.Globalization;
 using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Exceptions;
 
 namespace FoundryGate.Api.Services.Config;
 
@@ -23,16 +24,40 @@ namespace FoundryGate.Api.Services.Config;
 /// operator's own row, which the reference-data seeder deliberately preserves — has no rule and is
 /// accepted as free text (length is <c>UpdateSystemConfigRequest</c>'s <c>[StringLength]</c> job).
 /// <para>
-/// There is no read-only branch any more: the three keys that had one
-/// (<c>ApimProductId</c>, <c>EntraTenantId</c>, <c>ApimGatewayUrl</c>) are retired outright — unseeded
-/// and deleted from deployed databases by the reference-data sync (#164/#123) — so an attempt to edit
-/// one is an unknown key, which <c>PUT /config/{key}</c> already answers with <c>404</c>.
+/// <b>Read-only keys.</b> <see cref="EnsureEditable"/> refuses the keys the system writes
+/// (<see cref="SystemConfigurationKeys.SystemManaged"/>) with a <c>409</c> naming the reason. It reads
+/// that one Domain map, and so does <c>SystemConfigEntryResponse.IsReadOnly</c>, so the API and the
+/// admin editor can never disagree about which keys are editable (#172 — they already had, once).
+/// Keys that are <em>retired</em> rather than system-managed (<c>ApimProductId</c>,
+/// <c>EntraTenantId</c>, <c>ApimGatewayUrl</c>) are a different story: unseeded and deleted from
+/// deployed databases by the reference-data sync (#164/#123), so editing one is an unknown key, which
+/// <c>PUT /config/{key}</c> already answers with <c>404</c>.
 /// </para>
 /// </remarks>
 public sealed class SystemConfigValidator(GatewayTierMapper tierMapper)
 {
     /// <summary>Highest day-of-month a monthly reset may be scheduled on: 28 is the last day every month has.</summary>
     public const int MaxResetDayOfMonth = 28;
+
+    /// <summary>
+    /// Refuses an edit to a key the system writes for itself
+    /// (<see cref="SystemConfigurationKeys.SystemManaged"/>), naming the reason so the admin reads why
+    /// rather than "no". A <c>409</c>, not a <c>403</c>: the caller's permissions are fine — the
+    /// resource is not theirs to set.
+    /// </summary>
+    /// <param name="key">The configuration key, as stored (the caller has already matched the row).</param>
+    /// <exception cref="ConflictException">The key is system-managed (→ 409).</exception>
+    public static void EnsureEditable(string key)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+
+        if (SystemConfigurationKeys.SystemManagedReason(key) is { } reason)
+        {
+            throw new ConflictException(
+                $"System configuration key '{key}' is read-only: {reason}. It can be read from GET /api/v1/config, " +
+                "but nothing an admin sets here would survive the next run.");
+        }
+    }
 
     /// <summary>
     /// Validates <paramref name="value"/> against <paramref name="key"/>'s rule and returns the

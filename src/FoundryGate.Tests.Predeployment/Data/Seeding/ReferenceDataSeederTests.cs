@@ -7,18 +7,27 @@ namespace FoundryGate.Tests.Predeployment.Data.Seeding;
 public class ReferenceDataSeederTests : InMemoryDatabaseTest
 {
     [Fact]
-    public async Task SeedAsync_inserts_all_five_SystemConfiguration_defaults()
+    public async Task SeedAsync_inserts_every_SystemConfiguration_default()
     {
         await SeedReferenceDataAsync();
 
         var keys = Context.SystemConfigurations.Select(c => c.Key).ToList();
 
-        Assert.Equal(5, keys.Count);
-        Assert.Contains("DefaultMonthlyTokenQuota", keys);
-        Assert.Contains("ApimResourceId", keys);
-        Assert.Contains("FoundryResourceId", keys);
-        Assert.Contains("EntraGroupSyncEnabled", keys);
-        Assert.Contains("ResetDayOfMonth", keys);
+        Assert.Equal(SystemConfigurationKeys.All.Order(), keys.Order());
+    }
+
+    [Fact]
+    public async Task SeedAsync_gives_the_system_managed_keys_an_empty_starting_value()
+    {
+        // #171: the rows exist from the first deploy so GET /config lists them, but nothing has run
+        // yet — an invented timestamp would be a lie about a sync that never happened.
+        await SeedReferenceDataAsync();
+
+        foreach (var key in SystemConfigurationKeys.SystemManaged.Keys)
+        {
+            var row = await Context.SystemConfigurations.AsNoTracking().SingleAsync(c => c.Key == key);
+            Assert.Equal(string.Empty, row.Value);
+        }
     }
 
     [Fact]
@@ -36,7 +45,7 @@ public class ReferenceDataSeederTests : InMemoryDatabaseTest
         await SeedReferenceDataAsync();
         await SeedReferenceDataAsync();
 
-        Assert.Equal(5, Context.SystemConfigurations.Count());
+        Assert.Equal(SystemConfigurationKeys.All.Count, Context.SystemConfigurations.Count());
 
         var reloaded = await Context.SystemConfigurations.FindAsync("DefaultMonthlyTokenQuota");
         Assert.Equal("5000000", reloaded!.Value);

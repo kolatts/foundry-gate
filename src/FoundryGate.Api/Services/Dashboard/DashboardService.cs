@@ -8,12 +8,12 @@ using Microsoft.Extensions.Caching.Memory;
 namespace FoundryGate.Api.Services.Dashboard;
 
 /// <summary>
-/// Default <see cref="IDashboardService"/>: six set-based, <c>AsNoTracking</c> queries over the
+/// Default <see cref="IDashboardService"/>: eight set-based, <c>AsNoTracking</c> queries over the
 /// current <see cref="BillingPeriod"/>, behind a short shared cache.
 /// </summary>
 /// <remarks>
 /// <b>Why a cache.</b> The dashboard is the admin landing page and refreshes itself every 60 s
-/// (plans/18), so N admins with the tab open are N × 6 aggregate queries a minute against tables the
+/// (plans/18), so N admins with the tab open are N × 8 aggregate queries a minute against tables the
 /// enforcement path also uses. Holding the answer for <see cref="CacheDuration"/> collapses that to
 /// roughly two query bursts a minute for the whole fork. It is a summary of numbers that are
 /// themselves reconciled on the sync job's cadence — 30 seconds of staleness is invisible next to
@@ -57,7 +57,7 @@ public sealed class DashboardService(
     }
 
     /// <summary>
-    /// The six queries, run in sequence — one <see cref="AppDbContext"/> permits one active operation
+    /// The eight queries, run in sequence — one <see cref="AppDbContext"/> permits one active operation
     /// at a time, so "concurrently" is not on the table; each is a single aggregate the indexes
     /// already cover (<c>QuotaAllocation</c> has a <c>(PeriodYear, PeriodMonth)</c> index).
     /// </summary>
@@ -84,6 +84,19 @@ public sealed class DashboardService(
             .Select(a => (long?)a.TokensUsed)
             .SumAsync(cancellationToken) ?? 0L;
 
+        // Both "who is broken right now" counts are scoped to active users (#190): a deactivated
+        // account is already off the gateway, so counting it here would bury the handful of people an
+        // admin can actually do something for.
+        var hardStoppedUserCount = await CurrentPeriod(period)
+            .CountAsync(a => a.User.IsActive && a.IsHardStopped, cancellationToken);
+
+        // Reconciled usage against a finite budget. ">=" not ">": the gateway's token-quota policy
+        // refuses the request that would cross the cap, so "reached it" is already "cut off".
+        var overBudgetUserCount = await CurrentPeriod(period)
+            .CountAsync(
+                a => a.User.IsActive && a.AllocatedTokens != null && a.TokensUsed >= a.AllocatedTokens.Value,
+                cancellationToken);
+
         var topConsumers = await CurrentPeriod(period)
             .Where(a => a.User.IsActive)
             .OrderByDescending(a => a.TokensUsed)
@@ -109,7 +122,9 @@ public sealed class DashboardService(
                 c.DisplayName,
                 c.TokensUsed,
                 c.AllocatedTokens,
-                PercentUsed(c.AllocatedTokens, c.TokensUsed)))]);
+                PercentUsed(c.AllocatedTokens, c.TokensUsed)))],
+            hardStoppedUserCount,
+            overBudgetUserCount);
     }
 
     private IQueryable<Data.Entities.QuotaAllocation> CurrentPeriod(BillingPeriod period) =>

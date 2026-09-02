@@ -34,6 +34,18 @@ public sealed class FoundryController(IFoundryDeploymentService deploymentServic
     public Task<IReadOnlyList<FoundryDeploymentResponse>> ListDeploymentsAsync(CancellationToken cancellationToken) =>
         deploymentService.ListDeploymentsAsync(cancellationToken);
 
+    /// <summary>
+    /// The models the configured accounts can serve — model name, version, deployable SKUs and a
+    /// suggested capacity (#173). What the create dialog's model and SKU pickers offer, in place of
+    /// the hardcoded list that shipped with it. Served from a 5-minute cache; Anthropic-format models
+    /// are listed for visibility even though creating one is refused.
+    /// </summary>
+    [HttpGet("catalog")]
+    [Authorize(Policy = PolicyNames.AdminOnly)]
+    [ProducesResponseType<IReadOnlyList<FoundryCatalogEntryResponse>>(StatusCodes.Status200OK)]
+    public Task<IReadOnlyList<FoundryCatalogEntryResponse>> ListCatalogAsync(CancellationToken cancellationToken) =>
+        deploymentService.ListCatalogAsync(cancellationToken);
+
     /// <summary>One deployment by account and name — poll this after a create for <c>Succeeded</c>.</summary>
     [HttpGet("deployments/{accountName}/{deploymentName}", Name = GetDeploymentRouteName)]
     [Authorize(Policy = PolicyNames.AdminOnly)]
