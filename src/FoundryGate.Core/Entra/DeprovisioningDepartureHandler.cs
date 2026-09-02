@@ -37,10 +37,33 @@ namespace FoundryGate.Core.Entra;
 /// a nightly run that flags departures without stopping their keys — which would be worse than
 /// useless, because the admin UI would read "inactive" while the gateway still honoured the key.
 /// The pieces that could be shared already are: the pending-request rule is Core's
-/// <see cref="IQuotaRequestExpiry.CancelPendingForUserAsync"/>, which the Api's
-/// <c>QuotaRequestService</c> also calls. #214 tracks lifting the rest of the pipeline into Core so
-/// there is one definition again.
+/// <see cref="IQuotaRequestExpiry.CancelPendingForUserAsync"/>, and every string the trail is made of
+/// is <see cref="DepartureAudit"/> — both of which the Api's side also uses. #214 tracks lifting the
+/// rest of the pipeline into Core so there is one definition again.
 /// </para>
+/// <para>
+/// <b>The full list of ways this still differs from the Api's version</b>, so the divergence is on the
+/// page rather than in somebody's head until #214 closes it. All three are equivalences, not
+/// behaviour changes, and <c>DepartureHandlerParityTests</c> pins the observable half of them:
+/// </para>
+/// <list type="number">
+/// <item>
+/// <b>No explicit transaction.</b> The Api's orchestrator opens one (or joins the sync's) around steps
+/// 2–5; this method does not. Equivalent because those steps end in a single
+/// <c>SaveChangesAsync</c>, which is already atomic, and — unlike the Api's path — nothing here shares
+/// the unit of work with a caller that might have staged other writes. A step that needed a second save
+/// would break that and would have to open one.
+/// </item>
+/// <item>
+/// <b>No <c>.Local</c>-first allocation lookup.</b> The Api checks the change tracker before the
+/// database because a provision in the same unit of work can have added this period's allocation
+/// unsaved. Nothing on a departure path does, so the query is enough — but it is only enough for that
+/// reason.
+/// </item>
+/// <item>
+/// <b>The sequence itself is restated</b> rather than delegated, which is the debt above.
+/// </item>
+/// </list>
 /// </remarks>
 public sealed class DeprovisioningDepartureHandler(
     AppDbContext dbContext,
@@ -50,12 +73,6 @@ public sealed class DeprovisioningDepartureHandler(
     TimeProvider timeProvider,
     ILogger<DeprovisioningDepartureHandler> logger) : IDepartureHandler
 {
-    /// <summary>The reason recorded on the system-attributed <c>key.revoked</c> row. Matches <c>UserLifecycleService.EntraDepartureReason</c>, so the two hosts' audit trails read the same.</summary>
-    public const string Reason = "entra-departure";
-
-    /// <summary>The <c>ReviewNotes</c> stamped on a Pending request this closes. Matches <c>UserLifecycleService.DeactivationReviewNote</c>.</summary>
-    public const string ReviewNote = "User deactivated";
-
     /// <inheritdoc />
     public async Task HandleAsync(User user, CancellationToken cancellationToken)
     {
@@ -93,7 +110,7 @@ public sealed class DeprovisioningDepartureHandler(
 
             // A Pending request from someone who no longer has access can never be approved into
             // anything useful, and leaving it Pending keeps them on the admin review queue forever.
-            var cancelledRequestCount = await quotaRequests.CancelPendingForUserAsync(user.UserId, ReviewNote, completionToken);
+            var cancelledRequestCount = await quotaRequests.CancelPendingForUserAsync(user.UserId, DepartureAudit.ReviewNote, completionToken);
 
             _ = audit.AddSystem(
                 AuditActions.UserDeactivated,
@@ -101,7 +118,7 @@ public sealed class DeprovisioningDepartureHandler(
                 TargetId(user),
                 new
                 {
-                    trigger = nameof(IDepartureHandler),
+                    trigger = DepartureAudit.Trigger,
                     keyRevoked,
                     allocationHardStopped = allocation is not null,
                     cancelledRequestCount,
@@ -174,7 +191,7 @@ public sealed class DeprovisioningDepartureHandler(
                 AuditActions.KeyRevoked,
                 AuditTargetTypes.ApiKey,
                 TargetId(user),
-                new { apimSubscriptionId, subscriptionName, existedInApim, reason = Reason });
+                new { apimSubscriptionId, subscriptionName, existedInApim, reason = DepartureAudit.KeyRevocationReason });
 
             _ = await dbContext.SaveChangesAsync(CancellationToken.None);
         }

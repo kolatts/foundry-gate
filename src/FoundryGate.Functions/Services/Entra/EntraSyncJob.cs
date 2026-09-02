@@ -2,6 +2,7 @@ using FoundryGate.Core.Configuration;
 using FoundryGate.Core.Entra;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Functions.Services.Jobs;
@@ -69,6 +70,15 @@ public sealed class EntraSyncJob(
         var userResult = await users.SyncUsersAsync(cancellationToken);
         var groupResults = await groups.SyncAllAsync(cancellationToken);
 
+        // ---- commit point (CONVENTIONS.md). A deactivation deleted an APIM subscription, which cannot
+        // be rolled back, so from here a host shutdown must not be able to lose the record that the
+        // schedule ran on the night it offboarded somebody. Each sync's own CommitToken covers its own
+        // rows and they are already saved; this one covers the row below, which is the only place the
+        // whole pass is described. A pass that deactivated nobody reached nothing external and stays
+        // abandonable — a group-sync tier move is not counted here because EntraGroupSyncService owns
+        // and has already committed that commit point itself.
+        var completionToken = CommitToken.For(userResult.DeactivatedCount > 0, cancellationToken);
+
         // One row for the run, on top of the users.synced row and the per-group rows the services
         // themselves write: those say what each reconciliation did, this says the schedule ran and how
         // the whole pass came out. Nightly, so 365 rows a year — not the every-15-minutes flood D-016
@@ -97,7 +107,7 @@ public sealed class EntraSyncJob(
                 },
             });
 
-        _ = await dbContext.SaveChangesAsync(cancellationToken);
+        _ = await dbContext.SaveChangesAsync(completionToken);
 
         LogOutcome(userResult, groupResults);
 

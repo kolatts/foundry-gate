@@ -11,7 +11,7 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 
 | Key | Default | Description |
 |---|---|---|
-| `DefaultMonthlyTokenQuota` | `"5000000"` | Per-user monthly token budget when no user or group override applies. Must equal a configured tier cap (`5000000` = the Standard tier as shipped) — see [Gateway quota tiers](#gateway-quota-tiers-gatewaytiers). A value that matches no tier is enforced at the next tier up and flagged `isGatewayCapped` on every allocation it produces. |
+| `DefaultMonthlyTokenQuota` | `"5000000"` | Per-user monthly token budget when no user or group override applies. Must equal a configured tier cap (`5000000` = the Standard tier as shipped) — see [Gateway quota tiers](#gateway-quota-tiers-gateway__tiers__). A value that matches no tier is enforced at the next tier up and flagged `isGatewayCapped` on every allocation it produces. |
 | `ApimResourceId` | `""` | ARM resource ID of the APIM instance (`/subscriptions/.../Microsoft.ApiManagement/service/...`). Informational — the key service addresses APIM through the `Gateway__*` environment variables below, not this value. |
 | `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. **Superseded** for deployment management by the `Gateway__*` environment variables below (the gateway runs one account per region, and infra sets them, so nothing has to be typed here); kept as seeded reference data. |
 | `EntraGroupSyncEnabled` | `"false"` | Set to `"true"` to enable automatic Entra group member sync. When `false`, group sync must be triggered manually from the admin UI. |

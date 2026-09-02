@@ -102,9 +102,16 @@ public static class FunctionsServiceCollectionExtensions
         {
             // The unconfigured client, not "no client at all" (the Api's KeysServiceCollectionExtensions
             // shape): since #151 the departure handler also needs one, and a missing registration would
-            // be a startup failure on a host that is deliberately gateway-less rather than the
-            // FeatureNotConfiguredException the one call that could reach it deserves. Nothing actually
-            // calls it on such a host — a developer with no gateway has no APIM subscription to delete.
+            // fail startup on a host that is deliberately gateway-less.
+            //
+            // To be clear about what it buys, because it is NOT graceful degradation: its
+            // FeatureNotConfiguredException is not in DeprovisioningDepartureHandler's IsUpstreamFailure
+            // allowlist and is not caught by EntraUserSyncService's per-departure handler, so a
+            // departure that reached it would abort the whole nightly pass as a failed invocation —
+            // exactly what the Api does on the same configuration. It is unreachable in practice: no
+            // gateway means no ApimSubscriptionId, and RevokeKeyAsync returns false before the client is
+            // touched. Loud-and-unreachable is the right shape for a misconfiguration; nothing here
+            // pretends a gateway-less host can offboard anybody.
             services.AddSingleton<IApimManagementClient>(new UnconfiguredApimManagementClient());
             services.AddScoped<IGatewayTierSync, NullGatewayTierSync>();
             return;

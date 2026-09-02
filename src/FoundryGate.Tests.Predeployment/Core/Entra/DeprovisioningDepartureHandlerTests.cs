@@ -56,7 +56,7 @@ public class DeprovisioningDepartureHandlerTests : InMemoryDatabaseTest
         var closed = await Context.QuotaIncreaseRequests.AsNoTracking().SingleAsync(r => r.QuotaIncreaseRequestId == request.QuotaIncreaseRequestId);
         Assert.Equal(QuotaRequestStatusType.Rejected, closed.StatusType);
         Assert.Null(closed.ReviewedByUserId);
-        Assert.Equal(DeprovisioningDepartureHandler.ReviewNote, closed.ReviewNotes);
+        Assert.Equal(DepartureAudit.ReviewNote, closed.ReviewNotes);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public class DeprovisioningDepartureHandlerTests : InMemoryDatabaseTest
         Assert.Null(revocation.ActorUserId);
         Assert.Equal(AuditTargetTypes.ApiKey, revocation.TargetType);
         var revocationDetails = JsonDocument.Parse(revocation.Details).RootElement;
-        Assert.Equal(DeprovisioningDepartureHandler.Reason, revocationDetails.GetProperty("reason").GetString());
+        Assert.Equal(DepartureAudit.KeyRevocationReason, revocationDetails.GetProperty("reason").GetString());
         Assert.True(revocationDetails.GetProperty("existedInApim").GetBoolean());
 
         var deactivation = await Context.AuditLogs.AsNoTracking()

@@ -62,11 +62,16 @@ public sealed class UserLifecycleService(
     /// <summary><c>User.DisplayName</c> is <c>[StringLength(200)]</c>; Entra allows 256 (same clamp as <see cref="EntraUserSyncService"/>).</summary>
     private const int DisplayNameMaxLength = 200;
 
-    /// <summary>The <c>ReviewNotes</c> stamped on a Pending request that deactivation rejects (plan 21 deprovision step 4).</summary>
-    internal const string DeactivationReviewNote = "User deactivated";
+    /// <summary>
+    /// The <c>ReviewNotes</c> stamped on a Pending request that deactivation rejects (plan 21
+    /// deprovision step 4). An alias of <see cref="DepartureAudit.ReviewNote"/>: the Functions worker
+    /// runs the same step from Core (#151), so the value lives there and this name keeps the Api's call
+    /// sites reading as they always did.
+    /// </summary>
+    internal const string DeactivationReviewNote = DepartureAudit.ReviewNote;
 
-    /// <summary>The reason recorded on the system-attributed <c>key.revoked</c> row when the Entra sync deprovisions a departed user.</summary>
-    internal const string EntraDepartureReason = "entra-departure";
+    /// <summary>The reason recorded on the system-attributed <c>key.revoked</c> row when an Entra sync deprovisions a departed user. Alias of <see cref="DepartureAudit.KeyRevocationReason"/>, as above.</summary>
+    internal const string EntraDepartureReason = DepartureAudit.KeyRevocationReason;
 
     /// <inheritdoc />
     public async Task<User> ProvisionAsync(ProvisionTrigger trigger, ProvisionContext context, CancellationToken cancellationToken) =>

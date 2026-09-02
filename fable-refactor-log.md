@@ -489,6 +489,25 @@ used to: the Api's accessor sees a `User` the run has just `Add`ed but not saved
 admin whose own row is being imported by their first sync attribute that run to themselves rather than
 be refused by it. Moving that call to the top of the method would have been a silent behaviour change
 that no compiler and no obvious test would catch.
+**What a gateway-less host does with a departure, stated precisely** (PR #216 review corrected an
+earlier, softer wording here): the Functions host registers `UnconfiguredApimManagementClient` when
+`Gateway:*` does not address APIM, and its `FeatureNotConfiguredException` is **not** in
+`IsUpstreamFailure`'s allowlist and **not** caught by `EntraUserSyncService`'s per-departure handler.
+A departure that reached it would therefore abort the whole nightly pass as a failed invocation — the
+same thing the Api does on the same configuration, and not graceful degradation of any kind. It is
+also unreachable: no gateway means no `ApimSubscriptionId`, and `RevokeKeyAsync` returns `false`
+before the client is touched. The registration exists so a deliberately gateway-less host starts at
+all; loud-and-unreachable is the right shape for that, and nothing pretends such a host can offboard
+anybody.
+**Caught on the way (2):** the first cut of the Core handler wrote `trigger = nameof(IDepartureHandler)`
+in the `user.deactivated` details where the Api writes `"EntraDeparture"` — so an operator filtering
+`details.trigger == "EntraDeparture"` would have seen every admin-found departure and none of the
+nightly ones. #214 had named exactly this drift as the risk and it happened before the PR merged,
+which settles the question of whether an XML-doc "matches …" comment is enough: it is not. The three
+strings the trail is made of now live in Core's `DepartureAudit` (the Api's constants are `const`
+aliases of them, so the compiler enforces two of the three), and `DepartureHandlerParityTests` runs
+both pipelines against one database on one clock and compares the two details objects field for
+field — verified by re-introducing the divergence and watching it fail.
 **Caught on the way:** moving `EntraOptions` to Core removed it from `ValidateRecursively()` on both
 hosts — the same silent gap D-014 recorded for `GatewayOptions`, rediscovered because only the Api's
 existing test noticed. `CoreOptionsValidation` now has `ValidateEntra` alongside `ValidateGateway` and

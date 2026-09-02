@@ -89,8 +89,11 @@ public class QuotaEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestF
     // -- GET /quota/tiers --
 
     [Fact]
-    public async Task Tiers_are_readable_by_any_authenticated_user_and_mirror_the_shipped_appsettings()
+    public async Task Tiers_are_readable_by_any_authenticated_user_and_mirror_the_hosts_bound_tier_table()
     {
+        // "Bound", not "shipped": since #201 there is no shipped appsettings tier table at all — a
+        // deployed host binds Gateway__Tiers__* from infra, and the factory states those same keys via
+        // UseSetting, which is what this endpoint is serving back.
         var dev = await factory.SeedUserAsync();
         using var client = factory.CreateClientAs(dev.EntraObjectId, isAdmin: false);
 
