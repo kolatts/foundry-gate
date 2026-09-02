@@ -49,8 +49,10 @@ namespace FoundryGate.Tests.Predeployment.Data.Conventions;
 /// declare.</item>
 /// <item>Every index EF's model declares (explicit <c>[Index]</c> attributes and EF's own implicit
 /// per-FK indexes) by database name: <c>UNIQUE</c> flag, <c>CLUSTERED</c>/<c>NONCLUSTERED</c>,
-/// column composition, column order, and sort direction. Also flags indexes in the .sql file that
-/// the model does not declare.</item>
+/// column composition, column order, sort direction, and the <c>WHERE</c> filter of a filtered index
+/// (<c>HasFilter</c>) — compared as normalised <i>text</i>, not semantically, so the model's filter
+/// string and the .sql one must be written the same way modulo whitespace and outer parentheses.
+/// Also flags indexes in the .sql file that the model does not declare.</item>
 /// </list>
 /// <para><b>Deliberate remaining limits (documented, not accidental gaps):</b></para>
 /// <list type="bullet">
@@ -61,8 +63,8 @@ namespace FoundryGate.Tests.Predeployment.Data.Conventions;
 /// schema validator.</item>
 /// <item>Does not check schema features the model does not use today: default-constraint
 /// <i>expressions</i> (only presence is compared), check constraints, computed columns,
-/// collations, filtered indexes, <c>INCLUDE</c> columns, or fill factor. Adding any of those to an
-/// entity means extending this test in the same PR.</item>
+/// collations, <c>INCLUDE</c> columns, or fill factor. Adding any of those to an entity means
+/// extending this test in the same PR — as the filtered index on <c>Groups.EntraGroupId</c> did.</item>
 /// <item>Compares the model to the checked-in scripts only, never to a live database. DacFx
 /// schema-compare against a deployed database remains the authoritative (Windows-only) tool if
 /// that is ever needed.</item>
@@ -115,7 +117,7 @@ public class SchemaParityTests
         RegexOptions.Compiled);
 
     private static readonly Regex IndexRegex = new(
-        @"CREATE (?<unique>UNIQUE )?(?<clustered>NONCLUSTERED|CLUSTERED) INDEX \[(?<name>IX_[A-Za-z0-9_]+)\]\s+ON \[dbo\]\.\[[A-Za-z0-9_]+\]\s*\((?<cols>[^)]*)\)",
+        @"CREATE (?<unique>UNIQUE )?(?<clustered>NONCLUSTERED|CLUSTERED) INDEX \[(?<name>IX_[A-Za-z0-9_]+)\]\s+ON \[dbo\]\.\[[A-Za-z0-9_]+\]\s*\((?<cols>[^)]*)\)(?:\s*WHERE\s*(?<filter>[^;]*?))?\s*;",
         RegexOptions.Compiled);
 
     /// <summary>One entry in a bracket-quoted column list, e.g. <c>[UserId] ASC</c>.</summary>
@@ -411,6 +413,15 @@ public class SchemaParityTests
                     $"{tableName}: index {indexName} columns are {FormatColumns(modelColumns)} in the model but " +
                     $"{FormatColumns(sqlIndex.Columns)} in {tableName}.sql");
             }
+
+            string modelFilter = NormalizeFilter(index.GetFilter());
+            string sqlFilter = NormalizeFilter(sqlIndex.Filter);
+            if (!string.Equals(modelFilter, sqlFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                violations.Add(
+                    $"{tableName}: index {indexName} filter is {Describe(modelFilter)} in the model but " +
+                    $"{Describe(sqlFilter)} in {tableName}.sql");
+            }
         }
 
         foreach (string extraIndex in sqlIndexes.Keys.Where(name => !modelIndexNames.Contains(name)))
@@ -534,7 +545,8 @@ public class SchemaParityTests
             indexes[match.Groups["name"].Value] = new SqlIndex(
                 match.Groups["unique"].Success,
                 match.Groups["clustered"].Value == "CLUSTERED",
-                ParseColumnList(match.Groups["cols"].Value));
+                ParseColumnList(match.Groups["cols"].Value),
+                match.Groups["filter"].Success ? match.Groups["filter"].Value : null);
         }
 
         return indexes;
@@ -573,7 +585,53 @@ public class SchemaParityTests
         List<string> PrincipalColumns,
         string OnDelete);
 
-    private sealed record SqlIndex(bool IsUnique, bool IsClustered, List<SqlIndexColumn> Columns);
+    private sealed record SqlIndex(bool IsUnique, bool IsClustered, List<SqlIndexColumn> Columns, string? Filter);
+
+    /// <summary>
+    /// Strips whitespace and any balanced outer parentheses so DacFx's <c>([EntraGroupId]&lt;&gt;'')</c>
+    /// and the model's <c>[EntraGroupId] &lt;&gt; ''</c> compare equal. Text-level only: this test does not
+    /// understand T-SQL, so two semantically identical filters written differently still differ here.
+    /// </summary>
+    private static string NormalizeFilter(string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter))
+        {
+            return string.Empty;
+        }
+
+        string normalized = string.Concat(filter.Where(c => !char.IsWhiteSpace(c)));
+        while (normalized.StartsWith('(') && normalized.EndsWith(')') && IsBalancedWithoutOuterParens(normalized))
+        {
+            normalized = normalized[1..^1];
+        }
+
+        return normalized;
+    }
+
+    /// <summary>True when the outermost parentheses of <paramref name="text"/> wrap the whole expression (so they can be stripped).</summary>
+    private static bool IsBalancedWithoutOuterParens(string text)
+    {
+        int depth = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '(')
+            {
+                depth++;
+            }
+            else if (text[i] == ')')
+            {
+                depth--;
+                if (depth == 0 && i != text.Length - 1)
+                {
+                    return false;
+                }
+            }
+        }
+
+        return depth == 0;
+    }
+
+    private static string Describe(string filter) => filter.Length == 0 ? "(none)" : $"'{filter}'";
 
     private sealed record SqlIndexColumn(string Name, bool IsDescending);
 }

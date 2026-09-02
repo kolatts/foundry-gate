@@ -53,8 +53,17 @@ public sealed class FoundryGateApiClient(HttpClient httpClient) : IFoundryGateAp
         SendAsync<UserSyncResult>(HttpMethod.Post, "users/sync", body: null, ct);
 
     // Groups — spec §4.2
-    public Task<ApiCallResult<IReadOnlyList<GroupResponse>>> GetGroupsAsync(CancellationToken ct = default) =>
-        GetAsync<IReadOnlyList<GroupResponse>>("groups", ct);
+    public Task<ApiCallResult<PagedResult<GroupResponse>>> GetGroupsAsync(PagedRequest paging, string? search = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(paging);
+        var path = WithPaging("groups", paging);
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            path += $"&search={Uri.EscapeDataString(search)}";
+        }
+
+        return GetAsync<PagedResult<GroupResponse>>(path, ct);
+    }
 
     public Task<ApiCallResult<GroupResponse>> CreateGroupAsync(CreateGroupRequest request, CancellationToken ct = default)
     {
@@ -82,6 +91,15 @@ public sealed class FoundryGateApiClient(HttpClient httpClient) : IFoundryGateAp
 
     public Task<ApiCallResult<bool>> RemoveGroupMemberAsync(int groupId, int userId, CancellationToken ct = default) =>
         SendActionAsync(HttpMethod.Delete, $"groups/{groupId}/members/{userId}", body: null, ct);
+
+    public Task<ApiCallResult<PagedResult<GroupMemberResponse>>> GetGroupMembersAsync(int groupId, PagedRequest paging, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(paging);
+        return GetAsync<PagedResult<GroupMemberResponse>>(WithPaging($"groups/{groupId}/members", paging), ct);
+    }
+
+    public Task<ApiCallResult<GroupSyncResult>> SyncGroupFromEntraAsync(int groupId, CancellationToken ct = default) =>
+        SendAsync<GroupSyncResult>(HttpMethod.Post, $"groups/{groupId}/sync-entra", body: null, ct);
 
     public Task<ApiCallResult<IReadOnlyList<GroupSyncResult>>> SyncGroupsFromEntraAsync(CancellationToken ct = default) =>
         SendAsync<IReadOnlyList<GroupSyncResult>>(HttpMethod.Post, "groups/sync-entra", body: null, ct);

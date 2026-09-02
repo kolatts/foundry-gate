@@ -46,8 +46,8 @@ That works fine when you have three engineers sharing a dev environment. It brea
   <Card title="Individual APIM subscription keys" icon="key">
     Instead of a shared key or RBAC access, every developer gets their own APIM subscription key. Usage is attributed per person. Keys can be rotated or revoked per person without affecting anyone else.
   </Card>
-  <Card title="Entra-synced provisioning" icon="setting">
-    When a developer joins a FoundryGate-linked Entra group, they're automatically provisioned: user record created, key issued, quota resolved. When they leave, the key is revoked. No manual admin work.
+  <Card title="Entra-synced access" icon="setting">
+    Access follows your directory. Being given access to FoundryGate in Entra is what creates a developer's account and issues their key; losing it is what revokes them. Team groups are synced separately — moving somebody into a team's Entra group moves their budget to that team's, without anyone editing a spreadsheet.
   </Card>
   <Card title="Self-service for developers" icon="list-format">
     Developers sign in with their Entra account, see their current quota and usage, rotate their own key, and request a quota increase with a justification — all without contacting IT.
@@ -62,8 +62,9 @@ That works fine when you have three engineers sharing a dev environment. It brea
 | Individual API keys | ❌ Shared key or RBAC | ✅ One APIM subscription per developer |
 | Hard quota enforcement | ❌ No blocking mechanism | ✅ Real-time `403` at the gateway when the monthly budget is spent |
 | Per-developer burst control | ❌ One developer can saturate the deployment | ✅ Per-developer TPM cap → targeted `429 + Retry-After` |
-| Entra-based auto-provisioning | ❌ Manual RBAC assignment | ✅ Group sync → key + quota |
-| Automatic deprovisioning | ❌ Manual RBAC removal | ✅ Departure detected → key deleted |
+| Entra-based auto-provisioning | ❌ Manual RBAC assignment | ✅ Assigned in Entra → account + key |
+| Team budgets from the directory | ❌ Nothing to sync | ✅ Entra group membership → that team's budget tier |
+| Automatic deprovisioning | ❌ Manual RBAC removal | ✅ Access removed in Entra → key deleted |
 | Monthly reset | ❌ Manual | ✅ Azure Function fires at 00:01 UTC on the 1st |
 | Quota increase workflow | ❌ None | ✅ Submit → admin approves → quota applied |
 | Per-developer usage visibility | ❌ Aggregate only | ✅ Dashboard + audit log per user |
@@ -195,7 +196,12 @@ FoundryGate sets up the gateway (Azure API Management) and the AI model deployme
 **Two separate layers.** FoundryGate's per-developer budgets and caps ride on top of Microsoft Foundry's own deployment-level rate pools (requests per minute, uncached-input tokens per minute, output tokens per minute for Claude), which are shared across all callers. FoundryGate *mitigates* saturation — per-developer caps keep any one person from exhausting the pool, and multi-deployment backend pools reroute around 429s — but it cannot manufacture capacity beyond the platform's ceilings. See [Azure AI Foundry Rate Limits](/foundry-gate/reference/azure-rate-limits/) for the current numbers and [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) for how the mitigation works.
 </Aside>
 
-**Entra sync**: FoundryGate reads your Entra directory through the Microsoft Graph API using the app's own identity — no passwords or secrets to manage. Developers in a linked Entra group are auto-provisioned. Developers who leave the group are auto-deprovisioned. The sync runs on demand or can be triggered automatically.
+**Entra sync**: FoundryGate reads your Entra directory through the Microsoft Graph API using the app's own identity — no passwords or secrets to manage. There are two separate syncs, and it is worth keeping them apart:
+
+- **Who has an account.** Whoever is given access to FoundryGate in Entra gets a FoundryGate user record, and a key on their first sign-in. Take that access away and they are deactivated and their key is deleted. This is joining and leaving the company, or the project.
+- **Which team's budget they get.** A FoundryGate team can be linked to an Entra group; syncing it copies that group's membership across, so people land on the right team's budget tier without an admin editing anything. Moving somebody between teams only changes the size of their budget — it never creates or closes their account, and never touches their key.
+
+Both syncs run on demand and are safe to repeat; running one twice with nothing changed in the directory does nothing the second time.
 
 <Aside type="tip">
 FoundryGate is open-source and designed to be forked. Everything it creates — the gateway, the model deployments, its own database — lives in **your** Azure subscription, and sign-in uses **your** Entra tenant. No data leaves your Azure subscription.

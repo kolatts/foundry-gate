@@ -191,8 +191,8 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
 **APIM returns 401 on first AI call**  
 Check that the `foundrygate` product is published and your APIM subscription is in `active` state. Run `GET /keys/me` to confirm the key was provisioned.
 
-**`POST /users/sync` returns 400**  
-`Entra__Enabled` is still `false` on the API — the response says so. Turn it on once the Graph roles below are granted.
+**`POST /users/sync` or `POST /groups/{id}/sync-entra` returns 503**  
+`Entra__Enabled` is still `false` on the API — the response says so, and names the Graph roles. Turn it on once the roles below are granted. (It is a 503 rather than a 400 because nothing is wrong with the request: the host has not been configured for the feature.)
 
 **`POST /users/sync` fails with 500 (`Authorization_RequestDenied` in the API logs)**  
 The API's managed identity (`id-foundrygate-api-{env}`) is missing one of the Graph application roles `Application.Read.All`, `User.Read.All`, `GroupMember.ReadBasic.All`. Grant them as app-role assignments on the Microsoft Graph service principal (see [#120](https://github.com/kolatts/foundry-gate/issues/120)); no restart is needed.
