@@ -116,9 +116,11 @@ public record UpdateUserQuotaRequest
 /// <param name="UpdatedCount">Users present in both whose directory fields and <c>LastSyncedDate</c> were refreshed (counted whether or not a field changed).</param>
 /// <param name="DeactivatedCount">Previously active users no longer assigned in Entra that were set <c>IsActive = false</c>. Always <c>0</c> when <paramref name="SkippedGroupAssignmentCount"/> is non-zero.</param>
 /// <param name="SkippedGroupAssignmentCount">
-/// App-role assignments on the FoundryGate application whose principal is a <em>group</em>. Their members are
-/// not expanded yet (#121), so the sync cannot tell a departed user from one covered by such a group — when this
-/// is non-zero, departure detection is suspended for the run: nobody is deactivated, adds/updates still happen.
+/// Group-principal app-role assignments whose member expansion <em>failed</em> this run (Graph refused, or the
+/// group no longer exists). Groups are expanded to their transitive user members normally (#121), so this is
+/// <c>0</c> on a healthy run even when every developer is assigned through a group. Non-zero means the run saw
+/// only part of the population, so departure detection is suspended for it: nobody is deactivated, adds/updates
+/// still happen, and the offending groups are named in the log and the <c>users.synced</c> audit row.
 /// </param>
 /// <param name="FailedCount">
 /// Departed users whose deprovision could not be completed because the gateway refused the deletion

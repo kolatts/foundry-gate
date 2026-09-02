@@ -7,7 +7,7 @@ namespace FoundryGate.Domain.Constants;
 /// read a per-developer budget. Each tier is a product carrying its own rendered
 /// <c>llm-token-limit</c> policy, and the control plane sets a developer's quota by issuing their
 /// APIM subscription against the matching tier product (#82). Supersedes the single-product model
-/// behind <see cref="SystemConfigurationKeys.ApimProductId"/>.
+/// behind the retired <c>ApimProductId</c> configuration key (#164).
 /// </summary>
 /// <remarks>
 /// These values MUST match the <c>name</c> of each entry in <c>infra/main.bicep</c>'s

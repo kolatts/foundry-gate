@@ -25,12 +25,15 @@ public interface IEntraUserSyncService
     /// <c>IsActive = false</c>, current allocation hard-stopped, pending increase requests rejected.
     /// Rows are never deleted (audit history). Users already inactive are not counted or touched again.</item>
     /// </list>
-    /// <b>Group-assigned access suspends departure detection.</b> Until #121 expands group-principal
-    /// app-role assignments to their members, a user who is assigned through a group is invisible to
-    /// the sync, so "absent from the user list" cannot mean "departed". When the directory reports one
-    /// or more such assignments the deactivation step is skipped entirely (<c>DeactivatedCount = 0</c>),
-    /// adds and updates still happen, the groups are named in a warning log and in the audit row, and
-    /// <c>UserSyncResult.SkippedGroupAssignmentCount</c> tells the admin why nobody was deactivated.
+    /// <b>Group-principal assignments are expanded, and only a failed expansion suspends departure
+    /// detection</b> (#121). An app-role assignment granted to a security group — the common
+    /// enterprise pattern — is flattened to its transitive user members and merged with the direct
+    /// assignees, so a group-assigned tenant gets full add/update/departure semantics. A group the run
+    /// could <em>not</em> read (Graph refused, or the group is gone) leaves a partial view of the
+    /// population, so for that run the deactivation step is skipped entirely
+    /// (<c>DeactivatedCount = 0</c>), adds and updates still happen, the groups are named in a warning
+    /// log and in the audit row, and <c>UserSyncResult.SkippedGroupAssignmentCount</c> tells the admin
+    /// why nobody was deactivated.
     /// </summary>
     /// <remarks>
     /// <b>Atomicity</b>: the whole run — adds, updates, every departure's deprovision, and the single

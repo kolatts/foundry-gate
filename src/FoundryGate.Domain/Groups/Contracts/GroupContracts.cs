@@ -129,4 +129,29 @@ public record GroupQuery(string? Search);
 /// picked up by <c>POST /users/sync</c>). They are skipped, never invented — but counted and logged
 /// at Warning, so "the group looks short" has a number attached instead of being silent.
 /// </param>
-public record GroupSyncResult(int GroupId, int AddedCount, int RemovedCount, int SkippedUnknownUserCount);
+/// <param name="Succeeded">
+/// <see langword="false"/> only in a <c>POST /groups/sync-entra</c> summary, for a group whose
+/// reconciliation threw: that group is left exactly as it was and the counts are all <c>0</c>. A
+/// single-group <c>POST /groups/{id}/sync-entra</c> never returns this — its failure is the HTTP
+/// status.
+/// </param>
+/// <param name="Error">
+/// The failure's message when <paramref name="Succeeded"/> is <see langword="false"/>, so the admin
+/// can tell "Graph refused this group" from "this group is not linked" without reading the API log;
+/// <see langword="null"/> otherwise.
+/// </param>
+/// <param name="ErrorType">
+/// <em>Which kind</em> of failure, which is the part that decides what a person has to do:
+/// <see cref="GroupSyncErrorType.GraphRead"/> means nothing was applied anywhere and re-running is
+/// enough, <see cref="GroupSyncErrorType.PostCommit"/> means the gateway accepted a tier move that
+/// the database then failed to record. A UI must not render the two the same way.
+/// <see cref="GroupSyncErrorType.None"/> when the group succeeded.
+/// </param>
+public record GroupSyncResult(
+    int GroupId,
+    int AddedCount,
+    int RemovedCount,
+    int SkippedUnknownUserCount,
+    bool Succeeded = true,
+    string? Error = null,
+    GroupSyncErrorType ErrorType = GroupSyncErrorType.None);

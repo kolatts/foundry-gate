@@ -82,7 +82,9 @@ product, delete the old one, and hand the developer a new key (audited `key.rota
 
 `POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned run the **same deprovision pipeline as `POST /users/{id}/deactivate`** — APIM subscription deleted, `isActive = false`, allocation hard-stopped, pending requests rejected — so a departed employee never keeps a working gateway key. Rows are never deleted and never auto-reactivated if the person later returns; an admin must re-activate them. Each departure is its own unit of work: one that the gateway refuses is counted in `failedCount`, logged, and skipped — the rest of the run still lands and the next run retries it, so a single bad ARM call can never undo deletions that already succeeded. Adds and updates then commit together with one `users.synced` audit row attributed to the caller; each departure writes system-attributed `user.deactivated` / `key.revoked` rows of its own.
 
-**Group-assigned access suspends departure detection.** Only *user* assignees are read today; an app-role assignment granted to a *group* is not expanded to its members yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Because a user assigned through such a group is invisible to the sync, "not in the user list" cannot mean "departed" — so when the directory reports one or more group assignments the run still adds and updates users but deactivates nobody, returns `deactivatedCount: 0` with `skippedGroupAssignmentCount > 0`, names the groups in a warning log and in the audit row (`departureDetectionSuspended: true`). Assign developers individually to the application if you need departure detection before #121 lands.
+**Group-assigned access is expanded.** An app-role assignment granted to a *group* — the common enterprise pattern of assigning `SG_AI_Developers` to the FoundryGate enterprise application — is flattened to that group's **transitive** user members (nested groups included) and merged with the directly assigned users, de-duplicated, before any of the reconciliation above runs ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Assigning developers through a group is a first-class configuration: adds, updates and departures all work.
+
+**Only a group the run could not read suspends departure detection.** If the API cannot read one of those groups — Graph refuses it (a missing `GroupMember.ReadBasic.All`, or a group that has been deleted), or Graph is briefly unreachable and the SDK's retries are exhausted — the run has seen only part of the population, so "not in the user list" cannot mean "departed". For that run the deactivation step is skipped entirely: users are still added and updated, `deactivatedCount` is `0`, `skippedGroupAssignmentCount` counts the unreadable groups, and they are named in a warning log and in the audit row (`departureDetectionSuspended: true`). Grant the role (or unassign the deleted group) and the next run deactivates normally. On a healthy tenant `skippedGroupAssignmentCount` is always `0`.
 
 Errors: `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role), `503` when `Entra:Enabled` is false on the host (the message names the setting and the Graph roles to grant — the request is fine, the host is not configured for the feature).
 
@@ -103,7 +105,7 @@ product their key is scoped to. Every route is admin-only.
 | `POST` | `/groups/{id}/members` | Admin | Add a user by `{ "userId": n }`. Returns the new membership |
 | `DELETE` | `/groups/{id}/members/{userId}` | Admin | Remove a membership (`204`) |
 | `POST` | `/groups/{id}/sync-entra` | Admin | Reconcile one group against its linked Entra group |
-| `POST` | `/groups/sync-entra` | Admin | Reconcile every Entra-linked group; one summary each |
+| `POST` | `/groups/sync-entra` | Admin | Reconcile every Entra-linked group; one summary each, including for a group that failed |
 
 **Quota values are tiers.** `monthlyTokenQuota` on create and update must be `null` (unlimited) or
 exactly one configured tier cap, or the request is `400` listing the allowed values — the same rule
@@ -146,7 +148,10 @@ the group id as `targetId`.
 
 `POST /groups/{id}/sync-entra` pulls the linked Entra group's membership (transitively, so nested
 groups flatten to their people) and reconciles it. Idempotent: a second run with an unchanged directory
-reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserCount }`.
+reports zeros. Returns
+`{ groupId, addedCount, removedCount, skippedUnknownUserCount, succeeded, error, errorType }` —
+`succeeded` is always `true` here (and `errorType` `"None"`), because a single-group failure is the
+HTTP status. They are only ever otherwise inside a `POST /groups/sync-entra` summary (see below).
 
 - Directory members missing from this group are added with **`addedByUserId: null`** — the system
   actor. The directory chose the membership, not the calling admin, and the audit trail should not
@@ -160,7 +165,30 @@ reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserC
   Power product by the time the response returns.
 
 `POST /groups/sync-entra` does the same for every group that has an `entraGroupId`, one unit of work
-each, in group-id order; groups with no link are skipped and do not appear in the result.
+each, in group-id order; groups with no link are skipped and do not appear in the result. The `Users`
+table is read **once for the whole run**, not once per group — nothing in this path creates a user, so
+one snapshot is both cheaper and correct.
+
+**One group's failure does not end the run.** A group whose reconciliation throws is left as it was,
+the loop continues, and its summary carries `"succeeded": false` with the failure's message in
+`"error"` and zeroes everywhere else; every other group reports its real counts. The call is still a
+`200`, because "three of five groups reconciled and here is what went wrong with the other two" is a
+more useful answer than a `500` that says nothing. Single-group `POST /groups/{id}/sync-entra` is
+unchanged: its failure is the HTTP status, and it never returns `succeeded: false`.
+
+**`errorType` says what a person has to do about it, and the two values are not interchangeable:**
+
+| `errorType` | What happened | What to do |
+|---|---|---|
+| `"GraphRead"` | The read failed *before* anything outside the database was touched — Graph refused the group, or it no longer exists. Nothing was applied anywhere and the group's staged changes were discarded, so they cannot ride along on the next group's save. Logged at Warning | Fix the cause and re-run. The sync is idempotent, so that is sufficient |
+| `"PostCommit"` | The APIM tier move for a member was **accepted** and the database write recording it then failed — twice, since the save is retried once on a fresh token with the pending rows still tracked. The gateway and the control plane disagree: someone is on a product their `QuotaAllocation` row does not name. Logged at **Error** with the group's full identity, plus an Error summary line for the run | Re-run to converge the database, and treat that group's reported state as untrustworthy until you have. This is the case CONVENTIONS.md's commit-point rule exists for |
+
+A UI must render the two differently — "try again" is the right advice for one and actively
+misleading for the other.
+
+The one exception to per-group isolation is `Entra:Enabled` being false on the host: that is not a
+property of any one group — every group would carry the same message — so it stays a whole-response
+`503`.
 
 Errors: `400` when the group has no `entraGroupId` (a real caller error — this group has nothing to
 sync against); `404` for an unknown group; `503` when `Entra:Enabled` is false on the host — the
@@ -346,18 +374,15 @@ for one that does not (a quota, a reset day and a feature flag have no empty for
 | `DefaultMonthlyTokenQuota` | A non-negative whole number that is exactly one of the configured tier caps (`Gateway:Tiers`; `GET /quota/tiers` lists them). Same D-013 rule as every other quota write path — the gateway enforces a tier, not a number. Unlimited is not expressible fork-wide: it is set per user or per group |
 | `ResetDayOfMonth` | A whole number from 1 to 28 (28 is the last day every month has) |
 | `EntraGroupSyncEnabled` | `true` or `false` |
-| `ApimGatewayUrl` | An absolute `https` URL, or empty |
 | `ApimResourceId`, `FoundryResourceId` | An ARM resource id (`/subscriptions/{id}/resourceGroups/{group}/providers/{namespace}/{type}/{name}`), or empty. Shape only — whether the resource exists is Azure's answer, reported as `503` by the endpoints that use it |
 | Any other row a fork operator added | Free text, up to 4000 characters |
 
-Two seeded keys are **read-only (`409`)**, because editing them would be a silent no-op. They stay
-in the table only so re-seeding is idempotent, and the refusal names the replacement:
-
-- `ApimProductId` — quota tiers are APIM *products* now, so a developer's subscription is issued
-  against the product for their tier (`Gateway:Tiers` in the API, `quotaTiers` in `infra/main.bicep`),
-  not against one fork-wide product id.
-- `EntraTenantId` — Graph access is configured by the `Entra` options section over the host's
-  `AzureAd:TenantId` ([#123](https://github.com/kolatts/foundry-gate/issues/123)).
+Three keys that earlier versions seeded — `ApimGatewayUrl`, `ApimProductId`, `EntraTenantId` — are
+**retired** ([#164](https://github.com/kolatts/foundry-gate/issues/164),
+[#123](https://github.com/kolatts/foundry-gate/issues/123)). Nothing read them, so they briefly
+answered `409 read-only`; now the rows are gone entirely (the next `db seed-reference` deletes them),
+`GET /config` does not list them, and `PUT` on one is the ordinary `404`. What replaced each is in the
+[Configuration Reference](/foundry-gate/reference/configuration/#retired-keys).
 
 Every accepted edit stamps `updatedByUserId` (the calling admin) and `updatedDate`, and writes one
 `config.updated` audit row with `{ key, before, after }` — in the same transaction as the change, so
