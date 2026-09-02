@@ -1,4 +1,5 @@
 using FoundryGate.Domain.Config.Contracts;
+using FoundryGate.Domain.Exceptions;
 
 namespace FoundryGate.Api.Services.Config;
 
@@ -24,7 +25,10 @@ public interface IConfigService
     /// <c>config.updated</c> audit row (details <c>{ key, before, after }</c>) in the same save.
     /// </summary>
     /// <param name="key">The configuration key; matched case-insensitively, as SQL Server's default collation would.</param>
-    /// <param name="request">The new value. Validated and normalized per key before it is stored.</param>
+    /// <param name="request">
+    /// The new value, validated and normalized per key before it is stored, plus the optional
+    /// <c>ExpectedUpdatedDate</c> concurrency check (#170).
+    /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The row as it now stands.</returns>
     /// <exception cref="KeyNotFoundException">
@@ -32,6 +36,12 @@ public interface IConfigService
     /// so there is nothing to distinguish it from a typo.
     /// </exception>
     /// <exception cref="ArgumentException">The value breaks the key's rule (→ 400); the message states the rule.</exception>
+    /// <exception cref="ConflictException">
+    /// <c>ExpectedUpdatedDate</c> was supplied and does not match the stored row (→ 409): another admin
+    /// wrote the key first. The message carries the row's current value, its timestamp and — when it has
+    /// one — the editor's display name, so the caller can re-decide without another round trip. Checked
+    /// before the value is validated: a stale view has to be refreshed whatever it was trying to write.
+    /// </exception>
     /// <exception cref="UnauthorizedAccessException">The calling admin has no <c>User</c> row yet (→ 403; call <c>GET /users/me</c> first).</exception>
     Task<SystemConfigEntryResponse> UpdateAsync(string key, UpdateSystemConfigRequest request, CancellationToken cancellationToken);
 }

@@ -376,13 +376,13 @@ Rules the mutation paths enforce (CLAUDE.md "Anthropic deployments are create-on
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/config` | Admin | Every `SystemConfiguration` key, ordered by key: `{ key, value, updatedDate, updatedByUserId, updatedByDisplayName }`. The last two are `null` for a seeded key no admin has edited |
-| `PUT` | `/config/{key}` | Admin | Set one key's value. Returns the row as it now stands |
+| `PUT` | `/config/{key}` | Admin | Set one key's value. Returns the row as it now stands. Optional `expectedUpdatedDate` makes the write conditional (`409` if someone else got there first) |
 | `GET` | `/audit` | Admin | Audit log, paged. Filter: `?actor=&action=&from=&to=` |
 | `GET` | `/dashboard` | Admin | Summary stats for the dashboard. `?fresh=true` bypasses the 30-second cache |
 
 ### `PUT /config/{key}`
 
-Body: `{ "value": "..." }`. The key is matched case-insensitively; an unknown one is `404`. The
+Body: `{ "value": "...", "expectedUpdatedDate": "..." }` (the second field optional). The key is matched case-insensitively; an unknown one is `404`. The
 value is validated **per key** before it is stored — a configuration editor that accepts a value
 the system cannot use only moves the failure somewhere harder to find — and stored **normalized**
 (trimmed, booleans lower-cased, URLs and resource ids without a trailing slash), so two admins
@@ -406,6 +406,16 @@ Three keys that earlier versions seeded — `ApimGatewayUrl`, `ApimProductId`, `
 answered `409 read-only`; now the rows are gone entirely (the next `db seed-reference` deletes them),
 `GET /config` does not list them, and `PUT` on one is the ordinary `404`. What replaced each is in the
 [Configuration Reference](/foundry-gate/reference/configuration/#retired-keys).
+
+**Optimistic concurrency is opt-in per request.** Send back the `updatedDate` you read from
+`GET /config` as `expectedUpdatedDate` and the write is refused with `409` if anyone has changed the
+row since — the `detail` names the value it holds now, when it changed and, when the row has an
+editor, who they were, so a config page can say "Ada Lovelace changed this while you were editing"
+without another round trip. Omit the field and the write is last-write-wins, exactly as before
+([#170](https://github.com/kolatts/foundry-gate/issues/170)). The check runs *before* the per-key
+value rule, so a stale write with a bad value is the `409`, not the `400`: a caller whose view of the
+row is out of date has to re-read it whatever they were trying to write. The timestamp is compared as
+an instant, so a client that normalizes to UTC still matches.
 
 Every accepted edit stamps `updatedByUserId` (the calling admin) and `updatedDate`, and writes one
 `config.updated` audit row with `{ key, before, after }` — in the same transaction as the change, so
