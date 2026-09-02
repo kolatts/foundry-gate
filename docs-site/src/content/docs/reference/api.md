@@ -17,6 +17,10 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 | `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription, hard-stops the allocation, rejects pending requests |
 | `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount, skippedGroupAssignmentCount, failedCount }` |
 
+Every user shape carries three dates that are easy to confuse: `createdDate` (the row was made),
+`lastSyncedDate` (an Entra sync last touched it) and `lastLoginDate` (the person last loaded their own
+profile; `null` means they have never signed in — the signal an offboarding sweep wants).
+
 ### `GET /users/me` — first login provisions everything
 
 A developer's first call creates their whole footprint in **one transaction**: the `User` row (from
@@ -25,9 +29,14 @@ the current month, and their APIM subscription under the tier that allocation re
 gateway refuses the subscription, nothing is written — no half-provisioned user, no `502` with a row
 left behind. Later calls are idempotent and, in the common case, **read-only**: display name and
 email are written back only when the token actually disagrees with the stored values. `lastSyncedDate`
-is *not* touched — it means "an Entra sync last saw this user", and a profile load is not a sync; the
-honest "this account is in use" column is tracked in
-[#167](https://github.com/kolatts/foundry-gate/issues/167).
+is *not* touched — it means "an Entra sync last saw this user", and a profile load is not a sync.
+
+The honest "this account is in use" column is **`lastLoginDate`**: null until the person's first
+profile load, then stamped — but only when the stored value is already more than **15 minutes** old,
+so a UI that reloads the profile on every navigation does not turn each read into an `UPDATE` on
+`Users`. It is therefore accurate to within that window, never to the second, which is all an
+offboarding or licence review needs. It appears on every user shape `GET /users` and `GET /users/{id}`
+return.
 
 The response carries `quota` (the same shape as `/quota/allocations/me`), `apiKey` (masked to the
 last four characters — the plaintext only ever comes from `/keys/*`), and `cliConfig`:
@@ -37,9 +46,17 @@ always empty, because the alias map lives only in the gateway's Bicep
 ([#153](https://github.com/kolatts/foundry-gate/issues/153)); use
 [CLI setup](/foundry-gate/getting-started/cli-setup/) for model names until it lands.
 
-Errors: `403` when the caller's account is deactivated, `409` when two first logins for the same
-identity race (retry — [#154](https://github.com/kolatts/foundry-gate/issues/154) will absorb it),
-`502` when the gateway or Graph failed, `503` when APIM key management is not configured on the host.
+**Two tabs are not an error.** When two first logins for the same identity arrive together, both find
+no row and both provision; `Users.EntraObjectId` is unique, so the loser's insert fails, its whole
+transaction rolls back (no orphan row, no orphan allocation) and it then **returns the winner's
+profile with a `200`** — the developer never sees the race. Only the unique-index collision is
+absorbed: any other failed save still surfaces, and calling the first-login provision for an identity
+that already had a row remains a `409`, because that one is a programming error rather than a race.
+The loser does still wait out the winner's gateway round trip, because the provision pipeline holds
+its transaction across it.
+
+Errors: `403` when the caller's account is deactivated, `502` when the gateway or Graph failed, `503`
+when APIM key management is not configured on the host.
 
 ### Deactivate and activate are the lifecycle pipelines
 
@@ -290,13 +307,17 @@ transitions whose body is not the resource, matching `POST /users/{id}/activate`
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/keys/me` | Any | Own key info (masked, last 4 visible; `isProvisioned: false` when none). Served from a stored hint — no decryption |
-| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. `404` when no key |
-| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. `404` no key; `409` if the APIM subscription vanished |
+| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. Rate-limited: **5 per minute per user**. `404` when no key; `429` over the limit |
+| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. Rate-limited: **3 per minute per user**. `404` no key; `409` if the APIM subscription vanished; `429` over the limit |
 | `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key (same semantics) |
 | `POST` | `/keys/{userId}/provision` | Admin | Provision a key for an active user with none, under the tier **their quota resolves to** (no `?tier=`: a budget *is* a tier, so set the quota to change the product). Returns plaintext once. `409` key exists or user deactivated; reuses an orphaned APIM subscription with fresh keys |
 | `DELETE` | `/keys/{userId}` | Admin | Revoke key only: APIM subscription deleted, stored key cleared, `key.revoked` audited. **User stays active** and can be re-provisioned; `204` even when no key existed. Deactivation is `POST /users/{id}/deactivate` |
 
-Callers of every `/keys/me` route must already have a FoundryGate user row (`GET /users/me` provisions one) — otherwise `403`. The plaintext key is stored encrypted (Key Vault RSA key wrapping; see [Configuration](/reference/configuration/)) and appears in exactly one response per mint or reveal. Reveal is not yet rate-limited (tracked in #136). Provisioning is race-safe: two concurrent `provision` calls for one user cannot both mint — the second gets `409`.
+Callers of every `/keys/me` route must already have a FoundryGate user row (`GET /users/me` provisions one) — otherwise `403`. The plaintext key is stored encrypted (Key Vault RSA key wrapping; see [Configuration](/reference/configuration/)) and appears in exactly one response per mint or reveal. Provisioning is race-safe: two concurrent `provision` calls for one user cannot both mint — the second gets `409`.
+
+**Rate limits on the `/me` routes.** Reveal hands back the plaintext credential and rotate mints a new one, so a leaked bearer token could otherwise replay either indefinitely with nothing to show for it but a growing run of `key.revealed` audit rows. Both are capped per **caller identity** (the token's `oid`, not the caller's IP address — the UI sits behind a shared egress, so an address limit would throttle a whole office or nobody): 5 reveals and 3 rotations per minute. Over the limit is a `429` with a `Retry-After` header and the usual ProblemDetails body. The admin routes (`/keys/{userId}/rotate`, `/keys/{userId}/provision`, `DELETE /keys/{userId}`) are deliberately uncapped: an admin rotating a compromised team's keys is exactly the traffic a limit would get in the way of, and none of them discloses the caller's own credential.
+
+**Rotation is committed once APIM has regenerated.** The developer's old key is dead the instant the gateway accepts the regeneration, so everything after that point — reading the new key back, storing it, the `key.rotated` audit row — completes even if the client disconnects. A rotation that fails after that point restores the previous stored values, logs at Error and writes a `key.rotation-failed` row naming the remedy (rotate again, or revoke and re-provision), rather than leaving a key nobody can decrypt.
 
 ## Foundry
 
