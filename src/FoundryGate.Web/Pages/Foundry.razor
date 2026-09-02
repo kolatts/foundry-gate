@@ -1,0 +1,232 @@
+@page "/foundry"
+@attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Foundry deployments — Foundry Gate</PageTitle>
+
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <div class="d-flex align-center justify-space-between mb-1">
+        <MudText Typo="Typo.h4">Foundry deployments</MudText>
+        <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                       Disabled="@_loading"
+                       OnClick="@LoadAsync"
+                       aria-label="Refresh"
+                       data-testid="foundry-refresh" />
+    </div>
+    <MudText Typo="Typo.body1" Class="mud-text-secondary mb-4" Style="max-width: 48rem;">
+        Every model deployment across the configured Foundry accounts — one account per region.
+        Capacity is thousands of tokens per minute. A deployment reaches developers through the
+        gateway only once it is in the right backend pool
+        (<MudLink Href="https://github.com/kolatts/foundry-gate/issues/83" Target="_blank">#83</MudLink>).
+    </MudText>
+
+    @if (_loading && _deployments is null)
+    {
+        <MudSkeleton Width="100%" Height="3rem" data-testid="foundry-loading" />
+        <MudSkeleton Width="100%" Height="12rem" Class="mt-2" />
+    }
+    else if (_unavailable is { } unavailable)
+    {
+        <MudAlert Severity="Severity.Error" data-testid="foundry-error">@unavailable</MudAlert>
+    }
+    else
+    {
+        <MudDataGrid T="FoundryDeploymentResponse"
+                     Items="@(_deployments ?? [])"
+                     Loading="@_loading"
+                     Hover="true"
+                     Dense="true"
+                     Elevation="1"
+                     data-testid="foundry-grid">
+            <Columns>
+                <PropertyColumn Property="@(d => d.AccountName)" Title="Account" />
+                <PropertyColumn Property="@(d => d.DeploymentName)" Title="Deployment" />
+                <PropertyColumn Property="@(d => d.ModelName)" Title="Model" />
+                <PropertyColumn Property="@(d => d.ModelVersion)" Title="Version" />
+                <PropertyColumn Property="@(d => d.SkuName)" Title="SKU" />
+                <TemplateColumn Title="Capacity">
+                    <CellTemplate>
+                        @(context.Item.Capacity is { } capacity ? $"{capacity:N0}K TPM" : "—")
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="State">
+                    <CellTemplate>
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Variant="Variant.Filled"
+                                 Color="@StateColor(context.Item.ProvisioningState)"
+                                 data-testid="@($"foundry-state-{context.Item.DeploymentName}")">
+                            @context.Item.ProvisioningState
+                        </MudChip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="" Sortable="false">
+                    <CellTemplate>
+                        @if (IsAnthropic(context.Item))
+                        {
+                            <MudTooltip Text="Claude deployments are managed by infra — the API refuses to delete one.">
+                                <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                               Size="Size.Small"
+                                               Disabled="true"
+                                               aria-label="Delete (managed by infra)"
+                                               data-testid="@($"foundry-delete-{context.Item.DeploymentName}")" />
+                            </MudTooltip>
+                        }
+                        else
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                           Color="Color.Error"
+                                           Size="Size.Small"
+                                           Disabled="@_busy"
+                                           OnClick="@(() => DeleteAsync(context.Item))"
+                                           aria-label="Delete deployment"
+                                           data-testid="@($"foundry-delete-{context.Item.DeploymentName}")" />
+                        }
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <NoRecordsContent>
+                <MudText Class="pa-6 mud-text-secondary" data-testid="foundry-empty">
+                    No deployments in the configured accounts.
+                </MudText>
+            </NoRecordsContent>
+        </MudDataGrid>
+
+        <MudFab Color="Color.Primary"
+                StartIcon="@Icons.Material.Filled.Add"
+                Label="New deployment"
+                Disabled="@_busy"
+                OnClick="@CreateAsync"
+                Class="mt-6"
+                data-testid="foundry-new" />
+    }
+}
+
+@code {
+    private IReadOnlyList<FoundryDeploymentResponse>? _deployments;
+    private string? _unavailable;
+    private bool _loading;
+    private bool _busy;
+    private bool _accessDenied;
+
+    private static bool IsAnthropic(FoundryDeploymentResponse deployment) =>
+        string.Equals(deployment.ModelFormat, nameof(FoundryModelFormatType.Anthropic), StringComparison.OrdinalIgnoreCase);
+
+    private IReadOnlyList<string> KnownAccounts =>
+        _deployments?.Select(d => d.AccountName).Distinct(StringComparer.OrdinalIgnoreCase).Order().ToList() ?? [];
+
+    private static Color StateColor(string provisioningState) => provisioningState switch
+    {
+        "Succeeded" => Color.Success,
+        "Creating" or "Accepted" or "Updating" or "Deleting" => Color.Warning,
+        "Failed" or "Canceled" => Color.Error,
+        _ => Color.Default,
+    };
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.GetFoundryDeploymentsAsync();
+
+            if (result.Status == ApiCallStatus.Forbidden)
+            {
+                _accessDenied = true;
+                return;
+            }
+
+            if (!result.IsSuccess || result.Value is null)
+            {
+                // A 503 here means the Gateway section names an account Azure doesn't have, or
+                // names none at all — an operator fixes that from the message, so show it whole
+                // rather than reducing it to "something went wrong".
+                _unavailable = result.Message ?? "Couldn't reach the Foundry accounts.";
+                return;
+            }
+
+            _unavailable = null;
+            _deployments = result.Value;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task CreateAsync()
+    {
+        var parameters = new DialogParameters<FoundryDeploymentDialog> { { x => x.KnownAccounts, KnownAccounts } };
+        var dialog = await DialogService.ShowAsync<FoundryDeploymentDialog>("New deployment", parameters);
+        var dialogResult = await dialog.Result;
+
+        if (dialogResult is not { Canceled: false, Data: CreateFoundryDeploymentRequest request })
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Api.CreateFoundryDeploymentAsync(request);
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "Couldn't create the deployment.", Severity.Error);
+                return;
+            }
+
+            // ARM accepts the create and provisions asynchronously, so the row lands as Creating.
+            Snackbar.Add($"'{result.Value.DeploymentName}' is provisioning — refresh to watch its state.", Severity.Success);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DeleteAsync(FoundryDeploymentResponse deployment)
+    {
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message, $"Delete {deployment.AccountName}/{deployment.DeploymentName}?" },
+            { x => x.Detail, "Calls naming this deployment start failing as soon as ARM finishes. Nothing recreates it — you'd add it again by hand." },
+            { x => x.ConfirmText, "Delete" },
+            { x => x.ConfirmColor, Color.Error },
+        };
+
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Delete deployment", parameters);
+        var confirmation = await dialog.Result;
+        if (confirmation is not { Canceled: false })
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var result = await Api.DeleteFoundryDeploymentAsync(deployment.AccountName, deployment.DeploymentName);
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Message ?? "Couldn't delete the deployment.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"'{deployment.DeploymentName}' deleted.", Severity.Success);
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
