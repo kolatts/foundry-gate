@@ -499,7 +499,7 @@ also unreachable: no gateway means no `ApimSubscriptionId`, and `RevokeKeyAsync`
 before the client is touched. The registration exists so a deliberately gateway-less host starts at
 all; loud-and-unreachable is the right shape for that, and nothing pretends such a host can offboard
 anybody.
-**Caught on the way (2):** the first cut of the Core handler wrote `trigger = nameof(IDepartureHandler)`
+**Caught on the way (2), in review:** the first cut of the Core handler wrote `trigger = nameof(IDepartureHandler)`
 in the `user.deactivated` details where the Api writes `"EntraDeparture"` — so an operator filtering
 `details.trigger == "EntraDeparture"` would have seen every admin-found departure and none of the
 nightly ones. #214 had named exactly this drift as the risk and it happened before the PR merged,
@@ -508,7 +508,7 @@ strings the trail is made of now live in Core's `DepartureAudit` (the Api's cons
 aliases of them, so the compiler enforces two of the three), and `DepartureHandlerParityTests` runs
 both pipelines against one database on one clock and compares the two details objects field for
 field — verified by re-introducing the divergence and watching it fail.
-**Caught on the way:** moving `EntraOptions` to Core removed it from `ValidateRecursively()` on both
+**Caught on the way (1), while moving:** moving `EntraOptions` to Core removed it from `ValidateRecursively()` on both
 hosts — the same silent gap D-014 recorded for `GatewayOptions`, rediscovered because only the Api's
 existing test noticed. `CoreOptionsValidation` now has `ValidateEntra` alongside `ValidateGateway` and
 both hosts yield it. The Graph client also had to stop reading `AzureAd:ClientId` (the Functions host
