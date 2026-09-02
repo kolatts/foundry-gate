@@ -149,7 +149,10 @@ else
 
             if (result.Status == ApiCallStatus.Forbidden)
             {
+                // ServerData is a callback from the grid, not a lifecycle method, so this page
+                // has to ask for its own re-render before AccessDenied replaces the grid.
                 _accessDenied = true;
+                StateHasChanged();
                 return new GridData<UserResponse> { Items = [], TotalItems = 0 };
             }
 

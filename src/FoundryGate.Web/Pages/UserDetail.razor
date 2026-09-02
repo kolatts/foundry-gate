@@ -42,7 +42,9 @@ else
         </MudChip>
     </div>
 
-    <MudTabs Elevation="1" Rounded="true" ApplyEffectsToContainer="true">
+    @* KeepPanelsAlive: the four panels are cheap, and keeping them rendered means a half-filled
+       budget editor survives a tab switch instead of resetting. *@
+    <MudTabs Elevation="1" Rounded="true" ApplyEffectsToContainer="true" KeepPanelsAlive="true">
         <MudTabPanel Text="Overview" Icon="@Icons.Material.Filled.Person">
             <MudSimpleTable Dense="true" Hover="false" Elevation="0" Style="background: transparent;">
                 <tbody>

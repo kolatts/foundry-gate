@@ -2,6 +2,7 @@ using Bunit;
 using Bunit.TestDoubles;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Web.Services;
+using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using MudBlazor;
 using MudBlazor.Services;
@@ -16,13 +17,13 @@ namespace FoundryGate.Tests.Predeployment.Web;
 /// viewport observers don't need a browser.
 /// </summary>
 /// <remarks>
-/// Pages are rendered with <c>RenderPage</c> rather than
-/// <c>RenderComponent</c>: MudBlazor's dialogs and snackbars go through providers that live
-/// outside the page's own render tree, so a test that clicks "Delete" and expects a
-/// confirmation needs those providers in the same renderer. Anything a page shows through
-/// <see cref="IDialogService"/> is therefore findable on the returned root.
+/// Pages are rendered with <c>RenderPage</c> rather than <c>RenderComponent</c>, and it returns
+/// the <em>root</em>: MudBlazor's dialogs render inside <see cref="MudDialogProvider"/>, which
+/// sits beside the page rather than inside it, so a test that clicks "Delete" and expects a
+/// confirmation has to look at the whole tree. <c>root.FindComponent&lt;TPage&gt;()</c> reaches
+/// the page itself when a test needs it.
 /// </remarks>
-public abstract class WebTestContext : BunitContext
+public abstract class WebTestContext : BunitContext, IAsyncLifetime
 {
     protected WebTestContext()
     {
@@ -58,18 +59,18 @@ public abstract class WebTestContext : BunitContext
     protected void SignOut() => Authorization.SetNotAuthorized();
 
     /// <summary>
-    /// Renders a page alongside MudBlazor's dialog, popover and snackbar providers, so dialogs
-    /// the page opens are part of the same render tree and can be found and clicked.
+    /// Renders a page alongside MudBlazor's dialog and popover providers and returns the root, so
+    /// dialogs the page opens are part of the same tree and can be found and clicked.
     /// </summary>
     /// <param name="parameters">Route/component parameters, e.g. the <c>Id</c> of a detail page.</param>
-    protected IRenderedComponent<TPage> RenderPage<TPage>(params (string Name, object? Value)[] parameters)
-        where TPage : Microsoft.AspNetCore.Components.IComponent
+    protected IRenderedComponent<IComponent> RenderPage<TPage>(params (string Name, object? Value)[] parameters)
+        where TPage : IComponent
     {
         ArgumentNullException.ThrowIfNull(parameters);
 
         var attributes = parameters.ToDictionary(p => p.Name, p => p.Value);
 
-        return Render<TPage>(builder =>
+        return Render(builder =>
         {
             builder.OpenComponent<MudPopoverProvider>(0);
             builder.CloseComponent();
@@ -79,5 +80,22 @@ public abstract class WebTestContext : BunitContext
             builder.AddMultipleAttributes(3, attributes!);
             builder.CloseComponent();
         });
+    }
+
+    Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
+
+    /// <summary>
+    /// MudBlazor registers services that only implement <see cref="IAsyncDisposable"/>
+    /// (<c>PointerEventsNoneService</c> among them), and a synchronous container teardown throws
+    /// on those. xUnit disposes an <see cref="IAsyncLifetime"/> test class asynchronously first,
+    /// so the real teardown happens here and <see cref="Dispose(bool)"/> is left with nothing to
+    /// do.
+    /// </summary>
+    async Task IAsyncLifetime.DisposeAsync() => await DisposeAsync();
+
+    /// <inheritdoc />
+    protected override void Dispose(bool disposing)
+    {
+        // Deliberately empty — see IAsyncLifetime.DisposeAsync above.
     }
 }

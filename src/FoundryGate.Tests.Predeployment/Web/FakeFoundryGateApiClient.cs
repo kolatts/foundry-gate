@@ -112,6 +112,63 @@ public sealed class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     public List<(string AccountName, string DeploymentName)> DeletedDeployments { get; } = [];
 
+    // ── Arrange helpers ────────────────────────────────────────────────────────
+
+    /// <summary>The tier catalogue every quota display and editor reads.</summary>
+    public FakeFoundryGateApiClient ArrangeTiers(IReadOnlyList<QuotaTierResponse> tiers)
+    {
+        QuotaTiersResult = Ok(tiers);
+        return this;
+    }
+
+    /// <summary>One full page of users for <c>GET /users</c>.</summary>
+    public FakeFoundryGateApiClient ArrangeUsers(params UserResponse[] users)
+    {
+        ArgumentNullException.ThrowIfNull(users);
+        UsersResult = Ok(new PagedResult<UserResponse>(users, users.Length, 1, 25));
+        return this;
+    }
+
+    /// <summary>One full page of groups for <c>GET /groups</c>.</summary>
+    public FakeFoundryGateApiClient ArrangeGroups(params GroupResponse[] groups)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+        GroupsResult = Ok(new PagedResult<GroupResponse>(groups, groups.Length, 1, 25));
+        return this;
+    }
+
+    /// <summary>A group plus its roster: <c>GET /groups/{id}</c> and <c>GET /groups/{id}/members</c> together.</summary>
+    public FakeFoundryGateApiClient ArrangeGroup(GroupResponse group, params GroupMemberResponse[] members)
+    {
+        ArgumentNullException.ThrowIfNull(members);
+        GroupDetailResult = Ok(new GroupDetailResponse(group, members));
+        GroupMembersResult = Ok(new PagedResult<GroupMemberResponse>(members, members.Length, 1, 25));
+        return this;
+    }
+
+    /// <summary>One full page of quota-increase requests for <c>GET /requests</c>.</summary>
+    public FakeFoundryGateApiClient ArrangeRequests(params QuotaIncreaseRequestResponse[] requests)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        RequestsResult = Ok(new PagedResult<QuotaIncreaseRequestResponse>(requests, requests.Length, 1, 25));
+        return this;
+    }
+
+    /// <summary>What <c>GET /foundry/deployments</c> returns.</summary>
+    public FakeFoundryGateApiClient ArrangeDeployments(params FoundryDeploymentResponse[] deployments)
+    {
+        ArgumentNullException.ThrowIfNull(deployments);
+        FoundryDeploymentsResult = Ok<IReadOnlyList<FoundryDeploymentResponse>>(deployments);
+        return this;
+    }
+
+    /// <summary>Makes every "it worked" mutation fail, so the error path can be exercised.</summary>
+    public FakeFoundryGateApiClient ArrangeMutationFailure(ApiCallStatus status, string message)
+    {
+        MutationResult = ApiCallResult<bool>.Fail(status, message);
+        return this;
+    }
+
     // ── Users ──────────────────────────────────────────────────────────────────
 
     public Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(PagedRequest paging, CancellationToken ct = default) =>
