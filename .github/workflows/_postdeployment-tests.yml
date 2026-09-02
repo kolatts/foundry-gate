@@ -28,6 +28,7 @@ jobs:
   test:
     name: Postdeployment tests (${{ inputs.environment }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:
       id-token: write
@@ -69,7 +70,11 @@ jobs:
           done
           echo "::warning::API did not answer /health with 200 in 5 minutes; running the tests anyway."
 
+      # The tests really run; only the gating is deferred. `continue-on-error` keeps a failure
+      # from failing the chain, and `steps.test.outcome` carries the truth into the summary so
+      # nobody reads "1/1 passed" as "the stack is verified".
       - name: Run postdeployment tests (reporting only — #139 makes this gating)
+        id: test
         continue-on-error: true
         env:
           FG_API_BASE_URL: https://${{ steps.infra.outputs.container-app-fqdn }}
@@ -81,6 +86,11 @@ jobs:
       - name: Summarise
         id: summary
         if: always()
+        env:
+          OUTCOME: ${{ steps.test.outcome }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+          API: https://${{ steps.infra.outputs.container-app-fqdn }}
+          UI: https://${{ steps.infra.outputs.static-web-app-hostname }}
         run: |
           trx=TestResults/postdeployment.trx
           if [ -f "$trx" ]; then
@@ -88,17 +98,23 @@ jobs:
             passed=$(grep -oP 'passed="\K[^"]+' "$trx" | head -1)
             failed=$(grep -oP 'failed="\K[^"]+' "$trx" | head -1)
             summary="${passed:-0}/${total:-0} passed"
-            [ "${failed:-0}" != "0" ] && summary="${summary} (${failed} failed)"
+            [ "${failed:-0}" != "0" ] && summary="${summary}, ${failed} FAILED"
+          elif [ "$OUTCOME" = "success" ]; then
+            summary="ran, but no results file was produced"
           else
-            summary="no results file"
+            summary="dotnet test did not produce results (${OUTCOME})"
           fi
+          # Say what actually happened, including when the step itself failed.
+          summary="${summary} [dotnet test: ${OUTCOME}]"
           echo "summary=${summary}" >> "$GITHUB_OUTPUT"
           {
-            echo "## Postdeployment tests — ${{ inputs.environment }}"
+            echo "## Postdeployment tests — ${TARGET_ENVIRONMENT}"
             echo ""
-            echo "- Result: **${summary}** (not gating yet — #139)"
-            echo "- API: https://${{ steps.infra.outputs.container-app-fqdn }}"
-            echo "- UI: https://${{ steps.infra.outputs.static-web-app-hostname }}"
+            echo "- \`dotnet test\` outcome: **${OUTCOME}**"
+            echo "- Result: **${summary}**"
+            echo "- Coverage today is the scaffold smoke test only, and the result is **not gating** — a green line here does NOT mean the stack is verified (#139)."
+            echo "- API: ${API}"
+            echo "- UI: ${UI}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results

@@ -32,6 +32,7 @@ jobs:
   build:
     name: Build Astro site
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -41,10 +42,6 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: docs-site/package-lock.json
-
-      - name: Configure Pages
-        if: github.event_name != 'pull_request'
-        uses: actions/configure-pages@v5
 
       - name: Install dependencies
         run: npm ci
@@ -62,9 +59,12 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name != 'pull_request'
+    # main only: a dispatch from any branch would otherwise publish that branch to Pages, and
+    # the github-pages Environment uses custom branch policies rather than protected-only.
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       pages: write
       id-token: write
@@ -77,9 +77,11 @@ jobs:
         uses: actions/deploy-pages@v4
 
       - name: Summary
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
         run: |
           {
             echo "## Docs deployed"
             echo ""
-            echo "${{ steps.deployment.outputs.page_url }}"
+            echo "${PAGE_URL}"
           } >> "$GITHUB_STEP_SUMMARY"

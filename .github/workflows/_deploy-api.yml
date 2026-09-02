@@ -42,6 +42,7 @@ jobs:
   build-push:
     name: API - Build and push image (${{ inputs.environment }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:
       id-token: write
@@ -58,27 +59,14 @@ jobs:
         id: version
         uses: ./.github/actions/version
 
-      - name: Build image
-        run: |
-          docker build \
-            --file src/FoundryGate.Api/Dockerfile \
-            --build-arg "VERSION=${{ steps.version.outputs.semver }}" \
-            --build-arg "ASSEMBLY_VERSION=${{ steps.version.outputs.major-minor-patch }}" \
-            --tag "${IMAGE_REPOSITORY}:${{ steps.version.outputs.image-tag }}" \
-            .
-
-      - name: Smoke-test image (/health must answer 200)
-        run: |
-          docker run -d --name api-smoke -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=local "${IMAGE_REPOSITORY}:${{ steps.version.outputs.image-tag }}"
-          for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || true)
-            if [ "$code" = "200" ]; then echo "/health -> 200 after ${i}s"; docker rm -f api-smoke >/dev/null; exit 0; fi
-            sleep 1
-          done
-          echo "::error::/health did not return 200 within 30s"
-          docker logs api-smoke
-          docker rm -f api-smoke >/dev/null
-          exit 1
+      # Shared with api-deploy.yml's PR-only image check: one copy of the build + /health smoke.
+      - name: Build and smoke-test the image
+        uses: ./.github/actions/build-api-image
+        with:
+          image-tag: ${{ steps.version.outputs.image-tag }}
+          version: ${{ steps.version.outputs.semver }}
+          assembly-version: ${{ steps.version.outputs.major-minor-patch }}
+          repository: ${{ env.IMAGE_REPOSITORY }}
 
       - name: Azure login (OIDC)
         uses: ./.github/actions/azure-oidc-login
@@ -119,6 +107,7 @@ jobs:
     name: API - Deploy to Container Apps (${{ inputs.environment }})
     needs: build-push
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     environment:
       name: ${{ inputs.environment }}
       url: ${{ steps.verify.outputs.api-base-url }}
@@ -174,22 +163,28 @@ jobs:
           FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}
           FG_SQL_ADMIN_GROUP_NAME: ${{ vars.FG_SQL_ADMIN_GROUP_NAME }}
         run: |
-          az deployment sub create \
-            --name "$DEPLOYMENT_NAME" \
-            --location "${{ vars.AZURE_LOCATION || 'eastus2' }}" \
-            --template-file infra/main.bicep \
-            --parameters "infra/parameters/${FG_ENV}.bicepparam" \
-            --parameters createModelDeployments=false \
-            --only-show-errors --output none
+          # createModelDeployments is always false here: an API deploy must never PUT the
+          # create-once Anthropic model deployments (CLAUDE.md / fable-refactor-log E-007).
+          bash .github/scripts/infra/deploy.sh "$FG_ENV" "$DEPLOYMENT_NAME" \
+            "${{ vars.AZURE_LOCATION || 'eastus2' }}" false
 
       - name: Verify new revision and /health
         id: verify
         run: |
           echo "Waiting for the latest revision to become healthy ..."
+          name="unknown"; image="unknown"; health="unknown"; running="unknown"
           for i in $(seq 1 30); do
-            read -r name image health running <<<"$(az containerapp revision list \
+            # -o json + jq, not tsv + `read`: properties.healthState is empty on a freshly
+            # created revision and the default IFS collapses the consecutive tabs, shifting
+            # every field left, so the loop could never match and a healthy deploy failed
+            # after the full five minutes.
+            revision="$(az containerapp revision list \
               --name "$FG_CONTAINER_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" \
-              --query "sort_by([?properties.active], &properties.createdTime)[-1].[name, properties.template.containers[0].image, properties.healthState, properties.runningState]" -o tsv)"
+              --query "sort_by([?properties.active], &properties.createdTime)[-1]" -o json)"
+            name="$(jq -r '.name // "unknown"' <<<"$revision")"
+            image="$(jq -r '.properties.template.containers[0].image // "unknown"' <<<"$revision")"
+            health="$(jq -r '.properties.healthState // "unknown"' <<<"$revision")"
+            running="$(jq -r '.properties.runningState // "unknown"' <<<"$revision")"
             echo "attempt $i: revision=${name} image=${image} health=${health} running=${running}"
             if [ "$image" = "$IMAGE" ] && [ "$health" = "Healthy" ] && { [ "$running" = "Running" ] || [ "$running" = "RunningAtMaxScale" ]; }; then
               break

@@ -4,4 +4,12 @@
 # pre-release label from the branch name. Bump markers in commit messages still work:
 #   +semver: minor | +semver: major | +semver: none
 # Used by .github/actions/version (image tag `{semVer}-{shortSha}`, assembly versions).
+#
+# Tagging: with no tags in the repository the patch component is just a commit counter
+# (0.0.74 on a branch off main today). `next-version` gives it a floor so the first release
+# series reads as 0.1.x instead of 0.0.x. Once a real release exists, tag the merge commit on
+# `main` annotated — `git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0` — and GitVersion
+# counts from the tag instead: the tag, not this file, becomes the source of truth. Bump
+# `next-version` only when there is no tag yet for the series you are starting.
+next-version: 0.1.0
 workflow: TrunkBased/preview1

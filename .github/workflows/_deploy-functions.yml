@@ -32,6 +32,7 @@ jobs:
   build:
     name: Functions - Publish
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -49,12 +50,15 @@ jobs:
         uses: ./.github/actions/version
 
       - name: Publish
+        env:
+          SEMVER: ${{ steps.version.outputs.semver }}
+          ASSEMBLY_VERSION: ${{ steps.version.outputs.major-minor-patch }}
         run: |
           dotnet publish src/FoundryGate.Functions/FoundryGate.Functions.csproj --configuration Release \
             -o publish/functions \
-            -p:Version=${{ steps.version.outputs.semver }} \
-            -p:AssemblyVersion=${{ steps.version.outputs.major-minor-patch }} \
-            -p:FileVersion=${{ steps.version.outputs.major-minor-patch }}
+            "-p:Version=${SEMVER}" \
+            "-p:AssemblyVersion=${ASSEMBLY_VERSION}" \
+            "-p:FileVersion=${ASSEMBLY_VERSION}"
           test -f publish/functions/host.json
           test -d publish/functions/.azurefunctions
 
@@ -73,6 +77,7 @@ jobs:
     name: Functions - Deploy (${{ inputs.environment }})
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     environment:
       name: ${{ inputs.environment }}
       url: https://${{ steps.verify.outputs.hostname }}

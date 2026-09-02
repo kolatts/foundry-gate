@@ -1,19 +1,48 @@
 name: Deploy All
 
-# Full-stack ordered deploy of one environment (#75) — the way a fresh environment is built
-# (day 0, or after infra-destroy.yml):
+# THE deploy workflow (#75). A push to `main` that touches anything deployable runs this and
+# only this — the ordered, full-stack chain. The single-component wrappers
+# (api-/functions-/ui-/infra-deploy.yml) have no `push` trigger precisely so that a change to
+# `src/FoundryGate.Domain/**` or `Directory.Packages.props` cannot start three workflows that
+# then cancel each other out of the shared per-environment concurrency group.
 #
-#   infra ─► prepare-database ─► database ─► api ──────┐
-#                                         ├─► functions ─┼─► postdeployment tests ─► summary
-#                                         └─► ui ────────┘
+#   infra ─► prepare-database ─► database ─► api ─┬─► functions ─┬─► postdeployment tests ─► summary
+#                                                 └─► ui ────────┘
 #
-# workflow_dispatch only. Every stage is a reusable _deploy-*.yml child that targets the chosen
-# GitHub Environment, so a production run stops at the `production` reviewer gate — once per
-# stage (GitHub approves pending jobs, not whole runs; see docs reference/ci-cd).
+# `functions` and `ui` wait for `api` rather than fanning out beside it: on a day-0 (bootstrap)
+# run the api stage re-runs the whole subscription deployment to swap the placeholder image, and
+# an infra re-run restarting the Function App mid-upload is a real flake. GitHub Actions has no
+# conditional `needs:`, so the dependency is unconditional; the cost is a few minutes, the
+# benefit is that the day-0 path — the one this file exists for — cannot race itself.
+#
+#   push to main (deployable paths) -> the whole chain against dev
+#   workflow_dispatch               -> the whole chain against the chosen environment
+#
+# A production run stops at the `production` reviewer gate — once per stage (GitHub approves
+# pending jobs, not whole runs; see docs reference/ci-cd and #141).
 # Docs are not part of this chain: GitHub Pages deploys from docs-deploy.yml on push to main
 # and has no Azure dependency.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "src/**"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - "global.json"
+      - "NuGet.config"
+      - ".github/workflows/deploy-all.yml"
+      - ".github/workflows/_deploy-api.yml"
+      - ".github/workflows/_deploy-database.yml"
+      - ".github/workflows/_deploy-functions.yml"
+      - ".github/workflows/_deploy-infra.yml"
+      - ".github/workflows/_deploy-ui.yml"
+      - ".github/workflows/_postdeployment-tests.yml"
+      - ".github/workflows/_prepare-database.yml"
+      - ".github/scripts/**"
+      - ".github/actions/**"
   workflow_dispatch:
     inputs:
       environment:
@@ -38,10 +67,11 @@ permissions:
   contents: read
   pull-requests: write
 
-# Same per-environment lock as the single-component pipelines: nothing else deploys to this
-# environment while the chain runs.
+# One lock per environment, shared with every dispatch of the single-component wrappers, so two
+# runs never mutate one environment at once. Never cancelled: a half-applied deploy is worse than
+# a queued one.
 concurrency:
-  group: deploy-${{ inputs.environment }}
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 jobs:
@@ -53,9 +83,9 @@ jobs:
       contents: read
       pull-requests: write
     with:
-      environment: ${{ inputs.environment }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
       mode: deploy
-      create-model-deployments: ${{ inputs.create-model-deployments }}
+      create-model-deployments: ${{ github.event_name == 'workflow_dispatch' && inputs.create-model-deployments || false }}
 
   prepare-database:
     name: Database
@@ -65,7 +95,7 @@ jobs:
       id-token: write
       contents: read
     with:
-      environment: ${{ inputs.environment }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
 
   database:
     name: Database
@@ -75,11 +105,11 @@ jobs:
       id-token: write
       contents: read
     with:
-      environment: ${{ inputs.environment }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
       sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
       sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
       sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
-      run-seed-test: ${{ inputs.run-seed-test }}
+      run-seed-test: ${{ github.event_name == 'workflow_dispatch' && inputs.run-seed-test || false }}
     secrets:
       AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
       AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
@@ -93,28 +123,27 @@ jobs:
       id-token: write
       contents: read
     with:
-      environment: ${{ inputs.environment }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
 
   functions:
     name: Functions
-    needs: database
+    needs: [database, api]
     uses: ./.github/workflows/_deploy-functions.yml
     permissions:
       id-token: write
       contents: read
     with:
-      environment: ${{ inputs.environment }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
 
   ui:
     name: UI
-    needs: database
+    needs: [database, api]
     uses: ./.github/workflows/_deploy-ui.yml
     permissions:
       id-token: write
       contents: read
-      pull-requests: write
     with:
-      environment: ${{ inputs.environment }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
 
   postdeployment-tests:
     name: Postdeployment tests
@@ -124,16 +153,20 @@ jobs:
       id-token: write
       contents: read
     with:
-      environment: ${{ inputs.environment }}
+      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
 
   summary:
     name: Summary
     needs: [infra, prepare-database, database, api, functions, ui, postdeployment-tests]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Write deployment summary
         env:
+          TARGET_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+          CREATE_MODEL_DEPLOYMENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.create-model-deployments || false }}
+          TRIGGER: ${{ github.event_name }}
           API_URL: ${{ needs.api.outputs.api-base-url }}
           UI_HOST: ${{ needs.ui.outputs.static-web-app-hostname }}
           FUNC_HOST: ${{ needs.functions.outputs.function-app-hostname }}
@@ -141,9 +174,9 @@ jobs:
           TESTS: ${{ needs.postdeployment-tests.outputs.summary }}
         run: |
           {
-            echo "# Deploy All — ${{ inputs.environment }}"
+            echo "# Deploy All — ${TARGET_ENVIRONMENT}"
             echo ""
-            echo "Commit \`${GITHUB_SHA::7}\` · by @${GITHUB_ACTOR} · createModelDeployments=${{ inputs.create-model-deployments }}"
+            echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
             echo ""
             echo "| Stage | Result |"
             echo "|---|---|"

@@ -27,6 +27,14 @@ on:
         description: "GitHub Environment name: dev | production."
         required: true
         type: string
+      plan-environment:
+        description: >-
+          GitHub Environment the read-only what-if job runs under. Defaults to the deploy
+          environment; PR-track callers pass `dev-plan`, whose identity holds Reader only and
+          which (unlike `dev`) is reachable from an unprotected branch (#109).
+        required: false
+        type: string
+        default: ""
       mode:
         description: "'what-if' = validate + what-if only (PRs). 'deploy' = validate + what-if + deploy."
         required: false
@@ -82,10 +90,22 @@ jobs:
   validate:
     name: Infra - Validate (${{ inputs.environment }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
+
+      # `mode` is a free-form string; an unknown value would skip both downstream jobs and
+      # report this reusable workflow as a success with empty outputs. Fail loudly instead.
+      - name: Validate inputs
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "$MODE" in
+            what-if|deploy) echo "mode=${MODE}" ;;
+            *) echo "::error::Unknown mode '${MODE}'. _deploy-infra.yml accepts 'what-if' or 'deploy'."; exit 1 ;;
+          esac
 
       - name: Install Bicep
         run: |
@@ -119,7 +139,8 @@ jobs:
     needs: validate
     if: inputs.mode == 'what-if'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    timeout-minutes: 30
+    environment: ${{ inputs.plan-environment != '' && inputs.plan-environment || inputs.environment }}
     permissions:
       id-token: write
       contents: read
@@ -137,10 +158,12 @@ jobs:
           environment: ${{ inputs.environment }}
           required: "false"
 
+      # The script writes `image=` to $GITHUB_OUTPUT itself — wrapping it in `echo "$(...)"`
+      # would let `echo` swallow every "refusing to guess" exit code.
       - name: Resolve current API image
         if: steps.login.outputs.configured == 'true'
         id: image
-        run: echo "image=$(bash .github/scripts/infra/resolve-api-image.sh "$FG_ENV")" >> "$GITHUB_OUTPUT"
+        run: bash .github/scripts/infra/resolve-api-image.sh "$FG_ENV" "$DEPLOYMENT_NAME"
 
       - name: What-if
         if: steps.login.outputs.configured == 'true'
@@ -229,6 +252,7 @@ jobs:
     needs: validate
     if: inputs.mode == 'deploy'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment: ${{ inputs.environment }}
     permissions:
       id-token: write
@@ -258,7 +282,7 @@ jobs:
 
       - name: Resolve current API image (image-drift protection)
         id: image
-        run: echo "image=$(bash .github/scripts/infra/resolve-api-image.sh "$FG_ENV")" >> "$GITHUB_OUTPUT"
+        run: bash .github/scripts/infra/resolve-api-image.sh "$FG_ENV" "$DEPLOYMENT_NAME"
 
       - name: Warn when creating model deployments
         if: inputs.create-model-deployments
@@ -295,14 +319,8 @@ jobs:
           FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}
           FG_SQL_ADMIN_GROUP_NAME: ${{ vars.FG_SQL_ADMIN_GROUP_NAME }}
         run: |
-          az deployment sub create \
-            --name "$DEPLOYMENT_NAME" \
-            --location "${{ vars.AZURE_LOCATION || 'eastus2' }}" \
-            --template-file infra/main.bicep \
-            --parameters "infra/parameters/${FG_ENV}.bicepparam" \
-            --parameters "createModelDeployments=${{ inputs.create-model-deployments }}" \
-            --only-show-errors \
-            --output none
+          bash .github/scripts/infra/deploy.sh "$FG_ENV" "$DEPLOYMENT_NAME" \
+            "${{ vars.AZURE_LOCATION || 'eastus2' }}" "${{ inputs.create-model-deployments }}"
 
       - name: Export deployment outputs
         id: outputs

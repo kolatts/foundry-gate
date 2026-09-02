@@ -1,33 +1,23 @@
 name: API Deploy
 
-# Code pipeline for FoundryGate.Api (#71) — never triggers on infra/**.
-#   push to main (Api/Data/Domain/Database/Cli or this pipeline) -> database -> api, to dev
-#   workflow_dispatch (environment)                               -> database -> api
-#   pull_request touching the Dockerfile or these workflows      -> image build + /health smoke only
-# Build/test of the .NET code on PRs is ci.yml's job (required check `build-test`); this
-# workflow does not repeat it.
+# Targeted API pipeline for FoundryGate.Api (#71) — never triggers on infra/**.
+#   pull_request touching the Dockerfile or these workflows -> image build + /health smoke only
+#   workflow_dispatch (environment)                         -> database -> api
 #
-# Order matters: the dacpac (schema) goes first, then the Container App rolls to the new image.
+# There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, the single
+# ordered chain. Three wrappers racing for the `deploy-{env}` concurrency group used to mean one
+# of them was silently cancelled. This file is now the "redeploy just the API" button.
+#
+# Build/test of the .NET code on PRs is ci.yml's job (required check `build-test`); this workflow
+# does not repeat it. Order matters on dispatch: the dacpac (schema) goes first, then the
+# Container App rolls to the new image.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/FoundryGate.Api/**"
-      - "src/FoundryGate.Data/**"
-      - "src/FoundryGate.Domain/**"
-      - "src/FoundryGate.Database/**"
-      - "src/FoundryGate.Cli/**"
-      - "Directory.Build.props"
-      - "Directory.Packages.props"
-      - ".github/workflows/api-deploy.yml"
-      - ".github/workflows/_deploy-api.yml"
-      - ".github/workflows/_prepare-database.yml"
-      - ".github/workflows/_deploy-database.yml"
   pull_request:
     paths:
       - "src/FoundryGate.Api/Dockerfile"
       - ".dockerignore"
+      - ".github/actions/build-api-image/**"
       - ".github/workflows/api-deploy.yml"
       - ".github/workflows/_deploy-api.yml"
   workflow_dispatch:
@@ -44,20 +34,25 @@ on:
         type: boolean
         default: false
 
+# No workflow-level id-token: the PR image-build job touches no Azure and must stay usable from
+# forks. The deploy jobs grant it themselves.
 permissions:
-  id-token: write
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('api-image-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || 'dev') }}
+  group: ${{ github.event_name == 'pull_request' && format('api-image-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', inputs.environment) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # PR-only: prove the Dockerfile still builds and the image answers /health. No Azure access.
+  # PR-only: prove the Dockerfile still builds and the image answers /health. No Azure access,
+  # no credentials, safe on forks.
   image-build:
     name: API - Image build check (PR)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,31 +60,22 @@ jobs:
       - name: Version
         id: version
         uses: ./.github/actions/version
-      - name: Build image
-        run: |
-          docker build --file src/FoundryGate.Api/Dockerfile \
-            --build-arg "VERSION=${{ steps.version.outputs.semver }}" \
-            --build-arg "ASSEMBLY_VERSION=${{ steps.version.outputs.major-minor-patch }}" \
-            --tag "foundrygate-api:${{ steps.version.outputs.image-tag }}" .
-      - name: Smoke-test /health
-        run: |
-          docker run -d --name api-smoke -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=local "foundrygate-api:${{ steps.version.outputs.image-tag }}"
-          for i in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || true)
-            if [ "$code" = "200" ]; then echo "/health -> 200 after ${i}s"; exit 0; fi
-            sleep 1
-          done
-          echo "::error::/health did not return 200 within 30s"; docker logs api-smoke; exit 1
+      - name: Build and smoke-test the image
+        uses: ./.github/actions/build-api-image
+        with:
+          image-tag: ${{ steps.version.outputs.image-tag }}
+          version: ${{ steps.version.outputs.semver }}
+          assembly-version: ${{ steps.version.outputs.major-minor-patch }}
 
   prepare-database:
     name: Database
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/_prepare-database.yml
     permissions:
       id-token: write
       contents: read
     with:
-      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment }}
 
   database:
     name: Database
@@ -99,11 +85,11 @@ jobs:
       id-token: write
       contents: read
     with:
-      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment }}
       sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
       sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
       sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
-      run-seed-test: ${{ github.event_name == 'workflow_dispatch' && inputs.run-seed-test || false }}
+      run-seed-test: ${{ inputs.run-seed-test }}
     secrets:
       AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
       AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
@@ -117,4 +103,4 @@ jobs:
       id-token: write
       contents: read
     with:
-      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment }}

@@ -1,29 +1,19 @@
 name: UI Deploy
 
-# Code pipeline for FoundryGate.Web (#73) — never triggers on infra/**.
-#   push to main (Web/Domain or this pipeline)          -> publish + deploy to dev
-#   pull_request touching Web (opened/sync/reopened)   -> PR preview environment on the dev SWA
-#   pull_request closed                                -> remove the preview environment
-#   workflow_dispatch (environment)                    -> publish + deploy
-# Forks: the preview jobs skip (not fail) when the dev environment has no Azure variables.
+# Targeted UI pipeline for FoundryGate.Web (#73) — never triggers on infra/**.
+#   workflow_dispatch (environment) -> publish + deploy
+#
+# There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, the single
+# ordered chain. This file is the "redeploy just the UI" button.
+#
+# There is also NO `pull_request` trigger any more. Static Web Apps PR previews need the SWA
+# deployment token (`az staticwebapp secrets list`) under an identity with write access to the
+# dev environment. A `pull_request` run executes the PR branch's own copy of these files, so
+# any PR could have printed that token or driven `az` against dev. The `dev` Environment is now
+# restricted to protected branches and PR-track Azure work is limited to the read-only
+# `dev-plan` Environment (Bicep what-if). Restoring previews behind a safe design is #145.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/FoundryGate.Web/**"
-      - "src/FoundryGate.Domain/**"
-      - "Directory.Build.props"
-      - "Directory.Packages.props"
-      - ".github/workflows/ui-deploy.yml"
-      - ".github/workflows/_deploy-ui.yml"
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
-    paths:
-      - "src/FoundryGate.Web/**"
-      - "src/FoundryGate.Domain/**"
-      - ".github/workflows/ui-deploy.yml"
-      - ".github/workflows/_deploy-ui.yml"
   workflow_dispatch:
     inputs:
       environment:
@@ -36,44 +26,17 @@ on:
 permissions:
   id-token: write
   contents: read
-  pull-requests: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('ui-preview-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', github.event_name == 'workflow_dispatch' && inputs.environment || 'dev') }}
+  group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   ui:
     name: UI
-    if: github.event_name != 'pull_request'
     uses: ./.github/workflows/_deploy-ui.yml
     permissions:
       id-token: write
       contents: read
-      pull-requests: write
     with:
-      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
-
-  preview:
-    name: UI preview
-    if: github.event_name == 'pull_request' && github.event.action != 'closed'
-    uses: ./.github/workflows/_deploy-ui.yml
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: write
-    with:
-      environment: dev
-      action: upload
-
-  close-preview:
-    name: UI preview cleanup
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    uses: ./.github/workflows/_deploy-ui.yml
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: write
-    with:
-      environment: dev
-      action: close
+      environment: ${{ inputs.environment }}

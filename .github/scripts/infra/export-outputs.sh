@@ -34,7 +34,9 @@ declare -a MAP=(
   "staticWebAppName static-web-app-name FG_STATIC_WEB_APP_NAME"
   "staticWebAppHostname static-web-app-hostname FG_STATIC_WEB_APP_HOSTNAME"
   "apiIdentityName api-identity-name FG_API_IDENTITY_NAME"
+  "apiIdentityClientId api-identity-client-id FG_API_IDENTITY_CLIENT_ID"
   "functionsIdentityName functions-identity-name FG_FUNCTIONS_IDENTITY_NAME"
+  "functionsIdentityClientId functions-identity-client-id FG_FUNCTIONS_IDENTITY_CLIENT_ID"
 )
 
 {

@@ -1,22 +1,13 @@
 name: Functions Deploy
 
-# Code pipeline for FoundryGate.Functions (#72) — never triggers on infra/**.
-#   push to main (Functions/Data/Domain or this pipeline) -> publish + deploy to dev
-#   workflow_dispatch (environment)                       -> publish + deploy
-# PR build/test is ci.yml's job. Schema changes ride with api-deploy.yml (Data/** triggers both;
-# the database lock in _deploy-database.yml serialises them).
+# Targeted Functions pipeline for FoundryGate.Functions (#72) — never triggers on infra/**.
+#   workflow_dispatch (environment) -> publish + deploy
+#
+# There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, the single
+# ordered chain (schema before code, api before functions). This file is the "redeploy just the
+# Functions" button. PR build/test is ci.yml's job.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "src/FoundryGate.Functions/**"
-      - "src/FoundryGate.Data/**"
-      - "src/FoundryGate.Domain/**"
-      - "Directory.Build.props"
-      - "Directory.Packages.props"
-      - ".github/workflows/functions-deploy.yml"
-      - ".github/workflows/_deploy-functions.yml"
   workflow_dispatch:
     inputs:
       environment:
@@ -31,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+  group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
@@ -42,4 +33,4 @@ jobs:
       id-token: write
       contents: read
     with:
-      environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment }}

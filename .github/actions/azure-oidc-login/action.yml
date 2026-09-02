@@ -3,11 +3,11 @@ description: >-
   Logs in to Azure with azure/login@v2 using the three OIDC identifiers FoundryGate keeps as
   GitHub Environment VARIABLES (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID — they
   are identifiers, not secrets; see docs reference/ci-cd). Before logging in it checks that all
-  three are present and that the calling job actually has `id-token: write`, and fails with a
-  readable ::error:: pointing at the owner-setup issue (#109) instead of letting azure/login
-  fail later with an opaque AADSTS error. With `required: false` a missing variable is a
-  ::warning:: and `configured=false` instead of a failure — for jobs that must stay green on
-  forks and PRs without Azure access (what-if, UI previews).
+  three are present and that the calling job actually has a usable `id-token: write`, and fails
+  with a readable ::error:: pointing at the owner-setup issue (#109) instead of letting
+  azure/login fail later with an opaque AADSTS error. On `pull_request` events — where a fork
+  has neither the variables nor an OIDC token — BOTH checks skip cleanly with `configured=false`
+  and a ::notice::, never a failure.
 
 inputs:
   client-id:
@@ -23,13 +23,16 @@ inputs:
     description: "GitHub Environment name, used only for the error message."
     required: true
   required:
-    description: "'true' (default) fails the job when setup is missing; 'false' skips with configured=false."
+    description: >-
+      "'true' (default) fails the job when setup is missing; 'false' skips with
+      configured=false. `pull_request` events always skip regardless of this input — nothing on
+      the PR track may depend on Azure being reachable."
     required: false
     default: "true"
 
 outputs:
   configured:
-    description: "'true' when all three identifiers were present and the login ran."
+    description: "'true' when all three identifiers were present, an OIDC token was available and the login ran."
     value: ${{ steps.guard.outputs.configured }}
 
 runs:
@@ -45,6 +48,23 @@ runs:
         TARGET_ENVIRONMENT: ${{ inputs.environment }}
         REQUIRED: ${{ inputs.required }}
       run: |
+        set -uo pipefail
+
+        # A fork PR resolves the base repo's Environment variables but never receives an OIDC
+        # token, so `configured=true` followed by a hard exit on the id-token check was exactly
+        # the red-instead-of-skip the guard exists to prevent. On pull_request, both branches
+        # below are soft.
+        soft="false"
+        if [ "$REQUIRED" != "true" ] || [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+          soft="true"
+        fi
+
+        skip() {
+          echo "::notice title=Azure OIDC not available - skipping::$1"
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
         missing=()
         [ -n "$CLIENT_ID" ] || missing+=("AZURE_CLIENT_ID")
         [ -n "$TENANT_ID" ] || missing+=("AZURE_TENANT_ID")
@@ -55,17 +75,18 @@ runs:
         These are the OIDC identifiers azure/login needs (Settings -> Environments -> ${TARGET_ENVIRONMENT} -> Variables). \
         Owner setup is tracked in https://github.com/kolatts/foundry-gate/issues/109 and documented at \
         docs-site/src/content/docs/reference/ci-cd.md."
-          if [ "$REQUIRED" = "true" ]; then
-            echo "::error title=Azure OIDC not configured::${message}"
-            exit 1
-          fi
-          echo "::warning title=Azure OIDC not configured — skipping::${message}"
-          echo "configured=false" >> "$GITHUB_OUTPUT"
-          exit 0
+          [ "$soft" = "true" ] && skip "$message"
+          echo "::error title=Azure OIDC not configured::${message}"
+          exit 1
         fi
 
         if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
-          echo "::error title=id-token permission missing::ACTIONS_ID_TOKEN_REQUEST_URL is not set. The workflow (or job) that calls this reusable workflow must declare 'permissions: id-token: write' and 'contents: read' — a reusable workflow can only narrow what its caller grants."
+          message="ACTIONS_ID_TOKEN_REQUEST_URL is not set, so no OIDC token can be requested. \
+        On a fork pull request GitHub never issues one. Otherwise the workflow (or job) that calls this reusable \
+        workflow must declare 'permissions: id-token: write' and 'contents: read' - a reusable workflow can only \
+        narrow what its caller grants."
+          [ "$soft" = "true" ] && skip "$message"
+          echo "::error title=id-token permission missing::${message}"
           exit 1
         fi
 

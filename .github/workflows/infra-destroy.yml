@@ -48,6 +48,7 @@ jobs:
   validate-confirmation:
     name: Validate confirmation
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check typed confirmation
         env:
@@ -64,6 +65,7 @@ jobs:
     name: List resources (${{ inputs.environment }})
     needs: validate-confirmation
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Read-only; uses the normal deploy environment so the destroy environments stay purely gates.
     environment: ${{ inputs.environment }}
     permissions:
@@ -127,6 +129,7 @@ jobs:
     needs: [validate-confirmation, list-resources]
     if: needs.list-resources.outputs.exists == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     # The gate: required reviewer(s) + wait timer configured on these two GitHub Environments.
     environment: ${{ inputs.environment == 'production' && 'prod-destroy' || 'dev-destroy' }}
     permissions:
