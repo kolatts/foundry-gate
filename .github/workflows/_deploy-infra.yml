@@ -155,7 +155,9 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          environment: ${{ inputs.environment }}
+          # The variables come from the environment this JOB runs under, which is
+          # plan-environment when the caller set one - name that one in the error.
+          environment: ${{ inputs.plan-environment != '' && inputs.plan-environment || inputs.environment }}
           required: "false"
 
       # The script writes `image=` to $GITHUB_OUTPUT itself — wrapping it in `echo "$(...)"`
