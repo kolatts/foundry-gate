@@ -1,6 +1,194 @@
 @page "/users"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
 
 <PageTitle>Users — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Users" />
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <div class="d-flex align-center justify-space-between mb-4">
+        <MudText Typo="Typo.h4">Users</MudText>
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Sync"
+                   Href="users/sync"
+                   data-testid="users-sync-link">Sync from Entra</MudButton>
+    </div>
+
+    <MudDataGrid @ref="_grid"
+                 T="UserResponse"
+                 ServerData="@LoadAsync"
+                 Loading="@_loading"
+                 Hover="true"
+                 Striped="false"
+                 Dense="true"
+                 Elevation="1"
+                 RowClick="@OnRowClick"
+                 data-testid="users-grid">
+        <ToolBarContent>
+            <MudTextField T="string"
+                          Value="@_search"
+                          ValueChanged="@OnSearchChangedAsync"
+                          Immediate="true"
+                          DebounceInterval="300"
+                          Placeholder="Search name or email"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          IconSize="Size.Medium"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Clearable="true"
+                          Class="mt-0"
+                          Style="max-width: 22rem;"
+                          data-testid="users-search" />
+            <MudSpacer />
+            <MudSelect T="bool?"
+                       Value="@_isActive"
+                       ValueChanged="@OnStatusChangedAsync"
+                       Label="Status"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Dense="true"
+                       Style="max-width: 12rem;"
+                       data-testid="users-status-filter">
+                <MudSelectItem T="bool?" Value="@(null)">All</MudSelectItem>
+                <MudSelectItem T="bool?" Value="@(true)">Active</MudSelectItem>
+                <MudSelectItem T="bool?" Value="@(false)">Deactivated</MudSelectItem>
+            </MudSelect>
+        </ToolBarContent>
+        <Columns>
+            <PropertyColumn Property="@(u => u.DisplayName)" Title="Name" Sortable="false" />
+            <PropertyColumn Property="@(u => u.Email)" Title="Email" Sortable="false" />
+            <TemplateColumn Title="Monthly budget" Sortable="false">
+                <CellTemplate>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@(context.Item.IsUnlimited ? Color.Info : Color.Default)">
+                        @TierDisplay.Describe(context.Item.IsUnlimited, context.Item.MonthlyTokenQuota, _tiers)
+                    </MudChip>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Status" Sortable="false">
+                <CellTemplate>
+                    <MudChip T="string"
+                             Size="Size.Small"
+                             Variant="Variant.Filled"
+                             Color="@(context.Item.IsActive ? Color.Success : Color.Default)">
+                        @(context.Item.IsActive ? "Active" : "Deactivated")
+                    </MudChip>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Gateway key" Sortable="false">
+                <CellTemplate>
+                    @if (context.Item.IsApiKeyProvisioned)
+                    {
+                        <MudTooltip Text="A gateway key is provisioned">
+                            <MudIcon Icon="@Icons.Material.Filled.VpnKey" Color="Color.Success" Size="Size.Small" />
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudTooltip Text="No gateway key yet">
+                            <MudIcon Icon="@Icons.Material.Outlined.KeyOff" Color="Color.Default" Size="Size.Small" />
+                        </MudTooltip>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+        </Columns>
+        <NoRecordsContent>
+            <MudText Class="pa-6 mud-text-secondary" data-testid="users-empty">
+                @(HasFilter
+                    ? "No users match that search."
+                    : "No users yet. They appear here after their first sign-in, or after an Entra sync.")
+            </MudText>
+        </NoRecordsContent>
+        <PagerContent>
+            <MudDataGridPager T="UserResponse" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+        </PagerContent>
+    </MudDataGrid>
+}
+
+@code {
+    private MudDataGrid<UserResponse>? _grid;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+    private string? _search;
+    private bool? _isActive;
+    private bool _loading;
+    private bool _accessDenied;
+
+    private bool HasFilter => !string.IsNullOrWhiteSpace(_search) || _isActive is not null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Tiers first: every budget cell renders a tier name, not a token count (D-013). A
+        // failure here is not fatal — TierDisplay falls back to the raw count.
+        var tiers = await Api.GetQuotaTiersAsync();
+        if (tiers.IsSuccess && tiers.Value is not null)
+        {
+            _tiers = tiers.Value;
+        }
+    }
+
+    /// <summary>
+    /// MudDataGrid's server-side page fetch. Paging is the grid's (it owns page index and size);
+    /// search and status are ours, and changing either resets the grid to page 1 via
+    /// <see cref="ReloadAsync"/>.
+    /// </summary>
+    private async Task<GridData<UserResponse>> LoadAsync(GridState<UserResponse> state, CancellationToken cancellationToken)
+    {
+        _loading = true;
+        try
+        {
+            var paging = new PagedRequest(state.Page + 1, state.PageSize);
+            var query = new UserListQuery(_search, _isActive);
+            var result = await Api.GetUsersAsync(query, paging, cancellationToken);
+
+            if (result.Status == ApiCallStatus.Forbidden)
+            {
+                _accessDenied = true;
+                return new GridData<UserResponse> { Items = [], TotalItems = 0 };
+            }
+
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "Couldn't load users.", Severity.Error);
+                return new GridData<UserResponse> { Items = [], TotalItems = 0 };
+            }
+
+            return new GridData<UserResponse> { Items = result.Value.Items, TotalItems = result.Value.TotalCount };
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task OnSearchChangedAsync(string? search)
+    {
+        _search = search;
+        return ReloadAsync();
+    }
+
+    private Task OnStatusChangedAsync(bool? isActive)
+    {
+        _isActive = isActive;
+        return ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (_grid is not null)
+        {
+            // Back to page 1: page 3 of the old filter is rarely page 3 of the new one.
+            _grid.NavigateTo(Page.First);
+            await _grid.ReloadServerData();
+        }
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<UserResponse> args) =>
+        Navigation.NavigateTo($"users/{args.Item.UserId}");
+}

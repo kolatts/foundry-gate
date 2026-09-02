@@ -1,0 +1,100 @@
+@* The only way the admin UI sets a monthly budget. A budget IS a gateway tier
+   (fable-refactor-log.md D-013): APIM's token-quota policy takes a literal, so the gateway can
+   only enforce the caps configured as tier products. Free-form token counts would let the
+   dashboard promise a number nothing enforces — so this is a pick from GET /quota/tiers, never
+   a MudNumericField. *@
+
+<div class="d-flex flex-column ga-2">
+    <MudSwitch T="bool"
+               Value="@IsUnlimited"
+               ValueChanged="@OnUnlimitedChanged"
+               Color="Color.Info"
+               Disabled="@Disabled"
+               Label="Unlimited — no monthly cap"
+               data-testid="@($"{TestId}-unlimited")" />
+
+    <MudSelect T="string"
+               Value="@SelectedProductId"
+               ValueChanged="@OnTierChangedAsync"
+               Label="@Label"
+               Variant="Variant.Outlined"
+               Dense="true"
+               Disabled="@(Disabled || IsUnlimited)"
+               Clearable="false"
+               HelperText="@HelperText"
+               data-testid="@($"{TestId}-tier")">
+        @if (AllowInherit)
+        {
+            <MudSelectItem T="string" Value="@InheritValue">@TierDisplay.InheritedLabel — use the group or system default</MudSelectItem>
+        }
+        @foreach (var tier in CappedTiers)
+        {
+            <MudSelectItem T="string" Value="@tier.ProductId">
+                @tier.DisplayName@(tier.MonthlyTokenQuota is { } cap ? $" — {TierDisplay.FormatTokens(cap)}" : string.Empty)
+            </MudSelectItem>
+        }
+    </MudSelect>
+</div>
+
+@code {
+    /// <summary>Sentinel <see cref="MudSelectItem{T}"/> value for "no override of my own".</summary>
+    private const string InheritValue = "";
+
+    /// <summary>The tier catalogue from <c>GET /quota/tiers</c>. Empty until it loads.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<QuotaTierResponse> Tiers { get; set; } = [];
+
+    /// <summary>Bound to the request's <c>IsUnlimited</c>.</summary>
+    [Parameter]
+    public bool IsUnlimited { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> IsUnlimitedChanged { get; set; }
+
+    /// <summary>Bound to the request's <c>MonthlyTokenQuota</c> — always a tier cap or null.</summary>
+    [Parameter]
+    public long? MonthlyTokenQuota { get; set; }
+
+    [Parameter]
+    public EventCallback<long?> MonthlyTokenQuotaChanged { get; set; }
+
+    /// <summary>Whether "inherit" (a null quota) is offered. False where a value is required.</summary>
+    [Parameter]
+    public bool AllowInherit { get; set; } = true;
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public string Label { get; set; } = "Monthly budget tier";
+
+    [Parameter]
+    public string? HelperText { get; set; }
+
+    /// <summary>Prefix for the <c>data-testid</c> attributes, so a page with two pickers stays addressable.</summary>
+    [Parameter]
+    public string TestId { get; set; } = "quota";
+
+    private IEnumerable<QuotaTierResponse> CappedTiers => Tiers.Where(t => !t.IsUnlimited);
+
+    private string SelectedProductId =>
+        TierDisplay.MatchProductId(IsUnlimited, MonthlyTokenQuota, Tiers) ?? InheritValue;
+
+    private async Task OnUnlimitedChanged(bool isUnlimited)
+    {
+        await IsUnlimitedChanged.InvokeAsync(isUnlimited);
+
+        // Unlimited wins over any cap (spec §3.2 step 1), so clear the number rather than
+        // leaving a stale one for whoever reads the request record next.
+        if (isUnlimited && MonthlyTokenQuota is not null)
+        {
+            await MonthlyTokenQuotaChanged.InvokeAsync(null);
+        }
+    }
+
+    private async Task OnTierChangedAsync(string? productId)
+    {
+        var tier = Tiers.FirstOrDefault(t => t.ProductId == productId);
+        await MonthlyTokenQuotaChanged.InvokeAsync(tier?.MonthlyTokenQuota);
+    }
+}

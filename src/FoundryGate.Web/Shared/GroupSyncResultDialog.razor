@@ -1,0 +1,48 @@
+@* Result of POST /groups/{id}/sync-entra (#52). Shown as a dialog rather than a snackbar
+   because skippedUnknownUsers is a call to action, not a notification: those are people in the
+   Entra group who have no FoundryGate user row yet, so the sync could not add them. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudSimpleTable Dense="true" Hover="false" Elevation="0" Style="background: transparent;">
+            <tbody>
+                <tr>
+                    <td><MudText Typo="Typo.body2">Members added</MudText></td>
+                    <td data-testid="sync-added"><MudText Typo="Typo.body1">@Result.AddedCount</MudText></td>
+                </tr>
+                <tr>
+                    <td><MudText Typo="Typo.body2">Members removed</MudText></td>
+                    <td data-testid="sync-removed"><MudText Typo="Typo.body1">@Result.RemovedCount</MudText></td>
+                </tr>
+                <tr>
+                    <td><MudText Typo="Typo.body2">Skipped — no FoundryGate account</MudText></td>
+                    <td data-testid="sync-skipped"><MudText Typo="Typo.body1">@Result.SkippedUnknownUserCount</MudText></td>
+                </tr>
+            </tbody>
+        </MudSimpleTable>
+
+        @if (Result.SkippedUnknownUserCount > 0)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-4">
+                @Result.SkippedUnknownUserCount @(Result.SkippedUnknownUserCount == 1 ? "person is" : "people are")
+                in the Entra group but have no FoundryGate user yet. They join this group once they
+                exist here — run <MudLink Href="users/sync">Sync Entra users</MudLink>, or wait for
+                their first sign-in, then sync this group again.
+            </MudAlert>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@Close" data-testid="sync-result-close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Instance { get; set; } = default!;
+
+    /// <summary>What the API reported for this one group.</summary>
+    [Parameter, EditorRequired]
+    public GroupSyncResult Result { get; set; } = default!;
+
+    private void Close() => Instance.Close(DialogResult.Ok(true));
+}
