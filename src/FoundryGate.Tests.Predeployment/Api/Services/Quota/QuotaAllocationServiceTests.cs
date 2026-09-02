@@ -348,6 +348,85 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         Assert.Equal([(dev.UserId, GatewayTiers.Power)], _tierSync.Calls);
     }
 
+    // -- Commit point: a tier the gateway has already moved must be written down (#163) ------------
+
+    [Fact]
+    public async Task A_reset_whose_client_disconnects_the_instant_a_tier_moves_still_commits_every_row_and_its_audit()
+    {
+        // #163: ResetAsync audited and saved on the request's token, so an admin whose browser abandoned
+        // POST /quota/reset could move a fork's worth of APIM subscriptions between tier products with
+        // no allocation rows and no audit row to show for it.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Ada Admin");
+        var dev = await SeedUserAsync("Moving Dev", u =>
+        {
+            u.MonthlyTokenQuota = TestGatewayTiers.PowerCap;
+            u.ApimSubscriptionId = "sub-dev";
+        });
+        await SeedAllocationAsync(dev, Period, allocated: 1, tokensUsed: 5, tier: GatewayTiers.Standard);
+
+        using var cts = new CancellationTokenSource();
+        _tierSync.AfterSync = cts.Cancel;
+
+        _ = await CreateService(admin.EntraObjectId).ResetAsync(cts.Token);
+
+        _tierSync.AfterSync = null;
+        Assert.True(cts.IsCancellationRequested);
+        Assert.Equal([(dev.UserId, GatewayTiers.Power)], _tierSync.Calls);
+
+        Context.ChangeTracker.Clear();
+        var allocation = await Context.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == dev.UserId);
+        Assert.Equal(GatewayTiers.Power, allocation.TierProductId);
+        Assert.Equal(TestGatewayTiers.PowerCap, allocation.AllocatedTokens);
+        Assert.Equal(Now, allocation.ResetDate);
+        _ = Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaAllocationReset).ToListAsync());
+    }
+
+    [Fact]
+    public async Task A_first_allocation_of_the_month_whose_client_disconnects_as_the_tier_moves_still_commits_the_row()
+    {
+        // The same rule on the developer's own path: GET /quota/allocations/me creates the row and, for
+        // a user whose tier is not the one the gateway is already enforcing, moves the subscription
+        // first. The row that records which tier that was must survive the disconnect (#163).
+        await SeedReferenceDataAsync();
+        var me = await SeedUserAsync("Hangs Up", u =>
+        {
+            u.MonthlyTokenQuota = TestGatewayTiers.PowerCap;
+            u.ApimSubscriptionId = "sub-me";
+        });
+
+        using var cts = new CancellationTokenSource();
+        _tierSync.AfterSync = cts.Cancel;
+
+        var allocation = await CreateService(me.EntraObjectId).GetMyAllocationAsync(cts.Token);
+
+        _tierSync.AfterSync = null;
+        Assert.True(cts.IsCancellationRequested);
+        Assert.Equal(GatewayTiers.Power, allocation.TierProductId);
+
+        Context.ChangeTracker.Clear();
+        var saved = await Context.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == me.UserId);
+        Assert.Equal(GatewayTiers.Power, saved.TierProductId);
+        Assert.Equal(TestGatewayTiers.PowerCap, saved.AllocatedTokens);
+    }
+
+    [Fact]
+    public async Task A_reset_that_moves_nothing_at_the_gateway_still_honours_the_callers_cancellation()
+    {
+        // The other half of the rule: "we called resolution" is not a commit point. With no subscription
+        // to move, an abandoned reset is just an abandoned request and must not write.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Ada Admin");
+        _ = await SeedUserAsync("No Gateway Key", u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CreateService(admin.EntraObjectId).ResetAsync(cts.Token));
+
+        Assert.Empty(_tierSync.Calls);
+    }
+
     // -- Helpers --
 
     /// <summary>Real accessor + real audit + real resolution over this test's context, as DI would wire them per request.</summary>
