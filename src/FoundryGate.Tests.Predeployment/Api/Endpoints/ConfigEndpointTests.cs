@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FoundryGate.Data.Seeding;
+using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Config.Contracts;
 using FoundryGate.Domain.Constants;
 using Microsoft.AspNetCore.Mvc;
@@ -225,6 +226,66 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("20000000", await ValueOfAsync(Key));
+    }
+
+    [Theory]
+    [InlineData(SystemConfigurationKeys.ApimGatewayUrl)]
+    [InlineData(SystemConfigurationKeys.FoundryResourceId)]
+    public async Task An_empty_value_clears_a_key_whose_rule_allows_it(string key)
+    {
+        // The regression this pins: `[Required]` defaults to AllowEmptyStrings = false, so MVC's
+        // automatic model validation used to 400 an empty body before the per-key rule — which
+        // explicitly accepts "" — was ever consulted. Unwiring a resource is a real operation.
+        var oid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(oid);
+
+        using var client = factory.CreateClientAs(oid, isAdmin: true);
+        var response = await PutAsync(client, key, string.Empty);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var entry = await response.Content.ReadFromJsonAsync<SystemConfigEntryResponse>(JsonOptions);
+        Assert.Equal(string.Empty, entry!.Value);
+        Assert.Equal(string.Empty, await ValueOfAsync(key));
+    }
+
+    [Theory]
+    [InlineData(SystemConfigurationKeys.DefaultMonthlyTokenQuota)]
+    [InlineData(SystemConfigurationKeys.ResetDayOfMonth)]
+    [InlineData(SystemConfigurationKeys.EntraGroupSyncEnabled)]
+    public async Task An_empty_value_is_still_refused_where_the_keys_rule_forbids_it(string key)
+    {
+        // Emptiness is the per-key rule's decision, not model binding's: a quota, a reset day and a
+        // feature flag have no empty form, and quota resolution reads all three.
+        var oid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(oid);
+        var before = await ValueOfAsync(key);
+
+        using var client = factory.CreateClientAs(oid, isAdmin: true);
+        var response = await PutAsync(client, key, string.Empty);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(before, await ValueOfAsync(key));
+    }
+
+    [Fact]
+    public async Task An_over_long_value_is_a_field_level_400_not_a_500()
+    {
+        // Takes over from RequestDtoBindingController's `config` action now that a production
+        // controller binds this record (#128's guard: an invalid body is a 400 ProblemDetails naming
+        // the member, never the 500 a positional record with [property: …] attributes produced).
+        var oid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(oid);
+
+        using var client = factory.CreateClientAs(oid, isAdmin: true);
+        var response = await PutAsync(
+            client,
+            SystemConfigurationKeys.ApimGatewayUrl,
+            new string('x', ValidationConstants.ConfigValueMaxLength + 1));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ApiError>(JsonOptions);
+        Assert.NotNull(problem?.Errors);
+        Assert.Contains(nameof(UpdateSystemConfigRequest.Value), problem.Errors.Keys);
     }
 
     [Fact]

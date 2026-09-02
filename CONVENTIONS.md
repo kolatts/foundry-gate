@@ -47,7 +47,13 @@
 - Temporal: `DateTimeOffset`, names end in `Date` (`CreatedDate`, `ReviewedDate`).
   **[improvement]** All `CreatedDate`/`ModifiedDate` set by ONE
   `SaveChangesInterceptor` using injected `TimeProvider` — never inline
-  `DateTimeOffset.UtcNow` in services.
+  `DateTimeOffset.UtcNow` in services. **One exception**: a service may assign a
+  `ModifiedDate`-style field itself, from the injected `TimeProvider`, when the row must
+  record a re-save that changed no other column — EF never hands an unmodified entity to
+  the interceptor, so "who touched this and when" would otherwise be lost on a same-value
+  save (precedent: `ConfigService.UpdateAsync`). Both read the same `TimeProvider`, so the
+  explicit assignment and the interceptor cannot disagree; `DateTimeOffset.UtcNow` stays
+  banned either way.
 - **[improvement]** `TimeProvider` injected everywhere time is read. No naked
   `UtcNow` outside the interceptor's TimeProvider.
 - Strings: non-nullable, `[Required]` + `[StringLength(n)]`, default

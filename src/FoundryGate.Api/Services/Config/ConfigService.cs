@@ -13,6 +13,11 @@ namespace FoundryGate.Api.Services.Config;
 /// one <c>SaveChangesAsync</c> — a configuration edit without its audit trail is exactly the kind of
 /// change an operator later needs to explain.
 /// </summary>
+/// <remarks>
+/// No concurrency token: two admins editing the same key are last-write-wins today. Deliberately
+/// deferred to #170, which adds an optional <c>ExpectedUpdatedDate</c> to the request when the admin
+/// config page (#55) exists to send it.
+/// </remarks>
 public sealed class ConfigService(
     AppDbContext dbContext,
     SystemConfigValidator validator,

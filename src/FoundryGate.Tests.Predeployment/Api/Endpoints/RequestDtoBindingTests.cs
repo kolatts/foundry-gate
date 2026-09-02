@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using FoundryGate.Domain.Common;
-using FoundryGate.Domain.Config.Contracts;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Requests.Contracts;
@@ -34,7 +33,6 @@ public class RequestDtoBindingTests(ApiTestFactory factory) : IClassFixture<ApiT
         { "users/quota", """{"isUnlimited":false,"monthlyTokenQuota":-1}""", nameof(UpdateUserQuotaRequest.MonthlyTokenQuota) },
         { "requests", """{"requestedQuota":2000000,"justification":"short"}""", nameof(SubmitQuotaIncreaseRequest.Justification) },
         { "requests/review", $$"""{"reviewNotes":"{{new string('x', ValidationConstants.ReviewNotesMaxLength + 1)}}"}""", nameof(ReviewQuotaIncreaseRequest.ReviewNotes) },
-        { "config", """{}""", nameof(UpdateSystemConfigRequest.Value) },
     };
 
     [Theory]

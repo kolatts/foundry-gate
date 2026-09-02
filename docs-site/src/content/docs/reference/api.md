@@ -206,6 +206,10 @@ the system cannot use only moves the failure somewhere harder to find — and st
 (trimmed, booleans lower-cased, URLs and resource ids without a trailing slash), so two admins
 typing `True` and `true` leave the same row behind.
 
+Emptiness is one of those per-key decisions, not a blanket rule: `{ "value": "" }` **clears** a key
+whose rule allows empty (the URL and resource-id keys — how you unwire a resource) and is a `400`
+for one that does not (a quota, a reset day and a feature flag have no empty form).
+
 | Key | Rule |
 |---|---|
 | `DefaultMonthlyTokenQuota` | A non-negative whole number that is exactly one of the configured tier caps (`Gateway:Tiers`; `GET /quota/tiers` lists them). Same D-013 rule as every other quota write path — the gateway enforces a tier, not a number. Unlimited is not expressible fork-wide: it is set per user or per group |
