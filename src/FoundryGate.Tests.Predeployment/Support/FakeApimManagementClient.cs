@@ -38,6 +38,9 @@ public sealed class FakeApimManagementClient : IApimManagementClient
     /// <summary>When set, <see cref="ListSecretsAsync"/> throws it — simulates ARM failing between "keys regenerated" and "new key read".</summary>
     public Exception? ThrowOnListSecrets { get; set; }
 
+    /// <summary>When set, <see cref="DeleteSubscriptionAsync"/> throws it instead of deleting — simulates ARM refusing a deprovision.</summary>
+    public Exception? ThrowOnDelete { get; set; }
+
     /// <summary>Changes a subscription's state behind the key service's back (e.g. <c>"suspended"</c> for a hand-made orphan).</summary>
     public void SetState(string subscriptionName, string state)
     {
@@ -189,6 +192,12 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         lock (_gate)
         {
             _calls.Add($"Delete:{subscriptionName}");
+
+            if (ThrowOnDelete is { } exception)
+            {
+                throw exception;
+            }
+
             return Task.FromResult(_subscriptions.Remove(subscriptionName));
         }
     }
