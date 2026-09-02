@@ -22,10 +22,14 @@
   services any other host needs live in `FoundryGate.Core/<Area>/` with the same
   conventions (co-located interface, primary constructors, `Add<Area>Core()` DI
   extension). `FoundryGate.Core` references Data + Domain and **carries no ASP.NET Core
-  dependency** — that is what makes it usable from the isolated Functions worker. The
-  host keeps whatever the seam's implementation needs from it: the Api registers
-  `ApimGatewayTierSync` (it composes the APIM key service) against Core's
-  `IGatewayTierSync`, the Functions host registers `NullGatewayTierSync`.
+  dependency** — that is what makes it usable from the isolated Functions worker. When two
+  hosts need the same behaviour, Core owns the implementation and each host supplies only
+  what genuinely differs: both register Core's `ApimGatewayTierSync` against
+  `IGatewayTierSync` when a gateway is configured (`NullGatewayTierSync` when not), and the
+  one real difference — who a gateway-driven audit row belongs to — is its own one-method
+  seam, `IGatewayTierSyncActor` (the Api resolves the current caller, the Functions host
+  answers "the system"). Prefer a narrow seam for the difference over a second
+  implementation of the whole thing — #194.
   (Amends the "no separate Services project" rule for the shared case only — #119;
   a service with exactly one host still belongs to that host.)
 - **Options classes in Core need an explicit validation hop.** The framework's

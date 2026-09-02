@@ -19,6 +19,7 @@ const ariaLabel =
   'through EF Core; FoundryGate.Functions run the monthly reset and usage reconciliation, reading ' +
   'ApiManagementGatewayLlmLog from Log Analytics; Key Vault holds the APIM key-encryption key (no client secrets; Graph is called as the API identity). The API manages APIM ' +
   'subscriptions through the Management API: create under a tier product, regenerate both keys, move tier, delete. ' +
+  'FoundryGate.Functions reaches the same Management API for one operation only — moving a subscription to another tier product when a reset resolves a new tier. ' +
   'Legend: solid azure arrows are the real-time enforcement path on the request; dashed grey arrows are telemetry ' +
   'and reconciliation, out of band; dashed amber arrows are control-plane calls for lifecycle and tiers.';
 ---
@@ -152,8 +153,9 @@ const ariaLabel =
   <div class="fgd-system__bridge">
     <div class="fgd-arrow fgd-arrow--app fgd-arrow--up">
       <span class="fgd-arrow__label">
-        <strong>APIM Management API</strong> — create subscription under a tier product ·
-        regenerate both keys · move tier · delete
+        <strong>APIM Management API</strong> — API: create subscription under a tier product ·
+        regenerate both keys · move tier · delete<br />
+        Functions: move tier only, when a reset resolves a new one
       </span>
       <span class="fgd-arrow__line"></span>
       <span class="fgd-arrow__head"></span>
@@ -210,7 +212,8 @@ const ariaLabel =
         <div class="fgd-node__title">FoundryGate.Functions</div>
         <div class="fgd-node__sub">
           MonthlyReset — 00:01 UTC, on the configured reset day · UsageSync — reconciliation<br />
-          .NET isolated worker + storage account (runtime, reset lock) → Azure SQL via EF Core
+          .NET isolated worker + storage account (runtime, reset lock) → Azure SQL via EF Core<br />
+          Moves a subscription's tier product when a reset resolves a new one
         </div>
       </div>
       <div class="fgd-node fgd-node--app">

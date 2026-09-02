@@ -233,8 +233,8 @@ changing that setting takes effect the next day rather than at the next deployme
       detail: "For each active developer, run the five-level quota resolution for the new month and insert their row. A row that already exists is re-resolved but keeps its reconciled TokensUsed — zeroing it mid-period would only make the dashboard disagree with the gateway.",
     },
     {
-      title: "Clear hard-stop mirrors",
-      detail: "Gateway token-quota counters reset themselves at the UTC month boundary — no APIM counter manipulation needed, and no subscription state is touched. The Function only clears the IsHardStopped mirror so dashboards start the month clean.",
+      title: "Clear hard-stop mirrors, and move any tier that changed",
+      detail: "Gateway token-quota counters reset themselves at the UTC month boundary, so there is no counter to clear — the Function clears the IsHardStopped mirror so dashboards start the month clean. If re-resolving turns up a developer whose tier product changed, it moves their APIM subscription too, and commits that move with the audit row describing it before starting the next one. A move the gateway refuses is recorded and skipped: that developer keeps the tier APIM is still enforcing, and the rest of the run finishes.",
     },
     {
       title: "Write the audit log entries",

@@ -8,8 +8,8 @@ namespace FoundryGate.Tests.Predeployment.Api.Endpoints;
 
 /// <summary>
 /// The half of #181 that configuration alone makes testable: the window is a setting, and it really
-/// turns over. Its own host, configured with a one-second reveal window and a permit count of one, so
-/// the whole cycle — spend the budget, be refused, be allowed again — fits in a couple of seconds of
+/// turns over. Its own host, configured with a **three-second** reveal window and a permit count of
+/// one, so the whole cycle — spend the budget, be refused, be allowed again — fits in a few seconds of
 /// real time.
 /// </summary>
 /// <remarks>
@@ -17,7 +17,9 @@ namespace FoundryGate.Tests.Predeployment.Api.Endpoints;
 /// <c>System.Threading.RateLimiting</c>'s limiters own their replenishment timer and accept no
 /// <c>TimeProvider</c>, so <c>ApiTestFactory.TimeProvider</c> cannot move them. It polls with a
 /// generous ceiling rather than sleeping for exactly one window, so a slow CI agent makes it slower
-/// rather than red.
+/// rather than red. Three seconds rather than one because the <em>first</em> reveal is the cold path
+/// through decrypt, the audit write and the anomaly query — with a one-second window that first call
+/// could spend most of it, and the refusal this asserts would race the boundary (#211 review).
 /// </remarks>
 public class KeysRateLimitWindowTests(KeysRateLimitWindowTests.ShortWindowFactory factory)
     : IClassFixture<KeysRateLimitWindowTests.ShortWindowFactory>
@@ -29,7 +31,7 @@ public class KeysRateLimitWindowTests(KeysRateLimitWindowTests.ShortWindowFactor
 
     private const string KeysPath = "/api/v1/keys";
 
-    /// <summary>A host whose reveal policy is one request per second — the shape a fork retuning `Security:RateLimits` would produce.</summary>
+    /// <summary>A host whose reveal policy is one request per three seconds — the shape a fork retuning `Security:RateLimits` would produce.</summary>
     public sealed class ShortWindowFactory : ApiTestFactory
     {
         /// <inheritdoc />
@@ -38,7 +40,7 @@ public class KeysRateLimitWindowTests(KeysRateLimitWindowTests.ShortWindowFactor
             ArgumentNullException.ThrowIfNull(settings);
 
             settings["Security:RateLimits:Reveal:PermitLimit"] = "1";
-            settings["Security:RateLimits:Reveal:WindowSeconds"] = "1";
+            settings["Security:RateLimits:Reveal:WindowSeconds"] = "3";
         }
     }
 
@@ -46,7 +48,7 @@ public class KeysRateLimitWindowTests(KeysRateLimitWindowTests.ShortWindowFactor
     public async Task The_configured_permit_count_and_window_are_what_the_host_enforces()
     {
         Assert.Equal(1, factory.RateLimits.Reveal.PermitLimit);
-        Assert.Equal(TimeSpan.FromSeconds(1), factory.RateLimits.Reveal.Window);
+        Assert.Equal(TimeSpan.FromSeconds(3), factory.RateLimits.Reveal.Window);
 
         // Rotate was not configured, so it keeps the shipped default — a fork retunes one policy
         // without disturbing the other.
@@ -63,9 +65,9 @@ public class KeysRateLimitWindowTests(KeysRateLimitWindowTests.ShortWindowFactor
 
         // Retry-After never promises longer than the configured window.
         var retryAfter = int.Parse(Assert.Single(refused.Headers.GetValues("Retry-After")), System.Globalization.CultureInfo.InvariantCulture);
-        Assert.InRange(retryAfter, 0, 1);
+        Assert.InRange(retryAfter, 0, 3);
 
-        Assert.True(await EventuallyAllowedAsync(developer), $"The one-second window never replenished within {ReplenishmentCeiling.TotalSeconds}s.");
+        Assert.True(await EventuallyAllowedAsync(developer), $"The three-second window never replenished within {ReplenishmentCeiling.TotalSeconds}s.");
     }
 
     /// <summary>Polls the reveal route until it is allowed again, or the ceiling passes.</summary>

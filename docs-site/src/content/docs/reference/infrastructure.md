@@ -163,25 +163,29 @@ All scoped to the individual resource, never the resource group; names are
 ### Why the Functions identity can write to APIM
 
 Quota tiers are APIM products, so "this developer's monthly budget changed" means "move their
-subscription to another product". Most of those moves happen in the API, on an admin's request. One
-does not: changing the system-wide `DefaultMonthlyTokenQuota` re-resolves nobody, so the next
-scheduled monthly reset is the first thing to notice — and a developer with no earlier allocation
-has no known previous tier either. Until [#194](https://github.com/kolatts/foundry-gate/issues/194)
-the Functions host could only log a warning that the database and the gateway had diverged, and they
-stayed diverged until the API next touched that user.
+subscription to another product". Almost every such move happens in the API, on somebody's request —
+including a change to the system-wide `DefaultMonthlyTokenQuota`, which since
+[#204](https://github.com/kolatts/foundry-gate/issues/204) re-resolves its default-tier users in the
+same transaction as the edit. What is left over lands on the scheduled monthly reset: a developer
+with no earlier allocation has no known previous tier, and anything a re-resolution missed surfaces
+there first. Until [#194](https://github.com/kolatts/foundry-gate/issues/194) the Functions host
+could only log a warning that the database and the gateway had diverged, and they stayed diverged
+until the API next touched that user.
 
 Giving the Functions identity **API Management Service Contributor** closes that, and it is a real
 widening of what a scheduled job can do: Azure offers no narrower built-in for "re-scope a
 subscription", so the same role that permits the move also permits creating, deleting and
 regenerating developer subscriptions and editing the gateway's named values. Two things bound the
 risk rather than remove it — the Functions host carries **no key protection** (it cannot read or
-write a developer's key: [`IKeyProtector`](/reference/configuration/) stays in the API), and every
+write a developer's key: [`IKeyProtector`](/foundry-gate/reference/configuration/) stays in the API), and every
 move it makes writes a system-attributed `key.tier-changed` audit row alongside the run's own
 `quota.monthly-reset` row, so the trail names every subscription a job touched.
 
 A fork that would rather keep the job read-only can delete the `functionsApimContributor` resource
-from `modules/control-plane-rbac.bicep`: the reset then fails loudly on the first tier change
-instead of moving it silently, which is the honest failure mode for a missing role.
+from `modules/control-plane-rbac.bicep`. The reset then records each refused move at Error with the
+developer's identity, counts it into its own audit row, and leaves that developer on the tier the
+gateway is still enforcing — loud and reconcilable rather than silently divergent, which is the
+honest failure mode for a missing role.
 
 Not expressible in Bicep. Two of these the deploy pipeline now does itself through the
 `foundrygate` CLI; the rest remain operator steps tracked in
