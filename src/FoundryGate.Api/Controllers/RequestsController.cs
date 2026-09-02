@@ -130,4 +130,24 @@ public sealed class RequestsController(IQuotaRequestService quotaRequests) : Api
         [FromBody] ReviewQuotaIncreaseRequest review,
         CancellationToken cancellationToken) =>
         quotaRequests.RejectAsync(id, review, cancellationToken);
+
+    /// <summary>
+    /// Admin: closes every request left <c>Pending</c> from a billing period that has ended, as
+    /// <c>Rejected</c> with a system note and no reviewer, and audits the sweep as one
+    /// <c>quota.requests-expired</c> row (#159).
+    /// </summary>
+    /// <remarks>
+    /// The monthly reset runs this same sweep, so an admin never normally needs it. It exists for the
+    /// window between a period ending and the next reset — where those requests are already unapprovable
+    /// (<c>409</c>) but still clutter the review queue — and it is the cheap way to clear them:
+    /// <c>POST /quota/reset</c> would also re-resolve every allocation and can move tiers at the gateway,
+    /// where this touches nothing but the stale rows.
+    /// </remarks>
+    /// <response code="200">How many requests were closed; <c>0</c> writes nothing at all.</response>
+    [HttpPost("expire-stale")]
+    [Authorize(Policy = PolicyNames.AdminOnly)]
+    [ProducesResponseType<ExpireStaleRequestsResult>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
+    public async Task<ExpireStaleRequestsResult> ExpireStaleAsync(CancellationToken cancellationToken) =>
+        new(await quotaRequests.ExpireStaleAsync(cancellationToken));
 }

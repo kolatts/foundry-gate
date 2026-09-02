@@ -426,8 +426,8 @@ public sealed class QuotaRequestService(
     /// the index ("Cannot insert duplicate key row … with unique index
     /// 'IX_QuotaIncreaseRequests_PendingPerUserPeriod'"), SQLite names the columns ("UNIQUE constraint
     /// failed: QuotaIncreaseRequests.UserId, …"). Matching the identifiers rather than re-querying keeps
-    /// the 409 honest whichever provider is underneath; the <c>GroupService</c> name/Entra-link indexes
-    /// are the precedent. <c>UserId</c> is enough to pick this index out on SQLite — the table's only
+    /// the 409 honest whichever provider is underneath — see <see cref="UniqueIndexViolation"/> for why
+    /// each index needs both. <c>UserId</c> is enough to pick this index out on SQLite: the table's only
     /// other unique index is on <c>QuotaIncreaseRequestUnique</c>.
     /// </summary>
     private static readonly string[] PendingPerUserPeriodIndexMarkers =
@@ -447,24 +447,10 @@ public sealed class QuotaRequestService(
         {
             await dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException exception) when (Mentions(exception, PendingPerUserPeriodIndexMarkers))
+        catch (DbUpdateException exception) when (UniqueIndexViolation.Mentions(exception, PendingPerUserPeriodIndexMarkers))
         {
             throw new ConflictException(AlreadyPending(userId, period), exception);
         }
-    }
-
-    /// <summary>True when any exception in the chain names one of <paramref name="markers"/>.</summary>
-    private static bool Mentions(Exception exception, string[] markers)
-    {
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            if (Array.Exists(markers, marker => current.Message.Contains(marker, StringComparison.Ordinal)))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string AlreadyPending(int userId, BillingPeriod period) =>

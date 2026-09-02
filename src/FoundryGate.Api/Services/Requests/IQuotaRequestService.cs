@@ -150,10 +150,11 @@ public interface IQuotaRequestService
     /// </summary>
     /// <remarks>
     /// The rule itself is <see cref="Core.Requests.IQuotaRequestExpiry"/> in Core, shared with the
-    /// monthly reset — a timer and a button must not disagree about what expiry means. This entry point
-    /// exists so the Api can sweep on its own (an operator tool, a future admin route); nothing over
-    /// HTTP calls it yet, and the reset is what runs it on the normal schedule. Nothing external is
-    /// touched, so the caller's own token applies throughout.
+    /// monthly reset — a timer and a button must not disagree about what expiry means. Reached over HTTP
+    /// as the admin-only <c>POST /requests/expire-stale</c>, which exists for the window between a period
+    /// ending and the next reset running: those requests are already unapprovable, and clearing them with
+    /// <c>POST /quota/reset</c> would also re-resolve every allocation and can move tiers at the gateway.
+    /// Nothing external is touched here, so the caller's own token applies throughout.
     /// </remarks>
     /// <returns>How many requests were closed; <c>0</c> writes nothing at all.</returns>
     Task<int> ExpireStaleAsync(CancellationToken cancellationToken);

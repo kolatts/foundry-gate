@@ -33,6 +33,17 @@ public sealed class QuotaResetService(
             .Select(u => u.UserId)
             .ToListAsync(cancellationToken);
 
+        // The queue is swept as part of the reset (#159): a request nobody reviewed before the period
+        // closed can no longer raise anything (approval refuses it), so leaving it Pending only means an
+        // admin opens a review queue every month with last month's dead entries still in it. Purely a
+        // database change with its own audit row, added to this same unit of work.
+        //
+        // Deliberately above the commit point (#204 review): its rows commit with the reset either way,
+        // but running its query after the first tier move would mean a transient database failure here
+        // discards a reset APIM has already accepted — the exact divergence CommitToken exists to close.
+        // Up here, a failure aborts before anything external has happened and costs nothing.
+        var expiredRequestCount = await requestExpiry.ExpireStaleAsync(period, cancellationToken);
+
         var resolutions = await quotaResolution.ResolveManyAsync(activeUserIds, period, cancellationToken);
         var touched = resolutions.Select(r => r.Allocation).ToList();
 
@@ -43,13 +54,6 @@ public sealed class QuotaResetService(
         // unchanged inputs moves nobody and is not a commit point (CONVENTIONS.md; #184).
         var tierSyncCount = resolutions.Count(r => r.TierSyncRequested);
         var completionToken = CommitToken.For(tierSyncCount > 0, cancellationToken);
-
-        // The queue is swept as part of the reset (#159): a request nobody reviewed before the period
-        // closed can no longer raise anything (approval refuses it), so leaving it Pending only means an
-        // admin opens a review queue every month with last month's dead entries still in it. Purely a
-        // database change with its own audit row, added to this same unit of work — no external system,
-        // so it does not move the commit point, and it rides whichever token the tier syncs decided.
-        var expiredRequestCount = await requestExpiry.ExpireStaleAsync(period, completionToken);
 
         foreach (var allocation in touched)
         {
@@ -105,7 +109,7 @@ public sealed class QuotaResetService(
             tierSyncCount,
             expiredRequestCount);
 
-        return new QuotaResetOutcome(resolutions.Count, tierSyncCount, period, now);
+        return new QuotaResetOutcome(resolutions.Count, tierSyncCount, expiredRequestCount, period, now);
     }
 
     /// <summary>Every touched row starts the period un-stopped and records when it was last resolved.</summary>

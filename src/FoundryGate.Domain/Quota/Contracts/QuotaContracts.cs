@@ -90,4 +90,14 @@ public record QuotaTierResponse(
 /// <param name="PeriodYear">Calendar year (UTC) of the period that was reset.</param>
 /// <param name="PeriodMonth">Calendar month (UTC, 1-12) of the period that was reset.</param>
 /// <param name="ResetDate">When the reset ran — also written to every touched row's <c>ResetDate</c>.</param>
-public record QuotaResetResult(int UsersResetCount, int PeriodYear, int PeriodMonth, DateTimeOffset ResetDate);
+/// <param name="ExpiredRequestCount">
+/// Quota increase requests left pending from an earlier period that this run closed as <c>Rejected</c>
+/// (#159). Usually zero; reported so an admin who clears six stale requests is told, rather than having
+/// to find it in the audit log.
+/// </param>
+public record QuotaResetResult(
+    int UsersResetCount,
+    int PeriodYear,
+    int PeriodMonth,
+    DateTimeOffset ResetDate,
+    int ExpiredRequestCount);

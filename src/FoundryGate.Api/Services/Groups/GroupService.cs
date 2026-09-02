@@ -516,30 +516,16 @@ public sealed class GroupService(
         {
             _ = await dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException exception) when (Mentions(exception, NameIndexMarkers))
+        catch (DbUpdateException exception) when (UniqueIndexViolation.Mentions(exception, NameIndexMarkers))
         {
             logger.LogWarning(exception, "Group name '{GroupName}' was taken concurrently; returning 409.", name);
             throw new ConflictException(DuplicateNameMessage(name), exception);
         }
-        catch (DbUpdateException exception) when (Mentions(exception, EntraGroupIdIndexMarkers))
+        catch (DbUpdateException exception) when (UniqueIndexViolation.Mentions(exception, EntraGroupIdIndexMarkers))
         {
             logger.LogWarning(exception, "Entra group {EntraGroupId} was linked concurrently (group {ExceptGroupId} excluded); returning 409.", entraGroupId, exceptGroupId);
             throw new ConflictException(DuplicateEntraLinkMessage(entraGroupId), exception);
         }
-    }
-
-    /// <summary>True when any exception in the chain names one of <paramref name="markers"/>.</summary>
-    private static bool Mentions(Exception exception, string[] markers)
-    {
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            if (Array.Exists(markers, marker => current.Message.Contains(marker, StringComparison.Ordinal)))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static string DuplicateNameMessage(string name) =>

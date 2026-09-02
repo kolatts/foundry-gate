@@ -51,7 +51,9 @@ public interface IConfigService
     /// <c>ExpectedUpdatedDate</c> was supplied and does not match the stored row (→ 409): another admin
     /// wrote the key first. The message carries the row's current value, its timestamp and — when it has
     /// one — the editor's display name, so the caller can re-decide without another round trip. Checked
-    /// before the value is validated: a stale view has to be refreshed whatever it was trying to write.
+    /// before the value is validated (a stale view has to be refreshed whatever it was trying to write),
+    /// and enforced by a conditional <c>UPDATE</c>, so it holds for two admins racing and not only for
+    /// two saving in turn.
     /// </exception>
     /// <exception cref="UnauthorizedAccessException">The calling admin has no <c>User</c> row yet (→ 403; call <c>GET /users/me</c> first).</exception>
     Task<SystemConfigEntryResponse> UpdateAsync(string key, UpdateSystemConfigRequest request, CancellationToken cancellationToken);
