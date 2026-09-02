@@ -8,6 +8,7 @@ using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Config.Contracts;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
@@ -233,6 +234,112 @@ public class ConfigServiceTests : InMemoryDatabaseTest
             .SingleAsync(c => c.Key == SystemConfigurationKeys.DefaultMonthlyTokenQuota);
         Assert.Equal(TestGatewayTiers.StandardCap.ToString(System.Globalization.CultureInfo.InvariantCulture), config.Value);
         Assert.Empty(await verification.AuditLogs.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task A_concurrent_write_between_the_check_and_the_claim_loses_with_a_409()
+    {
+        // #170/#204: the read-then-compare is only the friendly refusal. The guard is the conditional
+        // UPDATE … WHERE UpdatedDate = @expected, and this is the only way to reach it — the competing
+        // write lands from a second context in the window after our pre-check has passed and before our
+        // statement runs, which is exactly the race two admins with the config form open produce.
+        await SeedReferenceDataAsync();
+        var first = await SeedUserAsync("Ada Lovelace");
+        var second = await SeedUserAsync("Grace Hopper");
+
+        var seen = await CreateService(first.EntraObjectId).UpdateAsync(
+            SystemConfigurationKeys.ResetDayOfMonth,
+            new UpdateSystemConfigRequest { Value = "4" },
+            CancellationToken.None);
+
+        var raced = false;
+        CommandInterceptor.BeforeExecuting = sql =>
+        {
+            if (raced || !sql.Contains("UPDATE \"SystemConfigurations\"", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            // Set before the competing write, whose own UPDATE re-enters this callback.
+            raced = true;
+            using var winner = CreateVerificationContext();
+            _ = winner.SystemConfigurations
+                .Where(c => c.Key == SystemConfigurationKeys.ResetDayOfMonth)
+                .ExecuteUpdate(setters => setters
+                    .SetProperty(c => c.Value, "9")
+                    .SetProperty(c => c.UpdatedDate, seen.UpdatedDate.AddMinutes(1)));
+        };
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+            CreateService(second.EntraObjectId).UpdateAsync(
+                SystemConfigurationKeys.ResetDayOfMonth,
+                new UpdateSystemConfigRequest { Value = "5", ExpectedUpdatedDate = seen.UpdatedDate },
+                CancellationToken.None));
+
+        CommandInterceptor.BeforeExecuting = _ => { };
+        Assert.True(raced);
+        Assert.Contains(SystemConfigurationKeys.ResetDayOfMonth, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'9'", exception.Message, StringComparison.Ordinal);
+
+        // The loser wrote nothing — not the value, and not a config.updated row claiming it did. The row
+        // reads "4" rather than the winner's "9" because the harness's second context shares this one's
+        // connection, so the competing write joined the service's transaction and rolled back with it.
+        // That is a property of the harness, not of the service: what this test proves is that the claim
+        // saw a changed UpdatedDate, matched no row, and refused — which the 409 above establishes.
+        await using var verification = CreateVerificationContext();
+        var row = await verification.SystemConfigurations.AsNoTracking()
+            .SingleAsync(c => c.Key == SystemConfigurationKeys.ResetDayOfMonth);
+        Assert.Equal("4", row.Value);
+        Assert.NotEqual("5", row.Value);
+        Assert.Single(await verification.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.ConfigUpdated).ToListAsync());
+    }
+
+    [Fact]
+    public async Task The_affected_user_query_selects_exactly_the_users_the_resolution_chain_puts_on_the_system_default()
+    {
+        // #204 review: SystemDefaultUserIdsAsync re-expresses levels 1-4 of the precedence chain as a SQL
+        // predicate, while QuotaResolutionService.ResolveLevelAsync owns the same rule in C#. They agree
+        // today and nothing else keeps them agreeing — add a level, or change "any unlimited group wins",
+        // and both halves would still return a plausible list. One user per level, none with an existing
+        // allocation (so the union's stale-row half is empty and this compares the predicates alone).
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var userUnlimited = await SeedUserAsync("User unlimited", u => u.IsUnlimited = true);
+        var userOverride = await SeedUserAsync("User override", u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
+        var groupUnlimited = await SeedUserAsync("Group unlimited");
+        var groupMax = await SeedUserAsync("Group max");
+        var systemDefault = await SeedUserAsync("System default");
+        var deactivated = await SeedUserAsync("Deactivated", u => u.IsActive = false);
+        await SeedGroupMembershipAsync(groupUnlimited, groupQuota: null, isUnlimited: true);
+        await SeedGroupMembershipAsync(groupMax, groupQuota: TestGatewayTiers.PowerCap);
+
+        // What the chain itself says, asked user by user through the service that owns the rule.
+        var resolution = new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance);
+        var byTheChain = new List<int>();
+        foreach (var user in new[] { admin, userUnlimited, userOverride, groupUnlimited, groupMax, systemDefault, deactivated })
+        {
+            if ((await resolution.PreviewAsync(user.UserId, CancellationToken.None)).Level == QuotaLevelType.SystemDefault
+                && user.IsActive)
+            {
+                byTheChain.Add(user.UserId);
+            }
+        }
+
+        Assert.Equal([admin.UserId, systemDefault.UserId], byTheChain);
+
+        _ = await CreateService(admin.EntraObjectId).UpdateAsync(
+            SystemConfigurationKeys.DefaultMonthlyTokenQuota,
+            new UpdateSystemConfigRequest { Value = TestGatewayTiers.PowerCap.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+            CancellationToken.None);
+
+        // What the SQL predicate picked: exactly the users that now hold a re-resolved allocation.
+        await using var verification = CreateVerificationContext();
+        var byTheQuery = await verification.QuotaAllocations.AsNoTracking()
+            .OrderBy(a => a.UserId)
+            .Select(a => a.UserId)
+            .ToListAsync();
+
+        Assert.Equal(byTheChain, byTheQuery);
     }
 
     // -- Helpers --

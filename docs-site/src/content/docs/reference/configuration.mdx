@@ -84,27 +84,29 @@ and flagged `isGatewayCapped` until an admin corrects them.
 
 ## Environment variables / appsettings
 
-One table for both control-plane hosts. `infra/modules/control-plane.bicep` sets these as Container
-App environment variables and Function App application settings; the Bicep is the source of truth for
-the names, and the [Infrastructure Reference](/foundry-gate/reference/infrastructure/) covers the
-resources behind the values. None of them is a secret: SQL uses Entra authentication, so even the
-connection string is plain configuration. Secrets, when one is ever needed, are set out of band in Key
-Vault and referenced from appsettings as `@KeyVault(SecretName)`.
+The complete set for both control-plane hosts, grouped by who gets what: shared, gateway addressing,
+API-only, Functions-only. `infra/modules/control-plane.bicep` sets them as Container App environment
+variables and Function App application settings; the Bicep is the source of truth for the names, and
+the [Infrastructure Reference](/foundry-gate/reference/infrastructure/) covers the resources behind
+the values. None of them is a secret: SQL uses Entra authentication, so even the connection string is
+plain configuration. Secrets, when one is ever needed, are set out of band in Key Vault and referenced
+from appsettings as `@KeyVault(SecretName)`.
 
-The **Host** column is what each host *binds and can use* — ✅ set by infra, — not applicable to that
-host. Anything marked ✅ for both comes from the bicep's shared block, so the two can never be told
-about different gateways ([#108](https://github.com/kolatts/foundry-gate/issues/108); a predeployment
-test, `GatewayInfraBindingTests`, reads the bicep and fails if a `Gateway__*` name drifts from
-`GatewayOptions`, if infra sets one nothing binds, or if a new `Gateway` member arrives with no source).
+Everything in the first two sections is set on **both** hosts from one shared block in the Bicep, so
+the API and the Functions host can never be told about different gateways
+([#108](https://github.com/kolatts/foundry-gate/issues/108)). A predeployment test,
+`GatewayInfraBindingTests`, reads that Bicep, binds a real `GatewayOptions` from the names it finds and
+checks by reflection that each one arrived — so it fails if a `Gateway__*` name drifts, if infra sets
+one nothing binds, or if a new `Gateway` member turns up with no declared source.
 
 ### Shared by both hosts
 
-| Key | API | Functions | Description |
-|---|:--:|:--:|---|
-| `AZURE_CLIENT_ID` | ✅ | ✅ | Client id of that host's user-assigned managed identity — selects it in the token credential chain |
-| `Azure__KeyVaultUrl` | ✅ | ✅ | Key Vault URI for `@KeyVault()` reference resolution; absent locally, which skips resolution |
-| `ConnectionStrings__FoundryGate` | ✅ | ✅ | Azure SQL connection string, `Authentication=Active Directory Default` (no password) |
-| `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | ✅ | ✅ | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` and for a local `func start` |
+| Key | Description |
+|---|---|
+| `AZURE_CLIENT_ID` | Client id of that host's user-assigned managed identity — selects it in the token credential chain |
+| `Azure__KeyVaultUrl` | Key Vault URI for `@KeyVault()` reference resolution; absent locally, which skips resolution |
+| `ConnectionStrings__FoundryGate` | Azure SQL connection string, `Authentication=Active Directory Default` (no password) |
+| `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | OpenTelemetry → Azure Monitor; off in `appsettings.local.json` and for a local `func start` |
 
 ### Gateway addressing (`Gateway__*`, shared by both hosts)
 

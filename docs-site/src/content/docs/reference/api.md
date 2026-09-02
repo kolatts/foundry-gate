@@ -250,8 +250,10 @@ exist are re-resolved (`allocatedTokens`, level, tier, capped flag) but **keep t
 `tokensUsed`** — the gateway's monthly window resets itself, so zeroing the mirror mid-month
 would only make dashboards lie. Every touched row gets `isHardStopped = false` and
 `resetDate = now`. Exactly one audit row (`quota.reset`, attributed to the calling admin, details
-`{ usersResetCount, periodYear, periodMonth, createdCount, tierSyncCount, expiredRequestCount }`)
-per run. Returns `{ usersResetCount, periodYear, periodMonth, resetDate }`. Running it twice in a
+`{ usersResetCount, periodYear, periodMonth, tierChangeCount, expiredRequestCount }`)
+per run. `tierChangeCount` is named for what it means to a human reading the trail — every one of those
+is a developer whose *enforced* budget moved this run — not for the seam it went through.
+Returns `{ usersResetCount, periodYear, periodMonth, resetDate, expiredRequestCount }`. Running it twice in a
 month produces the same row count.
 
 **The reset also sweeps the review queue.** In the same transaction, every quota increase request
@@ -273,6 +275,7 @@ nothing writes no row at all. The scheduled monthly job runs exactly the same co
 | `GET` | `/requests/{id}` | Owner or Admin | Request detail. `404` for anyone else — see below |
 | `POST` | `/requests/{id}/approve` | Admin | Approve. Applies the tier to the user and re-resolves the current period immediately |
 | `POST` | `/requests/{id}/reject` | Admin | Reject. Nothing about the user's quota changes |
+| `POST` | `/requests/expire-stale` | Admin | Close every request left `Pending` from a period that has ended. No body. Returns `{ expiredCount }` |
 
 **A request asks for a tier, not a number.** `requestedQuota` must be `null` (unlimited) or exactly
 one of the configured tier caps from `GET /quota/tiers` — anything else is `400` listing the allowed
@@ -446,10 +449,17 @@ transaction**, which moves their APIM subscription to the new tier product
 ([#193](https://github.com/kolatts/foundry-gate/issues/193)). Before this, the key changed and nobody
 moved: the allocation row said one thing, the gateway enforced another, and the first thing to notice
 was usually the scheduled monthly reset — which runs in the Functions host, has no APIM management
-client, and so could only log the divergence it was creating. A failed gateway move fails the whole
-edit, so the database never claims a default the gateway is not enforcing. Re-saving the key's existing
-value re-resolves nobody, and deactivated users are skipped (their key is revoked; there is nothing to
-move).
+client, and so could only log the divergence it was creating. Re-saving the key's existing value
+re-resolves nobody, and deactivated users are skipped (their key is revoked; there is nothing to move).
+
+A failed gateway move fails the whole edit, so **the database never claims a default the gateway is not
+enforcing**. The converse is not guaranteed, and on a large fork it is the likelier failure: the
+subscriptions are re-scoped one at a time, so if developer 200 of 400 throws, 199 have already been
+moved at the gateway and nothing commits — the gateway then enforces a default SQL never recorded. The
+next reset or config edit converges it, and the direction is the safe one (the record is behind the
+enforcement, not ahead of it), but it is a real partial state. It is the same shape the monthly reset
+has, and [#199](https://github.com/kolatts/foundry-gate/issues/199) — which is about not doing thousands
+of ARM calls inside one request at all — is where it gets solved.
 
 Every accepted edit stamps `updatedByUserId` (the calling admin) and `updatedDate`, and writes one
 `config.updated` audit row with `{ key, before, after, reresolvedUserCount, tierChangeCount }` — in the

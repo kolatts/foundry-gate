@@ -225,6 +225,10 @@ changing that setting takes effect the next day rather than at the next deployme
       detail: "Runs on or after SystemConfiguration[ResetDayOfMonth] (1–28) when this month has no reset in the audit log yet, so a tick lost to an outage is picked up by the next day rather than costing the month its reset. One replica then takes a short blob lease, renewed while held, so two instances waking together cannot both run — though the reset is idempotent either way.",
     },
     {
+      title: "Close quota requests the period left behind",
+      detail: "Any increase request still Pending from a month that has ended becomes Rejected, with a system note and no reviewer. Those requests can no longer be approved anyway — approval refuses a closed period — so leaving them would just mean the review queue starts every month with last month's dead entries in it. First, before anything can touch the gateway, so a failure here costs nothing.",
+    },
+    {
       title: "Resolve quota for the new period and upsert QuotaAllocation",
       detail: "For each active developer, run the five-level quota resolution for the new month and insert their row. A row that already exists is re-resolved but keeps its reconciled TokensUsed — zeroing it mid-period would only make the dashboard disagree with the gateway.",
     },
@@ -233,8 +237,8 @@ changing that setting takes effect the next day rather than at the next deployme
       detail: "Gateway token-quota counters reset themselves at the UTC month boundary — no APIM counter manipulation needed, and no subscription state is touched. The Function only clears the IsHardStopped mirror so dashboards start the month clean.",
     },
     {
-      title: "Write one audit log entry",
-      detail: "A single quota.monthly-reset row, committed in the same transaction as every allocation it describes. The same code runs behind an admin's manual POST /quota/reset, which audits as quota.reset and names the admin.",
+      title: "Write the audit log entries",
+      detail: "One quota.monthly-reset row carrying the counts, committed in the same transaction as every allocation it describes — plus a second quota.requests-expired row when the sweep above actually closed something (a sweep that finds nothing writes no row at all). The same code runs behind an admin's manual POST /quota/reset, which audits as quota.reset and names the admin.",
     },
   ]}
 />

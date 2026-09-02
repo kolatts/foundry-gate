@@ -200,6 +200,20 @@ public sealed class ConfigService(
 
         if (claimed > 0)
         {
+            // ExecuteUpdate runs outside the change tracker, so any instance of this row the request had
+            // already loaded is stale the moment it succeeds. Detach it, exactly as
+            // QuotaRequestService.ClaimAsync does — and here it is load-bearing, not tidiness: quota
+            // resolution reads the system default from the tracker first (pending state before database),
+            // and the reference-data seeder leaves these very rows tracked, so a stale copy left here
+            // would have the re-resolution below write the OLD default back onto every default-tier
+            // developer while still committing the new one.
+            foreach (var stale in dbContext.ChangeTracker.Entries<SystemConfiguration>()
+                .Where(tracked => string.Equals(tracked.Entity.Key, key, StringComparison.OrdinalIgnoreCase))
+                .ToList())
+            {
+                stale.State = EntityState.Detached;
+            }
+
             return;
         }
 

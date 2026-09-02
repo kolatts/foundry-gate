@@ -143,7 +143,11 @@ public class QuotaResetServiceTests : InMemoryDatabaseTest
         var stale = await SeedRequestAsync(dev, new BillingPeriod(2026, 9), QuotaRequestStatusType.Pending);
         var live = await SeedRequestAsync(dev, Period, QuotaRequestStatusType.Pending);
 
-        _ = await CreateService().ResetAsync(QuotaResetTrigger.Scheduled(), CancellationToken.None);
+        var outcome = await CreateService().ResetAsync(QuotaResetTrigger.Scheduled(), CancellationToken.None);
+
+        // Reported on the outcome, not only in the audit log: an admin who runs POST /quota/reset and
+        // clears six stale requests should be told so by the response (#204 review).
+        Assert.Equal(1, outcome.ExpiredRequestCount);
 
         await using var verify = CreateVerificationContext();
         var rows = await verify.QuotaIncreaseRequests.AsNoTracking().ToDictionaryAsync(r => r.QuotaIncreaseRequestId);

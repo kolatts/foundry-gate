@@ -212,6 +212,45 @@ Verification runbook and a PowerShell grant snippet:
 [#120](https://github.com/kolatts/foundry-gate/issues/120). Locally the Azure CLI login is
 used instead, so the developer's own delegated Graph access applies.
 
+## Pre-deployment script
+
+`FoundryGate.Database/Scripts/PreDeployment.sql` is declared `<PreDeploy>` in the `.sqlproj`
+(and removed from the SDK's `**/*.sql` `Build` glob, which would otherwise try to parse DML as
+schema). DacFx embeds it in the dacpac as `predeploy.sql` and runs it **inside the deployment
+transaction, before any schema change** — which is what lets it clear data that a new constraint
+would otherwise reject. `db deploy` goes through `DacServices`, so it honours the script exactly as
+a `SqlPackage` publish would; nothing extra is wired in the CLI or the workflow.
+
+Two rules for anything added here:
+
+- **Idempotent, and safe at any earlier schema version.** The script runs on *every* deploy, not
+  only the one that first needs it — including against a brand-new empty database. Guard each block
+  on the objects it touches (`IF OBJECT_ID(...) IS NOT NULL`), and write the change so a second run
+  is a no-op.
+- **It is data repair, not schema.** Schema belongs in `dbo/Tables/*.sql`, which the EF model is the
+  source of truth for.
+
+The one block it currently carries closes duplicate **pending** quota increase requests per
+`(UserId, PeriodYear, PeriodMonth)`, keeping the newest, before
+`IX_QuotaIncreaseRequests_PendingPerUserPeriod` is created
+([#147](https://github.com/kolatts/foundry-gate/issues/147)). Until that filtered unique index
+existed the rule was enforced only by a read-then-write check that two concurrent submissions could
+both pass, so a fork that has been running may already hold exactly the rows the index forbids —
+and because the dacpac step is part of the automatic deploy chain, a failed `CREATE UNIQUE INDEX`
+would take the whole deployment down rather than just the index. The losers become `Rejected` with
+`ReviewNotes = 'Superseded by a later request (pre-deploy dedupe)'` and no reviewer, the same shape
+a lapsed request gets from the [#159](https://github.com/kolatts/foundry-gate/issues/159) sweep.
+
+Verified against SQL Server 2022 in docker: a database seeded with two pending rows for one user and
+period and the index dropped deploys cleanly, printing
+`Pre-deploy: closed 1 duplicate pending quota increase request(s) …` and then creating the index; a
+third deploy is silent, because there is nothing left to close.
+
+**One operational note about filtered indexes.** A filtered index makes `SET QUOTED_IDENTIFIER ON`
+mandatory for DML on that table. EF Core and SqlClient set it by default and DacFx sets it for its own
+scripts, so application code and deploys are unaffected — but a hand-run `sqlcmd -Q` against
+`QuotaIncreaseRequests` needs it stated explicitly or the write fails with `Msg 1934`.
+
 ## What the hosts are told
 
 Set as Container App environment variables and Function App settings; keys are ASP.NET
