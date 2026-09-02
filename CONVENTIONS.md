@@ -145,8 +145,9 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   and rethrown (precedent: `FoundryDeploymentService.AuditAfterCommitAsync`). Where the commit
   point is *conditional* — quota resolution reaches APIM only when
   `QuotaResolution.TierSyncRequested` — express it with
-  **`CommitToken.For(reachedExternal, cancellationToken)`** (`Api/Services/CommitToken.cs`), never a
-  hand-rolled ternary, and carry the token it returns through the audit row, the save, the
+  **`CommitToken.For(reachedExternal, cancellationToken)`**
+  (`FoundryGate.Data/Concurrency/CommitToken.cs` — in Data, not the Api, so every host that saves can
+  reach it), never a hand-rolled ternary, and carry the token it returns through the audit row, the save, the
   transaction commit *and* any read-back that turns the committed change into the response (a
   cancelled read-back reports a change that actually landed as an error). The predicate is "we
   reached the external system", not "we called something that might have": an empty member list or

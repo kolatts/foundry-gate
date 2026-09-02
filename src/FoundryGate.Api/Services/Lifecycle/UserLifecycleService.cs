@@ -9,6 +9,7 @@ using FoundryGate.Api.Services.Quota;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;

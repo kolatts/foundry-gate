@@ -244,15 +244,37 @@ public class UserServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task A_first_login_whose_save_fails_for_any_other_reason_is_not_absorbed()
+    public async Task A_first_login_whose_insert_fails_for_a_reason_other_than_the_oid_race_is_not_absorbed()
     {
-        // Only the unique-index race is swallowed (#154). Nothing else may be: here no row exists for
-        // the oid at all, so the pipeline's own "who won?" check finds nobody and the failure surfaces.
+        // #184 review: the earlier version of this failed the *audit* service, which never reaches the
+        // catch (DbUpdateException) at all — it proved a weaker claim than its name. This one puts a
+        // constraint this fork does not have on the test's own database, so the pipeline's insert fails
+        // with a genuine DbUpdateException that has nothing to do with the oid. That is exactly the
+        // branch the AnyAsync winner check exists to tell apart, and it must surface, not be absorbed.
+        await SeedReferenceDataAsync();
+        _ = await Context.Database.ExecuteSqlRawAsync("CREATE UNIQUE INDEX UX_Test_Users_Email ON Users(Email);");
+        _ = await SeedUserAsync("Holds The Email", "taken@contoso.test");
+
+        var oid = Guid.NewGuid().ToString();
+        var service = CreateService(oid, name: "New Dev", email: "taken@contoso.test");
+
+        _ = await Assert.ThrowsAnyAsync<DbUpdateException>(() => service.GetMyProfileAsync(CancellationToken.None));
+
+        // Not converted to a ConflictException, and therefore never absorbed — and the transaction still
+        // rolled back, so no half-provisioned row survives.
+        Context.ChangeTracker.Clear();
+        Assert.Equal(0, await Context.Users.AsNoTracking().CountAsync(u => u.EntraObjectId == oid));
+    }
+
+    [Fact]
+    public async Task A_first_login_whose_audit_row_cannot_be_written_leaves_no_user_behind()
+    {
+        // The failure the previous test used to cover, kept for what it actually proves: a provision
+        // that gets past the insert and then fails still leaves nothing behind, because the whole
+        // pipeline is one transaction.
         await SeedReferenceDataAsync();
         var oid = Guid.NewGuid().ToString();
 
-        // A caller with no name and no email produces a User the database is perfectly happy with, so
-        // the failure has to come from somewhere real: break the audit row the pipeline writes.
         var service = CreateService(
             oid,
             name: "Broken Provision",

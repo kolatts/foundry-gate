@@ -1,4 +1,4 @@
-namespace FoundryGate.Api.Services;
+namespace FoundryGate.Data.Concurrency;
 
 /// <summary>
 /// The one place the commit-point rule is expressed (CONVENTIONS.md "External side effects have a
@@ -8,6 +8,14 @@ namespace FoundryGate.Api.Services;
 /// request's own token still applies: an abandoned request that has changed nothing outside the
 /// database should stop.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Why it lives in Data</b> rather than beside the Api services that use it today (#184 review): the
+/// rule is about which token reaches <c>SaveChangesAsync</c>, and every host that saves — Api,
+/// Functions, Cli — references this project. A helper in the Api would have meant the next service
+/// extracted out of it re-rolling the ternary CONVENTIONS.md now forbids.
+/// </para>
+/// </remarks>
 /// <remarks>
 /// <para>
 /// The predicate is "did we reach the external system", not "did we call something that might have".

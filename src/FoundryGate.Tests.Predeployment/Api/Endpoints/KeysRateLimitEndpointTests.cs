@@ -13,6 +13,14 @@ namespace FoundryGate.Tests.Predeployment.Api.Endpoints;
 /// empty and the counts in these tests cannot be spent by another class's requests; every test uses a
 /// freshly-seeded oid, which is what the policies partition on, so they are hermetic from each other.
 /// </summary>
+/// <remarks>
+/// <b>These read the wall clock, not <c>factory.TimeProvider</c></b> (#184 review nit).
+/// <c>System.Threading.RateLimiting</c>'s built-in limiters own their replenishment timer and expose no
+/// seam to drive it, and the middleware does not offer one either — so a test can only stay inside the
+/// window rather than move it. A handful of in-process requests against an in-memory host is far inside
+/// a 60-second window, but it is a latent flake, and the durable fix is the window/permit configuration
+/// in #181: once the limits are options, these tests can shorten the window instead of racing it.
+/// </remarks>
 public class KeysRateLimitEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestFactory>
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -108,6 +116,27 @@ public class KeysRateLimitEndpointTests(ApiTestFactory factory) : IClassFixture<
             using var response = await admin.PostAsync(new Uri($"{KeysPath}/{developer.UserId}/rotate", UriKind.Relative), null);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
+    }
+
+    [Fact]
+    public async Task Anonymous_callers_do_not_share_one_bucket_and_keep_getting_their_401()
+    {
+        // The reviewer's probe (#184). The global authorization is an MVC AuthorizeFilter, not endpoint
+        // metadata, so UseRateLimiter runs before anything has rejected an anonymous request: with a
+        // single shared "anonymous" partition the sixth unauthenticated call turned 401 into 429, and one
+        // scanner could deny every other anonymous caller the honest answer.
+        using var anonymous = factory.CreateClient();
+
+        for (var i = 0; i < RevealsPerWindow * 3; i++)
+        {
+            using var response = await anonymous.PostAsync(new Uri($"{KeysPath}/me/reveal", UriKind.Relative), null);
+            Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        }
+
+        // And an authenticated caller's own budget is untouched by all of that.
+        using var developerClient = await ProvisionedDeveloperAsync();
+        using var allowed = await developerClient.PostAsync(new Uri($"{KeysPath}/me/reveal", UriKind.Relative), null);
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
     }
 
     /// <summary>A developer with a provisioned key and a client authenticated as them.</summary>

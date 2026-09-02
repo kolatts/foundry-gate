@@ -74,11 +74,23 @@ public interface IApimKeyService
     /// audit row records the remedy: rotate again, or revoke and re-provision.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The commit point is the <em>primary</em> regeneration — the developer's old key is dead the
-    /// moment it returns — so everything after it (the secondary regeneration included) runs on
-    /// <see cref="CancellationToken.None"/> and the compensation above cannot be skipped by a
-    /// cancellation (#168). <paramref name="cancellationToken"/> therefore governs only the refusals
-    /// and the first ARM call.
+    /// moment it returns — so everything after it runs on <see cref="CancellationToken.None"/> and no
+    /// cancellation can skip the compensation above (#168). <paramref name="cancellationToken"/>
+    /// governs only the refusals and that one ARM call.
+    /// </para>
+    /// <para>
+    /// A cancellation <em>during</em> that call is the one case the compensation cannot fully cover
+    /// (#184 review): ARM may or may not have swapped the key, so there is nothing to restore, and what
+    /// is recorded instead is an Error log and a <c>key.rotation-failed</c> row saying the stored key is
+    /// <em>possibly</em> stale. The remedy is the same either way.
+    /// </para>
+    /// <para>
+    /// The secondary regeneration (#117) runs <em>after</em> the new primary is on the row, and a
+    /// failure there does not fail the rotation: the developer keeps a working key, and the stale
+    /// secondary is logged at Error and named on the <c>key.rotated</c> row for a later pass to retire.
+    /// </para>
     /// </remarks>
     /// <exception cref="KeyNotFoundException"><paramref name="user"/> has no key → 404.</exception>
     /// <exception cref="ConflictException">The APIM subscription behind the key no longer exists → 409 with "revoke and re-provision" guidance.</exception>

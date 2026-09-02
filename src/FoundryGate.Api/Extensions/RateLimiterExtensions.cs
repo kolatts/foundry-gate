@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Threading.RateLimiting;
 using FoundryGate.Domain.Constants;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Identity.Web;
 
 namespace FoundryGate.Api.Extensions;
@@ -17,9 +18,18 @@ namespace FoundryGate.Api.Extensions;
 /// <para>
 /// <b>Partitioned on the caller's <c>oid</c>, not on IP</b> (the issue's explicit ask): the UI sits
 /// behind a shared egress and admins share addresses, so an address partition would throttle a whole
-/// office or nobody. A request with no <c>oid</c> claim cannot reach these actions anyway — the global
-/// <c>AuthorizeFilter</c> has already turned it away — so the fall-back partition exists only so the
-/// limiter is total.
+/// office or nobody.
+/// </para>
+/// <para>
+/// <b>An unauthenticated caller is not limited at all</b>, which is not the same as being cheap to
+/// abuse. The global authorization is an MVC <c>AuthorizeFilter</c>, not endpoint metadata, so
+/// <c>UseRateLimiter</c> runs <em>before</em> anything has rejected an anonymous request — and a single
+/// shared "anonymous" partition would then let one scanner, or one UI holding an expired token, spend
+/// the whole bucket and turn every other anonymous caller's <c>401</c> into a <c>429</c> (#184 review,
+/// reproduced on the branch). There is nothing to protect on that path: the request reaches MVC, is
+/// refused with a <c>401</c>, and touches no key material, no database and no gateway. So it gets
+/// <see cref="RateLimitPartition.GetNoLimiter{TKey}"/> and the limit starts existing at the moment the
+/// caller has an identity to attribute it to.
 /// </para>
 /// <para>
 /// <b>Only the <c>/me</c> routes.</b> The admin routes (<c>POST /keys/{userId}/rotate</c>,
@@ -38,6 +48,9 @@ namespace FoundryGate.Api.Extensions;
 /// </remarks>
 public static class RateLimiterExtensions
 {
+    /// <summary>The single unlimited partition every caller with no <c>oid</c> claim shares.</summary>
+    private const string AnonymousPartitionKey = "anonymous";
+
     /// <summary>
     /// The window both policies count within. Constants rather than configuration for now — #181 moves
     /// them to the options pattern so a fork can retune them without recompiling — and a limiter is only
@@ -79,6 +92,21 @@ public static class RateLimiterExtensions
             {
                 var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var window) ? window : Window;
 
+                // The caller is told "tell an administrator"; this is what tells the administrator. A
+                // rejection is expected traffic shaping rather than a fault, so Information — but it
+                // carries the partition key, because a run of these for one oid is the strongest signal
+                // available that a drain is in progress, and it is what #180's anomaly detection builds on.
+                context.HttpContext.RequestServices
+                    .GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(RateLimiterExtensions).FullName!)
+                    .LogInformation(
+                        "Rate limit {Policy} rejected {Method} {Path} for caller {PartitionKey}; retry after {RetryAfterSeconds}s.",
+                        context.HttpContext.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName ?? "(unnamed)",
+                        context.HttpContext.Request.Method,
+                        context.HttpContext.Request.Path,
+                        context.HttpContext.User.GetObjectId() ?? "(anonymous)",
+                        Math.Ceiling(retryAfter.TotalSeconds));
+
                 context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
                 context.HttpContext.Response.Headers.RetryAfter =
                     ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
@@ -99,20 +127,31 @@ public static class RateLimiterExtensions
         });
     }
 
-    /// <summary>One fixed-window limiter per caller identity, keyed on the <c>oid</c> claim.</summary>
-    private static RateLimitPartition<string> PerUser(HttpContext httpContext, int permitLimit) =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            // GetObjectId() accepts both the short "oid" and the long objectidentifier claim type, the
-            // same way ICurrentUserAccessor does, so the partition key is the identity the audit trail
-            // and the User row are keyed on. "anonymous" is unreachable behind the global AuthorizeFilter.
-            httpContext.User.GetObjectId() ?? "anonymous",
-            _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = permitLimit,
-                Window = Window,
+    /// <summary>
+    /// One fixed-window limiter per caller identity, keyed on the <c>oid</c> claim; no limiter at all
+    /// for a caller who has no identity yet (see the type remarks — they get a <c>401</c> from MVC a
+    /// moment later, and sharing one bucket between all of them is how a scanner denies everyone else
+    /// their 401).
+    /// </summary>
+    private static RateLimitPartition<string> PerUser(HttpContext httpContext, int permitLimit)
+    {
+        // GetObjectId() accepts both the short "oid" and the long objectidentifier claim type, the same
+        // way ICurrentUserAccessor does, so the partition key is the identity the audit trail and the
+        // User row are keyed on.
+        var entraObjectId = httpContext.User.GetObjectId();
 
-                // No queue: a caller past the limit should be told so immediately, not held on a socket.
-                QueueLimit = 0,
-                AutoReplenishment = true,
-            });
+        return string.IsNullOrEmpty(entraObjectId)
+            ? RateLimitPartition.GetNoLimiter(AnonymousPartitionKey)
+            : RateLimitPartition.GetFixedWindowLimiter(
+                entraObjectId,
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = permitLimit,
+                    Window = Window,
+
+                    // No queue: a caller past the limit should be told so immediately, not held on a socket.
+                    QueueLimit = 0,
+                    AutoReplenishment = true,
+                });
+    }
 }

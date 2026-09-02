@@ -1,6 +1,6 @@
-using FoundryGate.Api.Services;
+using FoundryGate.Data.Concurrency;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services;
+namespace FoundryGate.Tests.Predeployment.Data;
 
 /// <summary>
 /// <see cref="CommitToken"/> is two lines, but it is the two lines every service that touches ARM,
