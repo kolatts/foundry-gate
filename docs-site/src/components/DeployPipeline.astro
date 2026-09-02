@@ -1,10 +1,10 @@
 ---
 // Deploy pipeline — the GitHub Actions flow FoundryGate is built around
-// (CONVENTIONS.md §CI/CD, plans/22-cicd-pipelines.md). Every workflow file of the
-// merge-to-main chain (infra → db → api/functions/ui → post-deploy tests → summary) now
-// exists on main (#67 / #68–#75) together with the GitHub Environments that gate it; none
-// has run against Azure yet, which is what the "unvalidated · #105" badge means.
-// Keep the status badges in step with .github/workflows/* and docs reference/ci-cd.
+// (CONVENTIONS.md §CI/CD, plans/22-cicd-pipelines.md). A merge to main runs exactly one
+// workflow, deploy-all.yml: infra → database → api → functions/ui → post-deploy tests →
+// summary. It exists on main (#67 / #68–#75) together with the GitHub Environments that gate
+// it; none of it has run against Azure yet, which is what the "unvalidated · #105" badge means.
+// Keep the stages and status badges in step with .github/workflows/* and docs reference/ci-cd.
 interface Stage {
   title: string;
   detail: string;
@@ -18,6 +18,14 @@ const pr: Stage[] = [
   { title: 'Pre-deploy tests', detail: 'xUnit · SQLite in-memory · convention tests' },
   { title: 'Format check', detail: 'dotnet format --verify-no-changes' },
   { title: 'Claude review', detail: 'formal review on every PR, reads the test artifacts' },
+];
+
+// PR-time stages that only fire on matching paths. None of them can mutate Azure: the image
+// build has no credentials at all, and the what-if runs under the read-only dev-plan identity.
+const prConditional: Stage[] = [
+  { title: 'Bicep what-if', detail: 'infra/** — posted as a PR comment · read-only dev-plan identity' },
+  { title: 'API image build', detail: 'Dockerfile — docker build + local /health 200, no Azure' },
+  { title: 'Workflow lint', detail: '.github/** — actionlint + shellcheck + script tests' },
 ];
 
 const main: Stage[] = [
@@ -39,10 +47,15 @@ const main: Stage[] = [
     ],
   },
   {
-    title: 'App deploys',
-    detail: 'in parallel',
+    title: 'API',
+    detail: 'image → ACR → Container Apps · replaces the day-0 placeholder',
     status: 'exists · unvalidated · #105',
-    parallel: ['Api → Container Apps', 'Functions → Flex Consumption', 'UI → Static Web Apps'],
+  },
+  {
+    title: 'Functions + UI',
+    detail: 'in parallel, after the API',
+    status: 'exists · unvalidated · #105',
+    parallel: ['Functions → Flex Consumption', 'UI → Static Web Apps'],
   },
   { title: 'Post-deploy tests', detail: 'scaffold smoke test · reporting only until #139', status: 'exists · unvalidated · #105' },
   { title: 'Summary', detail: 'job summary · Environment deploy record', status: 'exists · unvalidated · #105' },
@@ -50,16 +63,19 @@ const main: Stage[] = [
 ---
 
 <figure class="fgd fgd-deploy not-content" role="group" aria-labelledby="fgd-deploy-title" aria-describedby="fgd-deploy-desc">
-  <p id="fgd-deploy-title" class="fgd-sr-only">Deploy pipeline — the designed GitHub Actions flow</p>
+  <p id="fgd-deploy-title" class="fgd-sr-only">Deploy pipeline — the GitHub Actions flow</p>
   <p id="fgd-deploy-desc" class="fgd-sr-only">
     Two tracks. Track one runs on every pull request today (ci.yml and claude-review.yml): build with warnings as
-    errors, predeployment tests, format check, Claude review. Pull requests that change infra/** additionally get a
-    Bicep what-if posted as a comment by infra-deploy.yml. Merging to main is PR-only. Track two, on merge, is the
-    fully automated deploy chain with OIDC and GitHub Environment gates from dev to production: infra, then database
+    errors, predeployment tests, format check, Claude review. Depending on which paths a pull request touches it also
+    gets a Bicep what-if posted as a comment, run under a read-only identity; a Docker image build with a local health
+    check, which uses no credentials at all; and actionlint over the workflow files. Nothing on the pull request track
+    can change Azure. Merging to main is pull-request-only. Track two, on merge, is one workflow, deploy-all.yml: the
+    fully automated deploy chain with OIDC and GitHub Environment gates from dev to production. Infra, then database
     (whitelist runner IP, wait for firewall propagation, probe port 1433, deploy the dacpac with data-loss blocking,
-    seed reference data and test data outside production), then API, Functions and UI deploys in parallel, then
-    post-deploy tests, then a summary. Every workflow file exists on main; badges mark that none has yet run
-    against Azure (live validation is #105).
+    seed reference data and test data outside production), then the API, then Functions and UI in parallel, then
+    post-deploy tests, then a summary. Functions and UI wait for the API because on the very first deploy the API
+    stage re-runs the infrastructure template to replace the placeholder image. Every workflow file exists on main;
+    badges mark that none has yet run against Azure (live validation is #105).
   </p>
 
   <section class="fgd-plane fgd-plane--neutral">
@@ -81,8 +97,12 @@ const main: Stage[] = [
       ))}
     </ol>
     <div class="fgd-deploy__aside">
-      <span class="fgd-badge fgd-badge--muted">infra/** PRs</span>
-      Bicep <strong>what-if</strong> posted as a PR comment before merge — <code>infra-deploy.yml</code>
+      <span class="fgd-badge fgd-badge--muted">path-triggered on the same PR</span>
+      <ul class="fgd-deploy__conditional">
+        {prConditional.map((s) => (
+          <li><strong>{s.title}</strong> — {s.detail}</li>
+        ))}
+      </ul>
     </div>
   </section>
 
@@ -95,7 +115,7 @@ const main: Stage[] = [
   </div>
 
   <section class="fgd-plane fgd-plane--neutral">
-    <div class="fgd-plane__label">2 · Merge to main <small>CONVENTIONS §CI/CD — automatic · OIDC only · Environment gates dev → production · <code>deploy-all.yml</code> runs the whole chain on demand</small></div>
+    <div class="fgd-plane__label">2 · Merge to main <small>CONVENTIONS §CI/CD — automatic · OIDC only · Environment gates dev → production · one workflow, <code>deploy-all.yml</code>, runs the whole chain · never cancelled mid-flight</small></div>
     <ol class="fgd-deploy__track">
       {main.map((s, i) => (
         <li class="fgd-deploy__stage">
@@ -213,6 +233,16 @@ const main: Stage[] = [
   }
 
   .fgd-deploy__aside strong { color: var(--fg-text-secondary, #C4D0DC); }
+
+  .fgd-deploy__conditional {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex: 1 1 16rem;
+  }
 
   @media (min-width: 720px) {
     .fgd-deploy__track {

@@ -11,13 +11,13 @@ All CI/CD is defined in `.github/workflows/`. Infra and code pipelines are stric
 
 | File | Trigger | Purpose |
 |---|---|---|
-| `infra-deploy.yml` | push/PR `infra/**`, `workflow_dispatch` | Bicep what-if on PRs; deploy to dev then prod |
+| `infra-deploy.yml` | PR `infra/**`, `workflow_dispatch` | Bicep what-if on PRs (read-only `dev-plan`); dispatch redeploys one environment |
 | `infra-destroy.yml` | `workflow_dispatch` only | Tear down an entire environment's resource group |
-| `api-deploy.yml` | push/PR `src/FoundryGate.Api/**` | Build → test → Docker → Container App |
-| `functions-deploy.yml` | push/PR `src/FoundryGate.Functions/**` | Build → test → publish → Functions deploy |
-| `ui-deploy.yml` | push/PR `src/FoundryGate.Web/**` | Build → publish → Static Web Apps |
+| `api-deploy.yml` | PR `src/FoundryGate.Api/Dockerfile`, `workflow_dispatch` | Image build + `/health` smoke on PRs; dispatch redeploys the API |
+| `functions-deploy.yml` | `workflow_dispatch` | Build → publish → Functions deploy |
+| `ui-deploy.yml` | `workflow_dispatch` | Build → publish → Static Web Apps |
 | `docs-deploy.yml` | push/PR `docs-site/**` | Astro build → GitHub Pages |
-| `deploy-all.yml` | `workflow_dispatch` | Full-stack deploy in dependency order |
+| `deploy-all.yml` | **push `main`** (anything deployable), `workflow_dispatch` | Full-stack deploy in dependency order — the only workflow that deploys on merge |
 
 ## Approach
 
@@ -58,3 +58,4 @@ Files expected to be created or modified:
 
 ## Verification
 - [x] Workflow files for every row of the inventory exist on `main` (#68–#75; `docs.yml` renamed to `docs-deploy.yml`) — see plan #22 for the per-item checklist and what still needs a live run (#105)
+- [x] Exactly one workflow deploys on a merge to `main` (`deploy-all.yml`); the single-component wrappers are `workflow_dispatch` + PR-track only, so nothing is silently cancelled out of the shared `deploy-{env}` concurrency group

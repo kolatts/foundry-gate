@@ -11,7 +11,7 @@ name: UI Deploy
 # dev environment. A `pull_request` run executes the PR branch's own copy of these files, so
 # any PR could have printed that token or driven `az` against dev. The `dev` Environment is now
 # restricted to protected branches and PR-track Azure work is limited to the read-only
-# `dev-plan` Environment (Bicep what-if). Restoring previews behind a safe design is #145.
+# `dev-plan` Environment (Bicep what-if). Restoring previews behind a safe design is #155.
 
 on:
   workflow_dispatch:

@@ -162,7 +162,7 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
    Actions → **Deploy All** → Run workflow → `environment: dev`, tick
    **create-model-deployments**. This is the only run that creates the model deployments —
    Claude deployments are create-once under ARM, so every later run leaves the box unticked.
-   The chain is infra → database (dacpac + seed) → API, Functions and UI in parallel →
+   The chain is infra → database (dacpac + seed) → API → Functions and UI in parallel →
    post-deploy tests → a summary with every URL. Expect 20–30 minutes; APIM v2 provisioning
    is most of it.
 
@@ -170,10 +170,12 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
 
 8. ### From now on, merge to main
 
-   Every merge deploys what changed: `infra/**` runs a Bicep what-if on the PR and deploys
-   on merge (`infra-deploy.yml`); API, Functions and UI changes deploy through their own
-   workflows; docs go to GitHub Pages. Production is a manual dispatch of the same workflows
-   (or Deploy All with `environment: production`) behind the reviewer gate.
+   A merge that touches anything deployable runs **the same `deploy-all.yml` chain** against
+   dev — one workflow, in order, every time, so a change shared between the API and the
+   Functions can never deploy half of itself. PRs still get a Bicep what-if comment for
+   `infra/**` changes; docs go to GitHub Pages from their own workflow. To redeploy one
+   component, dispatch `API Deploy`, `Functions Deploy`, `UI Deploy` or `Infra Deploy`.
+   Production is Deploy All with `environment: production`, behind the reviewer gate.
 
 9. ### Verify
 
