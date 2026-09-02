@@ -52,12 +52,27 @@ public interface IEntraGroupSyncService
 
     /// <summary>
     /// Reconciles every group that has an <c>EntraGroupId</c>, in group-id order, one unit of work
-    /// each. Groups without a link are not touched and do not appear in the result. A directory
-    /// failure part-way through stops the run — the groups already reconciled stay reconciled, and
-    /// re-running is idempotent; whether to isolate failures per group instead, and to share one user
-    /// map across the loop, is issue #149.
+    /// each. Groups without a link are not touched and do not appear in the result.
+    /// <para>
+    /// <b>Failures are isolated per group</b> (#149). A group whose reconciliation throws — a Graph
+    /// fault, a group deleted in the directory — is left exactly as it was, its pending changes are
+    /// discarded so they cannot ride along on the next group's save, and the run continues. The
+    /// summary for that group carries <c>Succeeded = false</c> with the failure's message in
+    /// <c>Error</c> and zeroes everywhere else; every other group still reports its real counts. The
+    /// call answers <c>200</c> with the partial results rather than a <c>500</c> that says nothing
+    /// about what did happen, and each failure is a Warning log. Re-running is idempotent, so a
+    /// second call after the cause is fixed finishes the job.
+    /// </para>
+    /// <para>
+    /// The <c>Users</c> table is read <b>once for the run</b> and shared across the loop, not once per
+    /// group. Nothing in this path inserts a user, so a single snapshot cannot go stale mid-run.
+    /// </para>
     /// </summary>
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (→ 403).</exception>
-    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Entra is disabled on this host and at least one group is linked (→ 503).</exception>
+    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">
+    /// Entra is disabled on this host and at least one group is linked (→ 503). Deliberately <em>not</em>
+    /// isolated per group: every group would carry the same message, and the host — not any one group —
+    /// is what needs fixing.
+    /// </exception>
     Task<IReadOnlyList<GroupSyncResult>> SyncAllAsync(CancellationToken cancellationToken);
 }

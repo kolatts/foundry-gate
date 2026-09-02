@@ -129,4 +129,15 @@ public record GroupQuery(string? Search);
 /// picked up by <c>POST /users/sync</c>). They are skipped, never invented — but counted and logged
 /// at Warning, so "the group looks short" has a number attached instead of being silent.
 /// </param>
-public record GroupSyncResult(int GroupId, int AddedCount, int RemovedCount, int SkippedUnknownUserCount);
+/// <param name="Succeeded">
+/// <see langword="false"/> only in a <c>POST /groups/sync-entra</c> summary, for a group whose
+/// reconciliation threw: that group is left exactly as it was and the counts are all <c>0</c>. A
+/// single-group <c>POST /groups/{id}/sync-entra</c> never returns this — its failure is the HTTP
+/// status.
+/// </param>
+/// <param name="Error">
+/// The failure's message when <paramref name="Succeeded"/> is <see langword="false"/>, so the admin
+/// can tell "Graph refused this group" from "this group is not linked" without reading the API log;
+/// <see langword="null"/> otherwise.
+/// </param>
+public record GroupSyncResult(int GroupId, int AddedCount, int RemovedCount, int SkippedUnknownUserCount, bool Succeeded = true, string? Error = null);

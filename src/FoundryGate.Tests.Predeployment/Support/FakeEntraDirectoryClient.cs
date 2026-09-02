@@ -25,6 +25,13 @@ public sealed class FakeEntraDirectoryClient : IEntraDirectoryClient
     /// <summary>Group object id → member object ids.</summary>
     public Dictionary<string, List<string>> GroupMembers { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Group object id → the message of the failure <see cref="ListGroupMemberIdsAsync"/> throws for
+    /// it, for testing what a directory fault on one group does to a run that spans several. Takes
+    /// precedence over <see cref="GroupMembers"/>.
+    /// </summary>
+    public Dictionary<string, string> GroupMemberFailures { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>How many times <see cref="ListAssignedUsersAsync"/> was enumerated.</summary>
     public int ListAssignedUsersCalls { get; private set; }
 
@@ -48,6 +55,11 @@ public sealed class FakeEntraDirectoryClient : IEntraDirectoryClient
         bool transitive,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (GroupMemberFailures.TryGetValue(groupObjectId, out var failure))
+        {
+            throw new InvalidOperationException(failure);
+        }
+
         if (!GroupMembers.TryGetValue(groupObjectId, out var members))
         {
             yield break;

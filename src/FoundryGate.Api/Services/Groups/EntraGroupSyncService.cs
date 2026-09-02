@@ -6,6 +6,7 @@ using FoundryGate.Api.Services.Quota;
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Quota;
 using Microsoft.EntityFrameworkCore;
@@ -42,7 +43,7 @@ public sealed class EntraGroupSyncService(
         var group = await dbContext.Groups.SingleOrDefaultAsync(g => g.GroupId == groupId, cancellationToken)
             ?? throw new KeyNotFoundException($"Group {groupId} was not found.");
 
-        return await SyncGroupAsync(group, cancellationToken);
+        return await SyncGroupAsync(group, usersByOid: null, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -55,18 +56,60 @@ public sealed class EntraGroupSyncService(
             .OrderBy(group => group.GroupId)
             .ToListAsync(cancellationToken);
 
+        // One snapshot for the run instead of one full Users read per group (#149). Nothing in this
+        // path inserts a user, so the map cannot go stale mid-run: the only rows it feeds are
+        // memberships, which are keyed on ids it already holds.
+        var usersByOid = await LoadUsersByOidAsync(cancellationToken);
+
         var results = new List<GroupSyncResult>(groups.Count);
+        var failed = 0;
         foreach (var group in groups)
         {
-            results.Add(await SyncGroupAsync(group, cancellationToken));
+            try
+            {
+                results.Add(await SyncGroupAsync(group, usersByOid, cancellationToken));
+            }
+            catch (Exception exception) when (exception is not (OperationCanceledException or FeatureNotConfiguredException))
+            {
+                // Per-group isolation (#149): each group is already its own unit of work, so a Graph
+                // fault on group 3 of 5 must not deny the caller the summaries for 4 and 5 — and
+                // re-running is idempotent, so nothing is left inconsistent. The run answers 200 with
+                // the failure named against the group it belongs to.
+                //
+                // Two escapes stay whole-run failures on purpose: a cancelled request has no caller
+                // left to read a summary, and FeatureNotConfiguredException means Entra is off on this
+                // HOST — every group would carry the same 503 message, so the 503 belongs on the
+                // response, not repeated in each row.
+                failed++;
+                results.Add(new GroupSyncResult(group.GroupId, 0, 0, 0, Succeeded: false, Error: exception.Message));
+                logger.LogWarning(
+                    exception,
+                    "Entra group sync could not reconcile group {GroupId} ('{GroupName}'); the run continues with the remaining group(s).",
+                    group.GroupId,
+                    group.Name);
+
+                // A group whose reconciliation threw part-way may have left pending membership changes
+                // tracked but unsaved. They belong to a unit of work that did not commit, so they must
+                // not ride along on the next group's SaveChangesAsync.
+                DiscardPendingChanges();
+            }
         }
 
-        logger.LogInformation("Entra group sync reconciled {GroupCount} linked group(s).", results.Count);
+        logger.LogInformation(
+            "Entra group sync reconciled {GroupCount} linked group(s), {FailedCount} of which failed.",
+            results.Count,
+            failed);
 
         return results;
     }
 
-    private async Task<GroupSyncResult> SyncGroupAsync(Group group, CancellationToken cancellationToken)
+    /// <summary>
+    /// Reconciles one group against its linked Entra group, in one unit of work. Shared by both public
+    /// entry points; <paramref name="usersByOid"/> is the run's shared oid → user snapshot when this is
+    /// one group of a <c>SyncAllAsync</c> pass, and <see langword="null"/> for a single-group sync,
+    /// which reads its own (#149).
+    /// </summary>
+    private async Task<GroupSyncResult> SyncGroupAsync(Group group, IReadOnlyDictionary<string, UserRow>? usersByOid, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(group.EntraGroupId))
         {
@@ -87,17 +130,15 @@ public sealed class EntraGroupSyncService(
 
         // The whole user table by oid, like EntraUserSyncService: a group can hold thousands of members
         // and a `WHERE EntraObjectId IN (...)` over that set would blow past the provider's parameter
-        // limit. Case-insensitive because oids are GUID strings whose casing varies by source. Read once
-        // per group, so SyncAllAsync reads it once per linked group — hoisting it to the run is #149.
-        var usersByOid = await dbContext.Users
-            .Select(user => new UserRow(user.UserId, user.EntraObjectId, user.IsActive))
-            .ToDictionaryAsync(row => row.EntraObjectId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+        // limit. A SyncAllAsync pass hands its own snapshot down so the table is read once per run
+        // rather than once per linked group (#149); a single-group sync reads its own.
+        var users = usersByOid ?? await LoadUsersByOidAsync(cancellationToken);
 
         var desired = new Dictionary<int, UserRow>();
         var skippedUnknown = 0;
         foreach (var objectId in directoryOids)
         {
-            if (usersByOid.TryGetValue(objectId, out var row))
+            if (users.TryGetValue(objectId, out var row))
             {
                 desired[row.UserId] = row;
             }
@@ -124,7 +165,7 @@ public sealed class EntraGroupSyncService(
 
         // Only the users whose membership actually moved, and only the active ones — see IGroupService.
         // IsActive comes from the map already in hand; no second trip for it.
-        var activeByUserId = usersByOid.Values.ToDictionary(row => row.UserId, row => row.IsActive);
+        var activeByUserId = users.Values.ToDictionary(row => row.UserId, row => row.IsActive);
         var reresolved = added
             .Concat(removed.Select(member => member.UserId))
             .Distinct()
@@ -182,6 +223,29 @@ public sealed class EntraGroupSyncService(
             skippedUnknown);
 
         return new GroupSyncResult(group.GroupId, added.Count, removed.Count, skippedUnknown);
+    }
+
+    /// <summary>
+    /// The whole <c>Users</c> table as oid → <see cref="UserRow"/>. Case-insensitive because oids are
+    /// GUID strings whose casing varies by source (token claims vs. Graph vs. hand-seeded rows), and
+    /// projected so the read stays three columns wide.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, UserRow>> LoadUsersByOidAsync(CancellationToken cancellationToken) =>
+        await dbContext.Users
+            .Select(user => new UserRow(user.UserId, user.EntraObjectId, user.IsActive))
+            .ToDictionaryAsync(row => row.EntraObjectId, StringComparer.OrdinalIgnoreCase, cancellationToken);
+
+    /// <summary>
+    /// Detaches everything the failed group left pending so the next group's <c>SaveChangesAsync</c>
+    /// commits only its own work. The shared request <c>AppDbContext</c> makes this the caller's job:
+    /// EF has no per-unit-of-work rollback for changes that were never saved.
+    /// </summary>
+    private void DiscardPendingChanges()
+    {
+        foreach (var entry in dbContext.ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted).ToList())
+        {
+            entry.State = EntityState.Detached;
+        }
     }
 
     /// <summary>The three columns of a <see cref="User"/> this reconciliation needs; keeps the whole-table read narrow.</summary>

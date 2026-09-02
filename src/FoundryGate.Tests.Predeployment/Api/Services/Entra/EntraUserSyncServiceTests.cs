@@ -464,15 +464,6 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         return new EntraUserSyncService(Context, _directory, lifecycle, audit, _timeProvider, NullLogger<EntraUserSyncService>.Instance);
     }
 
-    /// <summary>A second context on the same database, so "nothing was saved" assertions cannot be fooled by the change tracker.</summary>
-    private FoundryGate.Data.AppDbContext CreateVerificationContext()
-    {
-        var options = new DbContextOptionsBuilder<FoundryGate.Data.AppDbContext>()
-            .UseSqlite(Context.Database.GetDbConnection())
-            .Options;
-        return new FoundryGate.Data.AppDbContext(options);
-    }
-
     private Task<User> SeedCallerAsync() => SeedUserAsync(Guid.NewGuid().ToString(), displayName: "Admin Caller", email: "admin@contoso.test");
 
     private async Task<User> SeedUserAsync(

@@ -9,6 +9,7 @@ using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
+using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
@@ -241,6 +242,109 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
         Assert.Equal(2, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.GroupEntraSynced));
         Assert.False(await Context.AuditLogs.AsNoTracking()
             .AnyAsync(a => a.Action == AuditActions.GroupEntraSynced && a.TargetId == native.GroupId.ToString()));
+        Assert.All(results, result => Assert.True(result.Succeeded));
+        Assert.All(results, result => Assert.Null(result.Error));
+    }
+
+    [Fact]
+    public async Task SyncAllAsync_reads_the_user_table_once_for_the_run_not_once_per_group()
+    {
+        // #149: the whole-table snapshot is the expensive part of a per-group reconciliation, and
+        // nothing in this path inserts a user, so one read per run is both cheaper and correct.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var member = await SeedUserAsync("Member");
+        var linkedA = await SeedLinkedGroupAsync("Linked A", quota: TestGatewayTiers.PowerCap);
+        var linkedB = await SeedLinkedGroupAsync("Linked B", quota: null);
+        var linkedC = await SeedLinkedGroupAsync("Linked C", quota: null);
+        _directory.GroupMembers[linkedA.EntraGroupId] = [member.EntraObjectId];
+        _directory.GroupMembers[linkedB.EntraGroupId] = [];
+        _directory.GroupMembers[linkedC.EntraGroupId] = [];
+
+        var before = CountWholeTableReads("Users");
+        var results = await CreateService(admin).SyncAllAsync(CancellationToken.None);
+
+        Assert.Equal(3, results.Count);
+        Assert.Equal(1, CountWholeTableReads("Users") - before);
+    }
+
+    [Fact]
+    public async Task SyncAsync_for_one_group_still_reads_its_own_user_snapshot()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var group = await SeedLinkedGroupAsync("Linked", quota: null);
+        _directory.GroupMembers[group.EntraGroupId] = [];
+
+        var before = CountWholeTableReads("Users");
+        _ = await CreateService(admin).SyncAsync(group.GroupId, CancellationToken.None);
+
+        Assert.Equal(1, CountWholeTableReads("Users") - before);
+    }
+
+    [Fact]
+    public async Task SyncAllAsync_records_a_failing_group_and_still_reconciles_the_rest()
+    {
+        // A Graph fault on the middle group must not deny the caller the summaries for the others,
+        // and must not leave its half-applied membership changes to ride along on the next group's
+        // save (#149). Group ids order the run, so "Broken" really is between the two good ones.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var first = await SeedUserAsync("First");
+        var last = await SeedUserAsync("Last");
+        var good = await SeedLinkedGroupAsync("Good", quota: null);
+        var broken = await SeedLinkedGroupAsync("Broken", quota: null);
+        var alsoGood = await SeedLinkedGroupAsync("Also good", quota: null);
+        var strandedMember = await SeedUserAsync("Stranded");
+        await SeedMembershipAsync(broken, strandedMember);
+        _directory.GroupMembers[good.EntraGroupId] = [first.EntraObjectId];
+        _directory.GroupMembers[alsoGood.EntraGroupId] = [last.EntraObjectId];
+        _directory.GroupMemberFailures[broken.EntraGroupId] = "Graph said Authorization_RequestDenied.";
+
+        var results = await CreateService(admin).SyncAllAsync(CancellationToken.None);
+
+        Assert.Equal([good.GroupId, broken.GroupId, alsoGood.GroupId], results.Select(r => r.GroupId));
+        Assert.Equal(new GroupSyncResult(good.GroupId, AddedCount: 1, RemovedCount: 0, SkippedUnknownUserCount: 0), results[0]);
+        Assert.Equal(
+            new GroupSyncResult(broken.GroupId, 0, 0, 0, Succeeded: false, Error: "Graph said Authorization_RequestDenied."),
+            results[1]);
+        Assert.Equal(new GroupSyncResult(alsoGood.GroupId, AddedCount: 1, RemovedCount: 0, SkippedUnknownUserCount: 0), results[2]);
+
+        await using var verification = CreateVerificationContext();
+        // The two good groups committed; the failing one is untouched — its existing membership is
+        // still there and no audit row claims it was reconciled.
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == good.GroupId && m.UserId == first.UserId));
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == alsoGood.GroupId && m.UserId == last.UserId));
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == broken.GroupId && m.UserId == strandedMember.UserId));
+        Assert.Equal(2, await verification.AuditLogs.CountAsync(a => a.Action == AuditActions.GroupEntraSynced));
+        Assert.False(await verification.AuditLogs.AnyAsync(a => a.Action == AuditActions.GroupEntraSynced && a.TargetId == broken.GroupId.ToString()));
+    }
+
+    [Fact]
+    public async Task SyncAllAsync_does_not_let_a_failing_group_leak_its_pending_changes_into_the_next_one()
+    {
+        // The failure lands after the memberships are staged (the quota re-resolution throws), which is
+        // the only way pending rows can exist when the unit of work is abandoned. They must be
+        // discarded, not committed by whichever group saves next.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var joining = await SeedUserAsync("Joining", u => u.ApimSubscriptionId = "sub-joining"); // a tier move only reaches the gateway for a user who has a subscription
+        var later = await SeedUserAsync("Later");
+        var broken = await SeedLinkedGroupAsync("Broken", quota: TestGatewayTiers.PowerCap);
+        var good = await SeedLinkedGroupAsync("Good", quota: null);
+        _directory.GroupMembers[broken.EntraGroupId] = [joining.EntraObjectId];
+        _directory.GroupMembers[good.EntraGroupId] = [later.EntraObjectId];
+        _tierSync.ThrowFor = joining.UserId;
+
+        var results = await CreateService(admin).SyncAllAsync(CancellationToken.None);
+
+        Assert.False(results[0].Succeeded);
+        Assert.True(results[1].Succeeded);
+
+        await using var verification = CreateVerificationContext();
+        Assert.False(await verification.GroupMembers.AnyAsync(m => m.GroupId == broken.GroupId));
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == good.GroupId && m.UserId == later.UserId));
+        Assert.Equal(1, await verification.AuditLogs.CountAsync(a => a.Action == AuditActions.GroupEntraSynced));
     }
 
     // -- Helpers --

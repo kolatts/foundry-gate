@@ -105,7 +105,7 @@ product their key is scoped to. Every route is admin-only.
 | `POST` | `/groups/{id}/members` | Admin | Add a user by `{ "userId": n }`. Returns the new membership |
 | `DELETE` | `/groups/{id}/members/{userId}` | Admin | Remove a membership (`204`) |
 | `POST` | `/groups/{id}/sync-entra` | Admin | Reconcile one group against its linked Entra group |
-| `POST` | `/groups/sync-entra` | Admin | Reconcile every Entra-linked group; one summary each |
+| `POST` | `/groups/sync-entra` | Admin | Reconcile every Entra-linked group; one summary each, including for a group that failed |
 
 **Quota values are tiers.** `monthlyTokenQuota` on create and update must be `null` (unlimited) or
 exactly one configured tier cap, or the request is `400` listing the allowed values — the same rule
@@ -148,7 +148,9 @@ the group id as `targetId`.
 
 `POST /groups/{id}/sync-entra` pulls the linked Entra group's membership (transitively, so nested
 groups flatten to their people) and reconciles it. Idempotent: a second run with an unchanged directory
-reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserCount }`.
+reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserCount, succeeded, error }`
+— `succeeded` is always `true` here, and only ever `false` inside a `POST /groups/sync-entra` summary
+(see below).
 
 - Directory members missing from this group are added with **`addedByUserId: null`** — the system
   actor. The directory chose the membership, not the calling admin, and the audit trail should not
@@ -162,7 +164,22 @@ reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserC
   Power product by the time the response returns.
 
 `POST /groups/sync-entra` does the same for every group that has an `entraGroupId`, one unit of work
-each, in group-id order; groups with no link are skipped and do not appear in the result.
+each, in group-id order; groups with no link are skipped and do not appear in the result. The `Users`
+table is read **once for the whole run**, not once per group — nothing in this path creates a user, so
+one snapshot is both cheaper and correct.
+
+**One group's failure does not end the run.** A group whose reconciliation throws — Graph refused it,
+the Entra group was deleted — is left exactly as it was, everything it had staged is discarded so it
+cannot ride along on the next group's save, and the loop continues. Its summary carries
+`"succeeded": false` with the failure's message in `"error"` and zeroes everywhere else; every other
+group reports its real counts. The call is still a `200`, because "three of five groups reconciled and
+here is what went wrong with the other two" is a more useful answer than a `500` that says nothing —
+and re-running is idempotent, so a second call once the cause is fixed finishes the job. Each failure
+is also a Warning in the API log. Single-group `POST /groups/{id}/sync-entra` is unchanged: its
+failure is the HTTP status, and it never returns `succeeded: false`.
+
+The one exception is `Entra:Enabled` being false on the host: that is not a property of any one group
+— every group would carry the same message — so it stays a whole-response `503`.
 
 Errors: `400` when the group has no `entraGroupId` (a real caller error — this group has nothing to
 sync against); `404` for an unknown group; `503` when `Entra:Enabled` is false on the host — the
