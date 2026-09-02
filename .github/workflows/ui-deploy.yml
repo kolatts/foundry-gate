@@ -226,9 +226,11 @@ jobs:
           PREVIEW_URL: ${{ steps.swa.outputs.static_web_app_url }}
         run: |
           if [ "${READY:-false}" != "true" ]; then
-            echo "## UI preview skipped" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "The \`ui-preview\` Environment is not configured (fork PR, or owner setup pending — #109)." >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## UI preview skipped"
+              echo ""
+              echo "The \`ui-preview\` Environment is not configured (fork PR, or owner setup pending — #109)."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           echo "url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
