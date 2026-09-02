@@ -207,20 +207,32 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
         Account(accountName).GetCognitiveServicesAccountDeployments();
 
     /// <summary>
-    /// ARM's account model → the create form's vocabulary. <c>DefaultCapacity</c> is taken from the
-    /// first SKU that names one: the SKUs of a model normally share a default, and a form field wants
-    /// a starting number, not a per-SKU table.
+    /// ARM's account model → the create form's vocabulary, carrying the three things ARM knows and
+    /// nothing else can work out: which version is the <em>default</em> one (inferring it from version
+    /// strings puts <c>turbo-2024-04-09</c> above <c>2025-04-14</c>), whether the model is on its way
+    /// out, and which SKU ARM itself lists first.
     /// </summary>
+    /// <remarks>
+    /// <c>DefaultSkuName</c> and <c>DefaultCapacity</c> come from the <em>same</em> SKU — the first ARM
+    /// lists. Capacity limits are per-SKU, so a suggested capacity taken from one SKU and offered
+    /// beside another is a head start on a create ARM refuses. <c>SkuNames</c> is sorted separately,
+    /// for a readable dropdown only.
+    /// </remarks>
     private static FoundryCatalogEntryResponse MapCatalogEntry(CognitiveServicesAccountModel model)
     {
-        var skus = model.Skus ?? [];
+        var skus = (model.Skus ?? []).Where(sku => !string.IsNullOrWhiteSpace(sku.Name)).ToList();
+        var defaultSku = skus.FirstOrDefault();
 
         return new FoundryCatalogEntryResponse(
             model.Format ?? string.Empty,
             model.Name ?? string.Empty,
             model.Version ?? string.Empty,
-            [.. skus.Select(sku => sku.Name).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
-            skus.Select(sku => sku.Capacity?.Default).FirstOrDefault(capacity => capacity is not null));
+            [.. skus.Select(sku => sku.Name).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            defaultSku?.Capacity?.Default,
+            defaultSku?.Name ?? string.Empty,
+            model.IsDefaultVersion ?? false,
+            model.LifecycleStatus?.ToString() ?? string.Empty,
+            model.Deprecation?.InferenceOn);
     }
 
     private static FoundryDeploymentResponse Map(string accountName, CognitiveServicesAccountDeploymentData data) =>

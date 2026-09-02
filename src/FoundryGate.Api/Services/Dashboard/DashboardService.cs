@@ -8,12 +8,12 @@ using Microsoft.Extensions.Caching.Memory;
 namespace FoundryGate.Api.Services.Dashboard;
 
 /// <summary>
-/// Default <see cref="IDashboardService"/>: six set-based, <c>AsNoTracking</c> queries over the
+/// Default <see cref="IDashboardService"/>: eight set-based, <c>AsNoTracking</c> queries over the
 /// current <see cref="BillingPeriod"/>, behind a short shared cache.
 /// </summary>
 /// <remarks>
 /// <b>Why a cache.</b> The dashboard is the admin landing page and refreshes itself every 60 s
-/// (plans/18), so N admins with the tab open are N × 6 aggregate queries a minute against tables the
+/// (plans/18), so N admins with the tab open are N × 8 aggregate queries a minute against tables the
 /// enforcement path also uses. Holding the answer for <see cref="CacheDuration"/> collapses that to
 /// roughly two query bursts a minute for the whole fork. It is a summary of numbers that are
 /// themselves reconciled on the sync job's cadence — 30 seconds of staleness is invisible next to

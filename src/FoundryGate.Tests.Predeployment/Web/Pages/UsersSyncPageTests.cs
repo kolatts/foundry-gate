@@ -151,6 +151,22 @@ public class UsersSyncPageTests : WebTestContext
     }
 
     [Fact]
+    public void A_failed_status_read_says_so_rather_than_claiming_there_was_no_previous_run()
+    {
+        // "Couldn't read the last run" and "there was no last run" are different facts, and only one
+        // of them is something the page actually learned.
+        Api.LastUserSyncResult = ApiCallResult<UserSyncStatusResponse>.Fail(
+            ApiCallStatus.Unavailable, "Foundry Gate's API isn't reachable right now.");
+
+        var page = RenderPage<UsersSync>();
+
+        var summary = page.Find("[data-testid=sync-last-summary]").TextContent;
+        Assert.Contains("Couldn't read the last run", summary, StringComparison.Ordinal);
+        Assert.Contains("isn't reachable", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("no record of a previous sync", summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_failed_status_read_does_not_stop_the_page_doing_its_job()
     {
         Api.LastUserSyncResult = ApiCallResult<UserSyncStatusResponse>.Fail(ApiCallStatus.Unavailable, "Gone.");

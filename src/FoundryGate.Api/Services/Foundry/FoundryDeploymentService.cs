@@ -125,24 +125,34 @@ public sealed class FoundryDeploymentService(
         var perAccount = await Task.WhenAll(accountNames.Select(account => TryListCatalogAsync(account, cancellationToken)));
 
         // Merged across accounts: the same model is normally deployable in every region, and a form
-        // that names one account at a time has no use for the near-duplicates. SKUs are unioned, and
-        // the first default capacity any account reports wins — they agree in practice, and a
-        // suggestion in a form does not justify a per-account table.
+        // that names one account at a time has no use for the near-duplicates. SKUs are unioned for
+        // display; the *default* SKU and its capacity are taken as a pair from the first account that
+        // names one, because capacity limits are per-SKU and splitting them suggests a create ARM
+        // refuses. ARM's own flags (default version, lifecycle, retirement date) are taken from the
+        // first account that reports them — they describe the model, not the region.
         var catalog = perAccount
             .Where(entries => entries is not null)
             .SelectMany(entries => entries!)
             .GroupBy(entry => (entry.ModelFormat, entry.ModelName, entry.ModelVersion), CatalogKeyComparer)
-            .Select(group => new FoundryCatalogEntryResponse(
-                group.Key.ModelFormat,
-                group.Key.ModelName,
-                group.Key.ModelVersion,
-                [.. group.SelectMany(entry => entry.SkuNames).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
-                group.Select(entry => entry.DefaultCapacity).FirstOrDefault(capacity => capacity is not null)))
+            .Select(Merge)
+            // Ordered for a form: model name, then ARM's default version first. The version string is
+            // only a tiebreak for a model where ARM flags no default — it is not a version comparison
+            // (it would order "turbo-2024-04-09" above "2025-04-14"), which is why IsDefaultVersion
+            // outranks it.
             .OrderBy(entry => entry.ModelName, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(entry => entry.IsDefaultVersion)
             .ThenByDescending(entry => entry.ModelVersion, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        _ = cache.Set<IReadOnlyList<FoundryCatalogEntryResponse>>(CatalogCacheKey, catalog, CatalogCacheDuration);
+        // An empty answer is not cached. Emptiness here means every account 404'd or ARM answered
+        // nothing — a transient window that would otherwise pin "catalogue unavailable" on the create
+        // dialog for five minutes with no way to refresh (nothing invalidates this key: deploying a
+        // model does not change what is deployable).
+        if (catalog.Count > 0)
+        {
+            _ = cache.Set<IReadOnlyList<FoundryCatalogEntryResponse>>(CatalogCacheKey, catalog, CatalogCacheDuration);
+        }
+
         return catalog;
     }
 
@@ -337,6 +347,33 @@ public sealed class FoundryDeploymentService(
         {
             throw MissingAccount(ex);
         }
+    }
+
+    /// <summary>
+    /// One model/version as every configured account jointly describes it. SKUs are unioned; the
+    /// default SKU and its capacity are taken together from the first account that names a SKU, so the
+    /// pre-selected SKU and the suggested capacity always belong to each other.
+    /// </summary>
+    private static FoundryCatalogEntryResponse Merge(IGrouping<(string ModelFormat, string ModelName, string ModelVersion), FoundryCatalogEntryResponse> group)
+    {
+        var withDefaultSku = group.FirstOrDefault(entry => entry.DefaultSkuName.Length > 0) ?? group.First();
+
+        return new FoundryCatalogEntryResponse(
+            group.Key.ModelFormat,
+            group.Key.ModelName,
+            group.Key.ModelVersion,
+            [.. group.SelectMany(entry => entry.SkuNames).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            withDefaultSku.DefaultCapacity,
+            withDefaultSku.DefaultSkuName,
+
+            // Any account calling this the default version makes it the default version: ARM is
+            // describing the model, and a region that has not caught up is not a second opinion.
+            group.Any(entry => entry.IsDefaultVersion),
+            group.Select(entry => entry.LifecycleStatus).FirstOrDefault(status => status.Length > 0) ?? string.Empty,
+
+            // The earliest retirement any region reports: the first date this stops working somewhere
+            // is the date an admin needs to know about.
+            group.Select(entry => entry.InferenceRetiresOn).Where(date => date is not null).Min());
     }
 
     /// <summary>Case-insensitive on all three parts, because ARM's own casing of a format or model name is not something to depend on.</summary>

@@ -7,6 +7,7 @@ using FoundryGate.Web.Components;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using MudBlazor;
 
 namespace FoundryGate.Tests.Predeployment.Web;
@@ -159,11 +160,11 @@ public class AuditPageTests : WebTestContext
     [Fact]
     public void An_action_query_parameter_filters_on_first_load()
     {
-        // The dashboard's hard-stopped card links here as ?action=key.revoked (#190): a page that
-        // knows which action explains its number hands the admin the trail, not the whole log.
-        _ = RenderPage<Audit>(("ActionFilter", AuditActions.KeyRevoked));
+        // The dashboard's hard-stopped card links here as ?action=user.deactivated (#190): a page
+        // that knows which action explains its number hands the admin the trail, not the whole log.
+        _ = RenderPage<Audit>(("ActionFilter", AuditActions.UserDeactivated));
 
-        Assert.Equal(AuditActions.KeyRevoked, Assert.Single(Api.AuditQueries).Query.Action);
+        Assert.Equal(AuditActions.UserDeactivated, Assert.Single(Api.AuditQueries).Query.Action);
     }
 
     [Fact]
@@ -231,29 +232,81 @@ public class AuditPageTests : WebTestContext
     }
 
     [Fact]
-    public async Task A_numeric_search_term_falls_back_to_looking_the_id_up()
+    public async Task Typing_a_bare_id_and_tabbing_out_filters_by_that_user()
     {
         // The manual id path #191 asked to keep: an admin holding an id from an export or a
-        // colleague's message can type it straight in.
+        // colleague's message types it straight in.
         Api.UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page<UserResponse>());
         Api.UserResult = ApiCallResult<UserDetailResponse>.Ok(
             WebTestData.UserDetail(WebTestData.User(userId: 41, displayName: "Ada Lovelace")));
 
         var page = RenderPage<Audit>();
-        var matches = await SearchActorsAsync(page, "41");
+        await TypeActorAsync(page, "41");
+        await BlurActorAsync(page);
 
-        Assert.Equal("Ada Lovelace", Assert.Single(matches).DisplayName);
+        Assert.Equal(41, Api.AuditQueries[^1].Query.ActorUserId);
+        Assert.Contains("Ada Lovelace", page.FindComponent<MudAutocomplete<UserResponse>>().Markup, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task A_numeric_term_that_matches_no_user_offers_nothing_rather_than_failing()
+    public async Task The_id_lookup_waits_for_the_field_to_lose_focus_rather_than_firing_as_you_type()
     {
+        // GET /users/{id} is the detail endpoint — memberships, allocation, masked key material — so
+        // firing it at every debounce tick while someone types "412" spends three round trips a
+        // keystroke to render one label.
+        Api.UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page<UserResponse>());
+        Api.UserResult = ApiCallResult<UserDetailResponse>.Ok(
+            WebTestData.UserDetail(WebTestData.User(userId: 412, displayName: "Ada Lovelace")));
+
+        var page = RenderPage<Audit>();
+        _ = await SearchActorsAsync(page, "4");
+        _ = await SearchActorsAsync(page, "41");
+        _ = await SearchActorsAsync(page, "412");
+
+        Assert.Equal(0, Api.CallCount("GetUserAsync"));
+
+        await TypeActorAsync(page, "412");
+        await BlurActorAsync(page);
+
+        Assert.Equal(1, Api.CallCount("GetUserAsync"));
+    }
+
+    [Fact]
+    public async Task An_id_that_matches_no_user_leaves_the_filter_alone()
+    {
+        // A typo must not empty the grid: nothing was selected, so nothing is filtered.
         Api.UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page<UserResponse>());
         Api.UserResult = ApiCallResult<UserDetailResponse>.Fail(ApiCallStatus.NotFound, "That wasn't found.");
 
         var page = RenderPage<Audit>();
+        await TypeActorAsync(page, "999");
+        await BlurActorAsync(page);
 
-        Assert.Empty(await SearchActorsAsync(page, "999"));
+        Assert.Null(Api.AuditQueries[^1].Query.ActorUserId);
+    }
+
+    [Fact]
+    public async Task Blurring_a_name_search_never_reaches_the_detail_endpoint()
+    {
+        var page = RenderPage<Audit>();
+        await TypeActorAsync(page, "Ada");
+        await BlurActorAsync(page);
+
+        Assert.Equal(0, Api.CallCount("GetUserAsync"));
+    }
+
+    [Fact]
+    public async Task A_search_term_that_is_an_id_still_only_searches_names()
+    {
+        // The search itself is names and emails; the id is the blur's job.
+        Api.ArrangeUsers(WebTestData.User(userId: 7, displayName: "Seven Sisters"));
+
+        var page = RenderPage<Audit>();
+        var matches = await SearchActorsAsync(page, "41");
+
+        Assert.Equal("41", Assert.Single(Api.UserListCalls).Query.Search);
+        Assert.Equal(0, Api.CallCount("GetUserAsync"));
+        Assert.Single(matches);
     }
 
     [Fact]
@@ -315,6 +368,20 @@ public class AuditPageTests : WebTestContext
 
         return await page.InvokeAsync(async () =>
             (await search(term, CancellationToken.None))?.ToList() ?? []);
+    }
+
+    /// <summary>Types into the actor box without picking anything — what the manual id path starts from.</summary>
+    private static async Task TypeActorAsync(IRenderedComponent<IComponent> page, string text)
+    {
+        var autocomplete = page.FindComponent<MudAutocomplete<UserResponse>>();
+        await page.InvokeAsync(() => autocomplete.Instance.TextChanged.InvokeAsync(text));
+    }
+
+    /// <summary>Moves focus off the actor box, which is when a typed id is resolved.</summary>
+    private static async Task BlurActorAsync(IRenderedComponent<IComponent> page)
+    {
+        var autocomplete = page.FindComponent<MudAutocomplete<UserResponse>>();
+        await page.InvokeAsync(() => autocomplete.Instance.OnBlur.InvokeAsync(new FocusEventArgs()));
     }
 
     /// <summary>Picks (or clears) the actor the way the popover's click would.</summary>

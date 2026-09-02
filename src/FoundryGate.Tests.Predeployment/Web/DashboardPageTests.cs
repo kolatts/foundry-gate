@@ -53,16 +53,19 @@ public class DashboardPageTests : WebTestContext
     }
 
     [Fact]
-    public void A_non_zero_hard_stopped_count_reads_as_an_alert_and_links_to_the_revocations()
+    public void A_non_zero_hard_stopped_count_reads_as_an_alert_and_links_to_the_pipeline_that_set_it()
     {
-        // A revoked key is an outage for that developer, and the audit log is the only place that
-        // says who and when — so the number is a link into it, not a dead figure.
+        // A hard stop is an outage for that developer, and the audit log is the only place that says
+        // who and when — so the number is a link into it, not a dead figure. It has to be the action
+        // that actually sets the flag: `user.deactivated` (whose details carry
+        // `allocationHardStopped`). `key.revoked` is also written by DELETE /keys/{userId}, which
+        // explicitly leaves the allocation alone, so linking there lands on mostly other people.
         Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(hardStoppedUserCount: 1));
 
         var page = RenderPage<Dashboard>();
 
         var link = page.Find("[data-testid='stat-hard-stopped-link']");
-        Assert.Equal($"audit?action={AuditActions.KeyRevoked}", link.GetAttribute("href"));
+        Assert.Equal($"audit?action={AuditActions.UserDeactivated}", link.GetAttribute("href"));
         Assert.Contains("mud-error-text", page.Find("[data-testid='stat-hard-stopped']").InnerHtml, StringComparison.Ordinal);
     }
 

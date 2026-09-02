@@ -30,7 +30,7 @@ public sealed class ConfigService(
     {
         // Projected to a row shape first: IsReadOnly comes from a Domain dictionary lookup, which no
         // provider can translate, and the alternative — materializing the key list into the query — is
-        // a filter this five-row table does not need.
+        // a filter this seven-row table does not need.
         var rows = await dbContext.SystemConfigurations
             .AsNoTracking()
             .OrderBy(c => c.Key)
@@ -62,7 +62,7 @@ public sealed class ConfigService(
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentNullException.ThrowIfNull(request);
 
-        // Materialize the whole table (five rows on a shipped fork) and match in memory rather than
+        // Materialize the whole table (seven rows on a shipped fork) and match in memory rather than
         // translating the comparison: `Key == key` is case-insensitive under SQL Server's default
         // collation but case-sensitive under the SQLite the tests run on, and an endpoint that 404s
         // on one provider and succeeds on the other is a contract nobody can document. Tracked (no

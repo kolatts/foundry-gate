@@ -313,8 +313,15 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         // #173. The catalogue is cached for five minutes, so this seeds before anything reads it and
         // asserts only on the model it owns.
         var model = $"model-{Guid.NewGuid():N}"[..20];
+        var retiresOn = new DateTimeOffset(2027, 3, 1, 0, 0, 0, TimeSpan.Zero);
         factory.FoundryClient.SeedCatalog(
-            ApiTestFactory.PrimaryFoundryAccount, model, "2026-01-01", defaultCapacity: 25, skuNames: ["GlobalStandard"]);
+            ApiTestFactory.PrimaryFoundryAccount,
+            model,
+            "2026-01-01",
+            defaultCapacity: 25,
+            lifecycleStatus: "GenerallyAvailable",
+            inferenceRetiresOn: retiresOn,
+            skuNames: ["GlobalStandard"]);
         factory.FoundryClient.SeedCatalog(
             ApiTestFactory.SecondaryFoundryAccount, model, "2026-01-01", defaultCapacity: 25, skuNames: ["DataZoneStandard"]);
         using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
@@ -331,6 +338,12 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         Assert.Equal("2026-01-01", entry.ModelVersion);
         Assert.Equal(["DataZoneStandard", "GlobalStandard"], entry.SkuNames);
         Assert.Equal(25, entry.DefaultCapacity);
+
+        // ARM's own metadata, which is what stops the UI inferring "newest" from a version string.
+        Assert.Equal("GlobalStandard", entry.DefaultSkuName);
+        Assert.True(entry.IsDefaultVersion);
+        Assert.Equal("GenerallyAvailable", entry.LifecycleStatus);
+        Assert.Equal(retiresOn, entry.InferenceRetiresOn);
     }
 
     private static string Marker() => $"dep-{Guid.NewGuid():N}"[..20];

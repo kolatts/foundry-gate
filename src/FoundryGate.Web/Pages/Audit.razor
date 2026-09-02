@@ -62,9 +62,10 @@
 
             <MudItem xs="12" md="2">
                 @* An admin reading the log knows "Ada Lovelace", not "user 41" (#191). Typing a bare
-                   id still works: the search falls back to GET /users/{id} when the term is numeric
-                   and the name search has nothing for it, which is also how a ?actor= deep link
-                   recovers the name to show in the box. *@
+                   id still works, but it is resolved when the field loses focus rather than while
+                   typing: GET /users/{id} is the detail endpoint (memberships, allocation, masked
+                   key), far too heavy to fire at every pause in typing "412". The name search runs as
+                   you type; the id lookup happens once, when you have finished. *@
                 <MudAutocomplete T="UserResponse"
                                  Label="Actor"
                                  Value="@_actor"
@@ -76,7 +77,9 @@
                                  Clearable="true"
                                  Variant="Variant.Outlined"
                                  Margin="Margin.Dense"
-                                 HelperText="Name, email, or a user id"
+                                 TextChanged="@OnActorTextChanged"
+                                 OnBlur="@ResolveTypedActorIdAsync"
+                                 HelperText="Name or email; or a user id, then tab out"
                                  data-testid="audit-filter-actor" />
             </MudItem>
         </MudGrid>
@@ -179,6 +182,9 @@
     private string? _targetType;
     private int? _actorUserId;
     private UserResponse? _actor;
+
+    /// <summary>What is currently typed in the actor box, so a bare id can be resolved on blur.</summary>
+    private string _actorText = string.Empty;
     private DateRange? _dateRange;
     private bool _loadFailed;
     private string _errorMessage = string.Empty;
@@ -235,42 +241,34 @@
         new(DateTime.SpecifyKind(localWallClock, DateTimeKind.Unspecified), TimeProvider.LocalTimeZone.GetUtcOffset(localWallClock));
 
     /// <summary>
-    /// Keeps the query-string filters in step, including a later in-app navigation to them. An
-    /// action the log's own constants don't name is ignored rather than being pushed into a select
-    /// that cannot render it — a mistyped deep link shows the whole log, not an empty grid filtered
-    /// by nothing that exists. An <c>?actor=</c> id is taken at face value (the API is the authority
-    /// on whether that user exists) and its name resolved for the box.
+    /// Applies the query-string filters, once, on the page's own initialization. Deliberately not
+    /// <c>OnParametersSetAsync</c>: nothing rewrites the URL when a filter changes, so re-applying on
+    /// every parameter set quietly restores the deep-link value the admin has just cleared. An action
+    /// the log's own constants don't name is ignored rather than being pushed into a select that
+    /// cannot render it — a mistyped deep link shows the whole log, not an empty grid filtered by
+    /// nothing that exists. An <c>?actor=</c> id is taken at face value (the API is the authority on
+    /// whether that user exists) and its name resolved for the box.
     /// </summary>
-    protected override async Task OnParametersSetAsync()
+    protected override async Task OnInitializedAsync()
     {
-        var changed = false;
+        _action = Actions.FirstOrDefault(a => string.Equals(a, ActionFilter, StringComparison.OrdinalIgnoreCase));
 
-        var actionFromQuery = Actions.FirstOrDefault(a => string.Equals(a, ActionFilter, StringComparison.OrdinalIgnoreCase));
-        if (actionFromQuery is not null && !string.Equals(actionFromQuery, _action, StringComparison.Ordinal))
-        {
-            _action = actionFromQuery;
-            changed = true;
-        }
-
-        if (ActorFilter is { } actorFromQuery && actorFromQuery != _actorUserId)
+        if (ActorFilter is { } actorFromQuery)
         {
             _actorUserId = actorFromQuery;
             _actor = await TryLoadUserAsync(actorFromQuery);
-            changed = true;
         }
 
-        if (changed && _grid is not null)
-        {
-            await ReloadAsync();
-        }
+        // No reload: the grid has not made its first ServerData call yet, and it will read these.
     }
 
     /// <summary>
-    /// The type-ahead over <c>GET /users?search=</c>. An all-digits term also asks
-    /// <c>GET /users/{id}</c>, so an admin who has an id — from a deep link, an export, a colleague's
-    /// message — can still use it without leaving for <c>/users</c>. Search failures return nothing
-    /// rather than throwing: the filter is a convenience, and the grid is the thing that reports a
-    /// dead API.
+    /// The type-ahead over <c>GET /users?search=</c> — names and emails only. A bare id is <em>not</em>
+    /// resolved here: <c>GET /users/{id}</c> is the detail endpoint (memberships, allocation, masked
+    /// key material), and firing it at every debounce tick while someone types "412" spends three
+    /// round trips a keystroke to render one label. <see cref="ResolveTypedActorIdAsync"/> does it once,
+    /// on blur. Search failures return nothing rather than throwing: the filter is a convenience, and
+    /// the grid is the thing that reports a dead API.
     /// </summary>
     private async Task<IEnumerable<UserResponse>> SearchActorsAsync(string? value, CancellationToken cancellationToken)
     {
@@ -281,19 +279,33 @@
             new PagedRequest(1, ActorSuggestionCount),
             cancellationToken);
 
-        var matches = result is { IsSuccess: true, Value: not null } ? result.Value.Items.ToList() : [];
+        return result is { IsSuccess: true, Value: not null } ? result.Value.Items : [];
+    }
 
-        if (int.TryParse(term, NumberStyles.None, CultureInfo.InvariantCulture, out var userId)
-            && !matches.Exists(u => u.UserId == userId))
+    private void OnActorTextChanged(string? text) => _actorText = text ?? string.Empty;
+
+    /// <summary>
+    /// The manual id path (#191), run when the field loses focus: an admin holding an id — from an
+    /// export, a colleague's message, a deep link they are retyping — types it and tabs out. Only
+    /// when nothing was picked from the list and the text is all digits, and only once, so the
+    /// heavyweight detail read happens for a finished id rather than for each of its prefixes. An id
+    /// nothing resolves leaves the filter alone: the grid would otherwise empty itself over a typo.
+    /// </summary>
+    private async Task ResolveTypedActorIdAsync()
+    {
+        if (_actor is not null
+            || !int.TryParse(_actorText.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var userId))
         {
-            var byId = await TryLoadUserAsync(userId, cancellationToken);
-            if (byId is not null)
-            {
-                matches.Insert(0, byId);
-            }
+            return;
         }
 
-        return matches;
+        var user = await TryLoadUserAsync(userId);
+        if (user is null)
+        {
+            return;
+        }
+
+        await OnActorChangedAsync(user);
     }
 
     /// <summary>One user by id, or <see langword="null"/> for any failure — a 404 for a typed id is an answer, not an error to report.</summary>
@@ -325,6 +337,7 @@
         _targetType = null;
         _actorUserId = null;
         _actor = null;
+        _actorText = string.Empty;
         _dateRange = null;
         await ReloadAsync();
     }

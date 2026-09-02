@@ -416,15 +416,65 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task ListCatalogAsync_keeps_the_versions_of_a_model_apart_newest_first()
+    public async Task ListCatalogAsync_puts_arms_default_version_first_whatever_the_version_string_sorts_as()
     {
-        // A create needs an explicit version, so two versions of one model are two answers, not one.
-        _client.SeedCatalog(Primary, "gpt-4.1-mini", "2025-04-14");
-        _client.SeedCatalog(Primary, "gpt-4.1-mini", "2026-02-01");
+        // A create needs an explicit version, so two versions of one model are two answers, not one —
+        // and which one to suggest is ARM's `isDefaultVersion`, never a string comparison. Sorting
+        // these descending would put "turbo-2024-04-09" above "2025-04-14"; ARM says otherwise.
+        _client.SeedCatalog(Primary, "gpt-4.1-mini", "turbo-2024-04-09", isDefaultVersion: false);
+        _client.SeedCatalog(Primary, "gpt-4.1-mini", "2025-04-14", isDefaultVersion: true);
 
         var catalog = await CreateService(oid: null).ListCatalogAsync(CancellationToken.None);
 
-        Assert.Equal(["2026-02-01", "2025-04-14"], catalog.Select(e => e.ModelVersion));
+        Assert.Equal(["2025-04-14", "turbo-2024-04-09"], catalog.Select(e => e.ModelVersion));
+        Assert.True(catalog[0].IsDefaultVersion);
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_carries_arms_default_sku_and_that_skus_capacity_together()
+    {
+        // SkuNames is sorted for a readable dropdown; the SKU to *offer* is ARM's own first one.
+        // Capacity limits are per-SKU, so splitting the two suggests a create ARM refuses.
+        _client.SeedCatalog(Primary, "gpt-5-codex", defaultCapacity: 30, skuNames: ["GlobalStandard", "DataZoneStandard"]);
+
+        var entry = Assert.Single(await CreateService(oid: null).ListCatalogAsync(CancellationToken.None));
+
+        Assert.Equal(["DataZoneStandard", "GlobalStandard"], entry.SkuNames);
+        Assert.Equal("GlobalStandard", entry.DefaultSkuName);
+        Assert.Equal(30, entry.DefaultCapacity);
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_reports_the_lifecycle_and_the_earliest_retirement_any_region_named()
+    {
+        // The first date this stops working somewhere is the date an admin needs to know about.
+        var earlier = new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var later = new DateTimeOffset(2027, 6, 1, 0, 0, 0, TimeSpan.Zero);
+        _client.SeedCatalog(Primary, "gpt-35-turbo", "0301", lifecycleStatus: "Deprecating", inferenceRetiresOn: later);
+        _client.SeedCatalog(Secondary, "gpt-35-turbo", "0301", lifecycleStatus: "Deprecating", inferenceRetiresOn: earlier);
+
+        var entry = Assert.Single(await CreateService(oid: null).ListCatalogAsync(CancellationToken.None));
+
+        Assert.Equal("Deprecating", entry.LifecycleStatus);
+        Assert.Equal(earlier, entry.InferenceRetiresOn);
+
+        // Deprecating is not yet retired; a date in the future has not passed.
+        Assert.False(entry.IsRetiredAt(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero)));
+        Assert.True(entry.IsRetiredAt(later));
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_does_not_cache_an_empty_answer()
+    {
+        // Emptiness means every account 404'd or ARM answered nothing — a transient window that would
+        // otherwise pin "catalogue unavailable" on the create dialog for five minutes, with nothing to
+        // invalidate it (deploying a model does not change what is deployable).
+        var service = CreateService(oid: null);
+        Assert.Empty(await service.ListCatalogAsync(CancellationToken.None));
+
+        _client.SeedCatalog(Primary, "gpt-4.1-mini");
+
+        Assert.Single(await service.ListCatalogAsync(CancellationToken.None));
     }
 
     [Fact]

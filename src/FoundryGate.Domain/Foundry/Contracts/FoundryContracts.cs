@@ -65,17 +65,64 @@ public record FoundryModelResponse(
 /// one region carries is still listed — ARM decides the create, and it will refuse an account that
 /// cannot serve it, with a message the admin can act on.
 /// </remarks>
-/// <param name="ModelFormat">ARM <c>model.format</c> (<c>OpenAI</c>, <c>Anthropic</c>, …). Anthropic models are listed for visibility even though the API refuses to create them (#107/#126).</param>
+/// <param name="ModelFormat">
+/// ARM <c>model.format</c> (<c>OpenAI</c>, <c>Anthropic</c>, …). Anthropic models are listed for
+/// visibility — what an account can serve is a fact worth showing — but the <em>create dialog</em>
+/// filters this endpoint to <c>OpenAI</c>, because its form hardcodes that format and the API refuses
+/// an Anthropic create (#107/#126). A picker that offers a model the submit path cannot send is how a
+/// refused Anthropic create reaches ARM, which is exactly what E-007 says to avoid.
+/// </param>
 /// <param name="ModelName">ARM <c>model.name</c>, exactly as a create must spell it.</param>
 /// <param name="ModelVersion">ARM <c>model.version</c>. Empty when ARM reports none — a create needs an explicit version, so an entry without one is a shortcut the admin has to complete.</param>
-/// <param name="SkuNames">The SKUs this model can be deployed under, deduplicated and ordered; empty when ARM reports none.</param>
-/// <param name="DefaultCapacity">The default capacity ARM suggests for the first SKU that names one, in thousands of TPM — a starting point for the form's capacity field, not a limit.</param>
+/// <param name="SkuNames">Every SKU this model can be deployed under, deduplicated and ordered for display; empty when ARM reports none. The one to <em>offer</em> is <paramref name="DefaultSkuName"/>, not the first of these.</param>
+/// <param name="DefaultCapacity">
+/// The capacity ARM suggests for <paramref name="DefaultSkuName"/>, in thousands of TPM — a starting
+/// point for the form's capacity field, not a limit. It belongs to that SKU specifically: capacity
+/// limits are per-SKU, so pairing it with any other SKU can suggest a create ARM refuses.
+/// </param>
+/// <param name="DefaultSkuName">
+/// The first SKU ARM lists for this model — ARM's own preference order, which is the one to
+/// pre-select. <paramref name="SkuNames"/> is sorted for a readable dropdown; sorting is a display
+/// decision and must not become a choice.
+/// </param>
+/// <param name="IsDefaultVersion">
+/// ARM's <c>isDefaultVersion</c>. This is how "which version of this model" is answered — never by
+/// comparing version strings, which orders <c>turbo-2024-04-09</c> above <c>2025-04-14</c> and
+/// <c>1106</c> above <c>0125</c>.
+/// </param>
+/// <param name="LifecycleStatus">
+/// Raw ARM <c>lifecycleStatus</c> (<c>GenerallyAvailable</c>, <c>Preview</c>, <c>Deprecating</c>,
+/// <c>Deprecated</c>, <c>Stable</c>, …), or empty when ARM reports none. A string, not an enum: it is
+/// an extensible value on ARM's side and a new one must not break the read.
+/// </param>
+/// <param name="InferenceRetiresOn">
+/// ARM <c>deprecation.inference</c> — when this model stops answering requests, if ARM has named a
+/// date. A deployment created after it is a deployment that stops working on it.
+/// </param>
 public record FoundryCatalogEntryResponse(
     string ModelFormat,
     string ModelName,
     string ModelVersion,
     IReadOnlyList<string> SkuNames,
-    int? DefaultCapacity);
+    int? DefaultCapacity,
+    string DefaultSkuName,
+    bool IsDefaultVersion,
+    string LifecycleStatus,
+    DateTimeOffset? InferenceRetiresOn)
+{
+    /// <summary>ARM's <c>lifecycleStatus</c> for a model that is already retired.</summary>
+    public const string DeprecatedLifecycleStatus = "Deprecated";
+
+    /// <summary>
+    /// Whether this entry is retired as of <paramref name="asOf"/> — ARM has marked it
+    /// <c>Deprecated</c>, or the date it stops answering requests has passed. Lives on the contract so
+    /// every reader answers it the same way; the caller supplies the clock (CONVENTIONS.md: no naked
+    /// <c>UtcNow</c>), and the Web dialog hides these unless the admin asks to see them.
+    /// </summary>
+    public bool IsRetiredAt(DateTimeOffset asOf) =>
+        string.Equals(LifecycleStatus, DeprecatedLifecycleStatus, StringComparison.OrdinalIgnoreCase)
+        || InferenceRetiresOn <= asOf;
+}
 
 /// <summary>
 /// <c>POST /foundry/deployments</c> body (admin). Creates <b>one</b> deployment in <b>one</b>

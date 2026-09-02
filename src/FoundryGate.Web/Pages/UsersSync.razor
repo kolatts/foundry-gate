@@ -84,8 +84,17 @@ else
         }
     }
 
-    <MudAlert Severity="Severity.Normal" Class="mt-6" Style="max-width: 44rem;" data-testid="sync-history-note">
-        @if (_lastSync is { LastSyncDate: { } lastSyncDate })
+    <MudAlert Severity="@(_lastSyncUnavailable is null ? Severity.Normal : Severity.Warning)"
+              Class="mt-6"
+              Style="max-width: 44rem;"
+              data-testid="sync-history-note">
+        @if (_lastSyncUnavailable is { } unavailable)
+        {
+            @* "Couldn't read the last run" and "there was no last run" are different facts, and only
+               one of them is something this page actually learned. *@
+            <span data-testid="sync-last-summary">Couldn't read the last run: @unavailable</span>
+        }
+        else if (_lastSync is { LastSyncDate: { } lastSyncDate })
         {
             <MudText Typo="Typo.subtitle2" Class="mb-1">
                 Last run @lastSyncDate.ToLocalTime().ToString("d MMM yyyy HH:mm")
@@ -111,13 +120,14 @@ else
 @code {
     private UserSyncResult? _result;
     private UserSyncStatusResponse? _lastSync;
+    private string? _lastSyncUnavailable;
     private bool _running;
     private bool _accessDenied;
 
     /// <summary>
-    /// The previous run, from <c>GET /users/sync/last</c> (#171). A failure here is deliberately
-    /// silent: the page's job is running a sync, and "we couldn't tell you about last time" is not
-    /// worth a red banner over the button that matters.
+    /// The previous run, from <c>GET /users/sync/last</c> (#171). A failure does not stop the page —
+    /// its job is running a sync — but it is reported rather than swallowed: rendering "no record of a
+    /// previous sync" for a call that failed asserts a fact about the database the page never learned.
     /// </summary>
     protected override Task OnInitializedAsync() => LoadLastSyncAsync();
 
@@ -127,7 +137,12 @@ else
         if (result.IsSuccess)
         {
             _lastSync = result.Value;
+            _lastSyncUnavailable = null;
+            return;
         }
+
+        _lastSync = null;
+        _lastSyncUnavailable = result.Message ?? "the API didn't answer.";
     }
 
     /// <summary>

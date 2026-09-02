@@ -1,4 +1,5 @@
 @inject IFoundryGateApiClient Api
+@inject TimeProvider Time
 
 @* Create form for POST /foundry/deployments (#62). OpenAI format only — the API refuses an
    Anthropic-format create with a 400, so this dialog never offers one and says why instead of
@@ -6,8 +7,11 @@
 
    Model, version and SKU are offered from GET /foundry/catalog (#173) — what the configured
    accounts can actually serve — not from a list typed into this file, which went stale the week
-   after it shipped. Every field still coerces whatever is typed: the catalogue is a shortcut, and
-   ARM is the authority on whether a create is valid. *@
+   after it shipped. The catalogue is filtered to OpenAI here: the endpoint lists Anthropic models
+   for visibility, but this form submits ModelFormat = OpenAI, so offering one would send an
+   Anthropic create disguised as an OpenAI one, straight past the API's refusal. Every field still
+   coerces whatever is typed: the catalogue is a shortcut, and ARM is the authority on whether a
+   create is valid. *@
 
 <MudDialog>
     <DialogContent>
@@ -67,7 +71,8 @@
                              data-testid="deployment-model" />
 
             <MudAutocomplete T="string"
-                             @bind-Value="_modelVersion"
+                             Value="@_modelVersion"
+                             ValueChanged="@OnVersionChanged"
                              Label="Model version"
                              Variant="Variant.Outlined"
                              Class="mt-4"
@@ -78,10 +83,12 @@
                              Required="true"
                              RequiredError="ARM needs an explicit version."
                              MaxLength="@ValidationConstants.FoundryModelVersionMaxLength"
+                             HelperText="@VersionHelperText"
                              data-testid="deployment-version" />
 
             <MudAutocomplete T="string"
-                             @bind-Value="_skuName"
+                             Value="@_skuName"
+                             ValueChanged="@OnSkuChanged"
                              Label="SKU"
                              Variant="Variant.Outlined"
                              Class="mt-4"
@@ -104,6 +111,21 @@
                              Max="@ValidationConstants.FoundryDeploymentMaxCapacity"
                              HelperText="Thousands of tokens per minute — 25 means 25,000 TPM."
                              data-testid="deployment-capacity" />
+
+            @if (_retiredCount > 0)
+            {
+                @* Retired models are hidden rather than removed: deploying one is legitimate (matching
+                   an existing deployment's version, reproducing a fork's setup) but it should be a
+                   deliberate act, not something you scroll past by accident. *@
+                <MudSwitch T="bool"
+                           Value="@_includeRetired"
+                           ValueChanged="@OnIncludeRetiredChanged"
+                           Color="Color.Warning"
+                           Class="mt-4"
+                           data-testid="deployment-include-retired">
+                    Show @_retiredCount retired model@(_retiredCount == 1 ? string.Empty : "s")
+                </MudSwitch>
+            }
         </MudForm>
     </DialogContent>
     <DialogActions>
@@ -124,8 +146,19 @@
     public IReadOnlyList<string> KnownAccounts { get; set; } = [];
 
     private MudForm? _form;
+
+    /// <summary>
+    /// The OpenAI-format half of <c>GET /foundry/catalog</c>. The endpoint lists Anthropic models too —
+    /// what an account can serve is worth knowing — but this form hardcodes
+    /// <see cref="FoundryModelFormatType.OpenAI"/> on submit, so offering a <c>claude-*</c> model would
+    /// send an Anthropic create *as* an OpenAI one, sailing past the API's refusal and putting a failed
+    /// Anthropic create in front of ARM (E-007: that can wedge the subscription's Marketplace
+    /// agreement). The filter is what keeps the banner above true.
+    /// </summary>
     private IReadOnlyList<FoundryCatalogEntryResponse> _catalog = [];
     private bool _catalogUnavailable;
+    private bool _includeRetired;
+    private int _retiredCount;
     private string _accountName = string.Empty;
     private string _deploymentName = string.Empty;
     private string _modelName = string.Empty;
@@ -134,9 +167,15 @@
     private int _capacity = FallbackCapacity;
 
     /// <summary>
-    /// Set the moment the admin types a capacity, so choosing a model afterwards never overwrites a
-    /// number they entered deliberately. Suggesting a default is help; replacing an answer is not.
+    /// Version, SKU and capacity are <em>derived</em> from the chosen model until the admin says
+    /// otherwise: each flag is set the moment they edit that field themselves, and cleared when an
+    /// auto-fill replaces it. Without this, changing your mind about the model left the previous
+    /// model's version and SKU in the boxes and posted them — while capacity, which tracked its own
+    /// edits, re-filled correctly, so the three fields disagreed about whether an auto-fill counted as
+    /// the admin's answer. Now they agree: filled-in values follow the model, typed values don't.
     /// </summary>
+    private bool _versionEdited;
+    private bool _skuEdited;
     private bool _capacityEdited;
 
     protected override async Task OnInitializedAsync()
@@ -144,11 +183,13 @@
         var result = await Api.GetFoundryCatalogAsync();
         if (result is { IsSuccess: true, Value: not null })
         {
-            _catalog = result.Value;
+            _catalog = [.. result.Value.Where(IsCreatableHere)];
         }
 
-        // "Couldn't read it" and "the accounts serve nothing" are the same thing for this form: no
-        // suggestions, free text, and a note saying so.
+        _retiredCount = _catalog.Count(entry => entry.IsRetiredAt(Time.GetUtcNow()));
+
+        // "Couldn't read it" and "the accounts serve nothing this form can create" are the same thing
+        // here: no suggestions, free text, and a note saying so.
         _catalogUnavailable = _catalog.Count == 0;
 
         if (KnownAccounts.Count == 1)
@@ -157,67 +198,109 @@
         }
     }
 
+    /// <summary>
+    /// Only the format this form can actually submit. An Anthropic entry is dropped here rather than
+    /// hidden per-picker, so no field can offer one by a route the model picker didn't.
+    /// </summary>
+    private static bool IsCreatableHere(FoundryCatalogEntryResponse entry) =>
+        string.Equals(entry.ModelFormat, nameof(FoundryModelFormatType.OpenAI), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Everything the pickers may offer right now — retired models only when the admin asked for them.</summary>
+    private IEnumerable<FoundryCatalogEntryResponse> Offerable =>
+        _includeRetired ? _catalog : _catalog.Where(entry => !entry.IsRetiredAt(Time.GetUtcNow()));
+
     private string ModelHelperText => _catalogUnavailable
         ? "Type the model exactly as Azure spells it."
-        : "Suggestions are what the configured accounts can serve. Anything typed is accepted — Azure decides.";
+        : "Suggestions are the OpenAI-format models the configured accounts can serve. Anything typed is accepted — Azure decides.";
+
+    private string? VersionHelperText
+    {
+        get
+        {
+            var entry = EntriesForModel().FirstOrDefault(e => string.Equals(e.ModelVersion, _modelVersion, StringComparison.OrdinalIgnoreCase));
+            return entry?.InferenceRetiresOn is { } retiresOn
+                ? $"Azure retires this version on {retiresOn.ToLocalTime():d MMM yyyy} — deployments of it stop answering then."
+                : null;
+        }
+    }
 
     private Task<IEnumerable<string>> SearchAccountsAsync(string value, CancellationToken cancellationToken) =>
         Task.FromResult(Filter(KnownAccounts, value));
 
     private Task<IEnumerable<string>> SearchModelsAsync(string value, CancellationToken cancellationToken) =>
         Task.FromResult(Filter(
-            [.. _catalog.Select(entry => entry.ModelName).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            [.. Offerable.Select(entry => entry.ModelName).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
             value));
 
     /// <summary>
-    /// Versions of the chosen model, newest first (the catalogue is already ordered that way). Before a
-    /// model is chosen there is nothing honest to offer — every version in the catalogue would be a
-    /// list of dates belonging to other models.
+    /// Versions of the chosen model, ARM's default first. Before a model is chosen there is nothing
+    /// honest to offer — every version in the catalogue would be a list of dates belonging to other
+    /// models.
     /// </summary>
     private Task<IEnumerable<string>> SearchVersionsAsync(string value, CancellationToken cancellationToken) =>
         Task.FromResult(Filter([.. EntriesForModel().Select(entry => entry.ModelVersion).Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)], value));
 
-    /// <summary>The SKUs the chosen model can be deployed under; every SKU in the catalogue once no model is chosen.</summary>
+    /// <summary>The SKUs the chosen model can be deployed under; every offerable SKU once no model is chosen.</summary>
     private Task<IEnumerable<string>> SearchSkusAsync(string value, CancellationToken cancellationToken)
     {
-        var source = _modelName.Length > 0 ? EntriesForModel() : _catalog;
+        var source = _modelName.Length > 0 ? EntriesForModel() : [.. Offerable];
         return Task.FromResult(Filter(
             [.. source.SelectMany(entry => entry.SkuNames).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
             value));
     }
 
     /// <summary>
-    /// Choosing a model fills in what the catalogue knows about it — newest version, its first SKU,
-    /// and the capacity ARM suggests — so the common case is one pick rather than four. Each is only
-    /// filled when the field is still empty (or, for capacity, untouched): this is a head start, not
-    /// a form that overwrites what was typed.
+    /// Choosing a model fills in what the catalogue knows about it — ARM's default version, ARM's
+    /// default SKU, and the capacity ARM suggests for that SKU — so the common case is one pick rather
+    /// than four. These are <em>derived</em> fields: switching models re-derives them, because the
+    /// previous model's version and SKU are not an answer to the new question. A field the admin typed
+    /// themselves is theirs and is left alone.
     /// </summary>
     private Task OnModelChangedAsync(string? modelName)
     {
         _modelName = modelName ?? string.Empty;
+        ApplyModelDefaults();
+        return Task.CompletedTask;
+    }
 
+    private void ApplyModelDefaults()
+    {
         var entry = EntriesForModel().FirstOrDefault();
         if (entry is null)
         {
-            return Task.CompletedTask;
+            // A model the catalogue doesn't list (typed, or hidden as retired): nothing to derive
+            // from, and the fields already on screen are the admin's best guess. Leave them.
+            return;
         }
 
-        if (string.IsNullOrWhiteSpace(_modelVersion) && entry.ModelVersion.Length > 0)
+        if (!_versionEdited && entry.ModelVersion.Length > 0)
         {
             _modelVersion = entry.ModelVersion;
         }
 
-        if (string.IsNullOrWhiteSpace(_skuName) && entry.SkuNames.Count > 0)
+        // ARM's own first SKU, not SkuNames[0] — that list is sorted for the dropdown, and the
+        // suggested capacity below belongs to this SKU specifically (capacity limits are per-SKU).
+        if (!_skuEdited && entry.DefaultSkuName.Length > 0)
         {
-            _skuName = entry.SkuNames[0];
+            _skuName = entry.DefaultSkuName;
         }
 
         if (!_capacityEdited && entry.DefaultCapacity is { } defaultCapacity and > 0)
         {
             _capacity = defaultCapacity;
         }
+    }
 
-        return Task.CompletedTask;
+    private void OnVersionChanged(string? modelVersion)
+    {
+        _modelVersion = modelVersion ?? string.Empty;
+        _versionEdited = true;
+    }
+
+    private void OnSkuChanged(string? skuName)
+    {
+        _skuName = skuName ?? string.Empty;
+        _skuEdited = true;
     }
 
     private void OnCapacityChanged(int capacity)
@@ -226,9 +309,23 @@
         _capacityEdited = true;
     }
 
-    /// <summary>The catalogue entries for the currently named model, most recent version first.</summary>
+    /// <summary>
+    /// Revealing retired models can bring the chosen model's own entry into scope (it may itself be
+    /// retired), so the derived fields are re-applied — otherwise the version box would keep showing
+    /// nothing for a model the form can now describe.
+    /// </summary>
+    private void OnIncludeRetiredChanged(bool includeRetired)
+    {
+        _includeRetired = includeRetired;
+        ApplyModelDefaults();
+    }
+
+    /// <summary>
+    /// The offerable catalogue entries for the currently named model, ARM's default version first (the
+    /// endpoint orders them that way, so <c>First()</c> is the version to suggest).
+    /// </summary>
     private List<FoundryCatalogEntryResponse> EntriesForModel() =>
-        [.. _catalog.Where(entry => string.Equals(entry.ModelName, _modelName, StringComparison.OrdinalIgnoreCase))];
+        [.. Offerable.Where(entry => string.Equals(entry.ModelName, _modelName, StringComparison.OrdinalIgnoreCase))];
 
     private static IEnumerable<string> Filter(IReadOnlyList<string> source, string? value) =>
         string.IsNullOrWhiteSpace(value)

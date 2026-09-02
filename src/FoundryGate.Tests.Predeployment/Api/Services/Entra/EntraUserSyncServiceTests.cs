@@ -450,6 +450,52 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task A_run_that_revoked_a_key_records_itself_even_if_the_caller_disconnects()
+    {
+        // CONVENTIONS.md's commit-point rule. The departure loop has already deleted an APIM
+        // subscription, which cannot be rolled back — so a client that gives up mid-run must not be
+        // able to abandon the record of a run that really did revoke keys.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        var departing = await SeedUserAsync("oid-departing", displayName: "Departing Dana");
+        var subscriptionName = ApimSubscriptionNames.ForUser(departing.UserId);
+        _ = Apim.Seed(subscriptionName, GatewayTiers.Standard);
+        departing.ApimSubscriptionId = Apim.GetSubscriptionResourceId(subscriptionName);
+        _ = await Context.SaveChangesAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+
+        // Cancelled the instant APIM has accepted the deletion — the client giving up exactly when
+        // the irreversible thing has already happened.
+        using var cancellation = new CancellationTokenSource();
+        Apim.AfterMutation = cancellation.Cancel;
+
+        var service = CreateService(admin.EntraObjectId);
+        var result = await service.SyncUsersAsync(cancellation.Token);
+
+        Assert.Equal(1, result.DeactivatedCount);
+
+        var status = await service.GetLastSyncStatusAsync(CancellationToken.None);
+        Assert.Equal(Now, status.LastSyncDate);
+        Assert.Equal(result, status.LastResult);
+    }
+
+    [Fact]
+    public async Task A_run_that_revoked_nothing_still_honours_a_cancelled_caller()
+    {
+        // The predicate is "we reached the external system", not "we ran": a run that deleted no
+        // subscription is an abandonable request and stops.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+
+        using var cancellation = new CancellationTokenSource();
+        _directory.AfterListAssignedUsers = cancellation.Cancel;
+
+        _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CreateService(admin.EntraObjectId).SyncUsersAsync(cancellation.Token));
+    }
+
+    [Fact]
     public async Task Records_the_run_even_on_a_database_that_predates_the_keys()
     {
         // A fork that syncs before its next deploy re-seeds has no rows to update — the run should

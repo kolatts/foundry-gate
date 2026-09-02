@@ -3,6 +3,7 @@ using System.Text.Json;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Data;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
@@ -161,11 +162,17 @@ public sealed class EntraUserSyncService(
 
         var result = new UserSyncResult(addedOids.Count, updated, deactivated.Count, skippedGroups.Count, failed);
 
+        // ---- commit point (CONVENTIONS.md): a deactivation deleted an APIM subscription, which cannot
+        // be rolled back, so from here a disconnecting client must not be able to abandon the record of
+        // it. Everything below — the LastUserSync* rows, the audit row and the save — runs on this
+        // token. A run that reached nobody's subscription is still an abandonable request, and stops.
+        var completionToken = CommitToken.For(deactivated.Count > 0, cancellationToken);
+
         // #171: the durable record of this run, written into the same unit of work as the audit row
         // below so "the sync happened" and "here is when and what" can never disagree. The audit log
         // already has the history; these two rows are the *latest* run, which is the question
         // /users/sync asks on a cold load and cannot answer from a paged, filtered log.
-        await RecordLastSyncAsync(now, result, cancellationToken);
+        await RecordLastSyncAsync(now, result, completionToken);
 
         // Audit before save, same context → commits atomically with the rows above (CONVENTIONS.md).
         // No single target: the whole table is the subject. Deactivated ids are known (saved rows);
@@ -186,12 +193,12 @@ public sealed class EntraUserSyncService(
                 DepartureDetectionSuspended = skippedGroups.Count > 0,
                 SkippedGroupAssignments = skippedGroups.Select(g => new { g.GroupObjectId, g.DisplayName }).ToArray(),
             },
-            cancellationToken);
+            completionToken);
 
-        // One save, so the adds/updates and the users.synced row that describes them commit together. No
-        // explicit transaction: SaveChangesAsync is already atomic, and the departures above deliberately
-        // committed on their own (see the loop).
-        _ = await dbContext.SaveChangesAsync(cancellationToken);
+        // One save, so the adds/updates, the LastUserSync* rows and the users.synced row that describes
+        // them commit together. No explicit transaction: SaveChangesAsync is already atomic, and the
+        // departures above deliberately committed on their own (see the loop).
+        _ = await dbContext.SaveChangesAsync(completionToken);
 
         logger.LogInformation(
             "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated, {Failed} failed, {SkippedGroups} group assignment(s) unexpanded.",
@@ -207,12 +214,13 @@ public sealed class EntraUserSyncService(
     /// <inheritdoc />
     public async Task<UserSyncStatusResponse> GetLastSyncStatusAsync(CancellationToken cancellationToken)
     {
-        // Two rows out of a table of seven; read together and matched in memory so the comparison
-        // does not depend on the provider's collation (ConfigService does the same for the same
-        // reason). Never tracked: nothing here writes.
+        // The whole table (seven rows on a shipped fork) and matched in memory, so the key comparison
+        // cannot depend on the provider's collation — a `Where(c => c.Key == …)` would have done the
+        // matching in SQL, where it is case-insensitive under SQL Server's default collation and
+        // case-sensitive under the SQLite the tests run on. ConfigService materializes it for exactly
+        // the same reason. Never tracked: nothing here writes.
         var rows = await dbContext.SystemConfigurations
             .AsNoTracking()
-            .Where(c => c.Key == SystemConfigurationKeys.LastUserSyncDate || c.Key == SystemConfigurationKeys.LastUserSyncResult)
             .ToListAsync(cancellationToken);
 
         return new UserSyncStatusResponse(
@@ -229,13 +237,17 @@ public sealed class EntraUserSyncService(
     /// </summary>
     private async Task RecordLastSyncAsync(DateTimeOffset now, UserSyncResult result, CancellationToken cancellationToken)
     {
-        await SetAsync(SystemConfigurationKeys.LastUserSyncDate, now.ToString("O", CultureInfo.InvariantCulture), cancellationToken);
-        await SetAsync(SystemConfigurationKeys.LastUserSyncResult, JsonSerializer.Serialize(result, ResultJson), cancellationToken);
+        // Tracked, and matched in memory for the same collation reason as the read above — one query
+        // for both rows rather than a keyed lookup each.
+        var rows = await dbContext.SystemConfigurations.ToListAsync(cancellationToken);
+
+        Set(rows, SystemConfigurationKeys.LastUserSyncDate, now.ToString("O", CultureInfo.InvariantCulture));
+        Set(rows, SystemConfigurationKeys.LastUserSyncResult, JsonSerializer.Serialize(result, ResultJson));
     }
 
-    private async Task SetAsync(string key, string value, CancellationToken cancellationToken)
+    private void Set(List<SystemConfiguration> rows, string key, string value)
     {
-        var row = await dbContext.SystemConfigurations.FirstOrDefaultAsync(c => c.Key == key, cancellationToken);
+        var row = rows.Find(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase));
         if (row is null)
         {
             row = new SystemConfiguration { Key = key };

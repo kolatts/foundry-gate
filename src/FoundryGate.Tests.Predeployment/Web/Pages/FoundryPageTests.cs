@@ -161,6 +161,183 @@ public class FoundryPageTests : WebTestContext
     }
 
     [Fact]
+    public void The_dialog_never_offers_an_anthropic_model_the_form_cannot_submit()
+    {
+        // The Major this fix pass closes. GET /foundry/catalog lists Anthropic for visibility, but
+        // SubmitAsync hardcodes ModelFormat = OpenAI — so offering a claude-* model would send an
+        // Anthropic create disguised as an OpenAI one, past FoundryDeploymentService's refusal and
+        // into ARM. E-007: a failed Anthropic create can wedge the subscription's Marketplace
+        // agreement.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(
+            WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01"),
+            WebTestData.CatalogEntry("claude-sonnet-4-5", "20250929", modelFormat: "Anthropic", skuNames: ["GlobalStandard"]));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.WaitForAssertion(() =>
+        {
+            var models = SearchOptions(page, "deployment-model", string.Empty);
+            Assert.Contains("gpt-5-codex", models, StringComparer.Ordinal);
+            Assert.DoesNotContain("claude-sonnet-4-5", models, StringComparer.Ordinal);
+        });
+
+        // ...and the banner that says why is still there.
+        Assert.Contains("Claude deployments aren't created here", page.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_catalogue_of_only_anthropic_models_reads_as_no_suggestions_not_as_a_menu()
+    {
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(WebTestData.CatalogEntry("claude-sonnet-4-5", "20250929", modelFormat: "Anthropic"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=deployment-catalog-unavailable]")));
+        Assert.Empty(SearchOptions(page, "deployment-model", string.Empty));
+    }
+
+    [Fact]
+    public void Changing_the_model_re_derives_the_version_sku_and_capacity()
+    {
+        // The second Major. Version and SKU used to be filled only when empty, so changing your mind
+        // about the model left the *previous* model's answers in the boxes and posted them — while
+        // capacity, which tracked its own edits, re-filled. The three now agree: a value the form
+        // derived follows the model.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(
+            WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01", ["GlobalStandard"], defaultCapacity: 30),
+            WebTestData.CatalogEntry("gpt-4.1-mini", "2025-04-14", ["DataZoneStandard"], defaultCapacity: 10));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(WebTestData.Deployment(deploymentName: "mini"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.Find("input[data-testid=deployment-name]").Change("mini");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-5-codex");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-4.1-mini");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        page.WaitForAssertion(() =>
+        {
+            var created = Assert.Single(Api.CreatedDeployments);
+            Assert.Equal("gpt-4.1-mini", created.ModelName);
+            Assert.Equal("2025-04-14", created.ModelVersion);
+            Assert.Equal("DataZoneStandard", created.SkuName);
+            Assert.Equal(10, created.Capacity);
+        });
+    }
+
+    [Fact]
+    public void A_version_or_sku_the_admin_typed_survives_a_change_of_model()
+    {
+        // The other half of the rule: derived values follow the model, typed ones are the admin's.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(
+            WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01", ["GlobalStandard"], defaultCapacity: 30),
+            WebTestData.CatalogEntry("gpt-4.1-mini", "2025-04-14", ["DataZoneStandard"], defaultCapacity: 10));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(WebTestData.Deployment(deploymentName: "mini"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.Find("input[data-testid=deployment-name]").Change("mini");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-5-codex");
+        page.Find("input[data-testid=deployment-version]").Input("2026-06-06");
+        page.Find("input[data-testid=deployment-capacity]").Change(77);
+        page.Find("input[data-testid=deployment-model]").Input("gpt-4.1-mini");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        page.WaitForAssertion(() =>
+        {
+            var created = Assert.Single(Api.CreatedDeployments);
+            Assert.Equal("gpt-4.1-mini", created.ModelName);
+            Assert.Equal("2026-06-06", created.ModelVersion);
+            Assert.Equal(77, created.Capacity);
+
+            // SKU was never typed, so it is still derived.
+            Assert.Equal("DataZoneStandard", created.SkuName);
+        });
+    }
+
+    [Fact]
+    public void The_pre_selected_sku_is_arms_default_not_the_alphabetically_first()
+    {
+        // SkuNames is sorted for a readable dropdown; sorting is a display decision and must not
+        // become a choice. Capacity limits are per-SKU, so the suggested capacity has to belong to
+        // the SKU that was actually pre-selected.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(WebTestData.CatalogEntry(
+            "gpt-5-codex",
+            "2026-01-01",
+            ["DataZoneStandard", "GlobalStandard"],
+            defaultCapacity: 30,
+            defaultSkuName: "GlobalStandard"));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(WebTestData.Deployment(deploymentName: "codex"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.Find("input[data-testid=deployment-name]").Change("codex");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-5-codex");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        page.WaitForAssertion(() => Assert.Equal("GlobalStandard", Assert.Single(Api.CreatedDeployments).SkuName));
+    }
+
+    [Fact]
+    public async Task A_retired_model_is_hidden_until_the_admin_asks_for_it()
+    {
+        // Deploying a retired model is legitimate — matching an existing deployment, reproducing a
+        // fork's setup — but it should be deliberate, not something you scroll past.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(
+            WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01"),
+            WebTestData.CatalogEntry("gpt-35-turbo", "0301", lifecycleStatus: "Deprecated"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.WaitForAssertion(() =>
+            Assert.DoesNotContain("gpt-35-turbo", SearchOptions(page, "deployment-model", string.Empty), StringComparer.Ordinal));
+
+        var toggle = page.FindComponent<MudSwitch<bool>>();
+        await page.InvokeAsync(() => toggle.Instance.ValueChanged.InvokeAsync(true));
+
+        page.WaitForAssertion(() =>
+            Assert.Contains("gpt-35-turbo", SearchOptions(page, "deployment-model", string.Empty), StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void A_catalogue_with_nothing_retired_offers_no_toggle_to_press()
+    {
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        Assert.Empty(page.FindAll("[data-testid=deployment-include-retired]"));
+    }
+
+    [Fact]
     public void A_model_the_catalogue_never_listed_is_still_deployable()
     {
         // Coercion stays: Azure lists models before this endpoint does, and Azure decides the create.

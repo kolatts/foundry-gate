@@ -83,13 +83,20 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
         return deployment;
     }
 
-    /// <summary>Adds a model to <paramref name="accountName"/>'s deployable catalogue (adding the account if needed).</summary>
+    /// <summary>
+    /// Adds a model to <paramref name="accountName"/>'s deployable catalogue (adding the account if
+    /// needed). <paramref name="skuNames"/> is in ARM's own order, so the first is the default SKU the
+    /// real client would report — and <paramref name="defaultCapacity"/> belongs to <em>that</em> SKU.
+    /// </summary>
     public void SeedCatalog(
         string accountName,
         string modelName,
         string modelVersion = "2025-04-14",
         string modelFormat = "OpenAI",
         int? defaultCapacity = 10,
+        bool isDefaultVersion = true,
+        string lifecycleStatus = "GenerallyAvailable",
+        DateTimeOffset? inferenceRetiresOn = null,
         params string[] skuNames)
     {
         ArgumentNullException.ThrowIfNull(skuNames);
@@ -101,12 +108,20 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
             _catalogs[accountName] = catalog;
         }
 
+        string[] skus = skuNames.Length == 0 ? ["GlobalStandard"] : skuNames;
+
         catalog.Add(new FoundryCatalogEntryResponse(
             modelFormat,
             modelName,
             modelVersion,
-            skuNames.Length == 0 ? ["GlobalStandard"] : skuNames,
-            defaultCapacity));
+            // Sorted for display, exactly as the real mapper does — so a test that asserts on the
+            // default SKU is asserting on ARM's order, not on the alphabet.
+            [.. skus.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            defaultCapacity,
+            skus[0],
+            isDefaultVersion,
+            lifecycleStatus,
+            inferenceRetiresOn));
     }
 
     /// <inheritdoc />

@@ -361,7 +361,7 @@ The gateway runs one Azure AI Foundry account per region (`Gateway__FoundryAccou
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/foundry/models` | Any | Developer view: distinct deployment names with model, version, format and provisioning state. A model deployed in several regions is listed once — `Succeeded` if any region serves it. Served from a 30-second in-memory cache (invalidated by every create/delete); a configured account that is missing in Azure is skipped, not fatal. |
-| `GET` | `/foundry/catalog` | Admin | What the configured accounts **can** deploy: `{ modelFormat, modelName, modelVersion, skuNames, defaultCapacity }` per model and version, merged across accounts with their SKUs unioned. Served from a 5-minute cache; a configured account missing in Azure is skipped, not fatal. |
+| `GET` | `/foundry/catalog` | Admin | What the configured accounts **can** deploy: `{ modelFormat, modelName, modelVersion, skuNames, defaultCapacity, defaultSkuName, isDefaultVersion, lifecycleStatus, inferenceRetiresOn }` per model and version, merged across accounts with their SKUs unioned. Served from a 5-minute cache; a configured account missing in Azure is skipped, not fatal. |
 | `GET` | `/foundry/deployments` | Admin | Every deployment in every configured account (account, name, model format/name/version, SKU, capacity in thousands of TPM, provisioning state, created/modified). Primary account first, then by name. Always live (no cache). |
 | `GET` | `/foundry/deployments/{accountName}/{deploymentName}` | Admin | One deployment — poll this after a create until `provisioningState` is `Succeeded`. |
 | `POST` | `/foundry/deployments` | Admin | Create one **OpenAI-format** deployment in one account. Body: `accountName`, `deploymentName`, `modelFormat` (`OpenAI`; default), `modelName`, `modelVersion`, `skuName`, `capacity` (thousands of TPM). `201` + `Location`; the body reflects ARM's initial state (usually `Creating`). |
@@ -386,16 +386,33 @@ Entries are merged across accounts by `(modelFormat, modelName, modelVersion)` w
 unioned: the gateway runs one account per region, a model is normally deployable in all of them, and
 the create form names one account at a time — a per-account breakdown would be a list of
 near-duplicates. A model only one region carries is still listed; ARM decides the create and refuses
-an account that cannot serve it, with a message the admin can act on. `defaultCapacity` is the
-capacity ARM suggests, in thousands of TPM — a starting point for the form, not a limit.
+an account that cannot serve it, with a message the admin can act on.
+
+**ARM's own metadata comes with it**, because none of it can be worked out afterwards:
+
+- `isDefaultVersion` is how "which version of this model" is answered. Comparing version strings
+  orders `turbo-2024-04-09` above `2025-04-14` and `1106` above `0125`, so results are ordered by
+  model name, then ARM's default version first, and the version string is only a tiebreak where ARM
+  flags no default.
+- `defaultSkuName` is the first SKU ARM lists, and `defaultCapacity` (thousands of TPM) is **that
+  SKU's** suggested capacity. `skuNames` is sorted for a readable dropdown — sorting is a display
+  decision and must not become a choice, and since capacity limits are per-SKU, pairing the suggested
+  capacity with a different SKU is a head start on a create ARM refuses.
+- `lifecycleStatus` (`GenerallyAvailable`, `Preview`, `Deprecating`, `Deprecated`, …) and
+  `inferenceRetiresOn` say whether a model is on its way out. A `Deprecated` model, or one whose
+  retirement date has passed, is *retired*; the create dialog hides those behind a toggle rather than
+  offering them alongside the rest.
 
 Anthropic-format models are listed even though `POST /foundry/deployments` refuses to create one:
-what an account can serve is a fact worth showing, and the refusal explains itself. Nothing here
-validates a create.
+what an account can serve is a fact worth showing, and the refusal explains itself. **The create
+dialog filters them out**, because its form submits `modelFormat: OpenAI` — offering one there would
+send an Anthropic create disguised as an OpenAI one, past the refusal that exists to keep a failed
+Anthropic create away from ARM. Nothing here validates a create.
 
 Cached for **5 minutes** — the answer changes when Microsoft ships a model, not when this fork deploys
-one, and every open of the create dialog asks for it. Unlike the deployment views, nothing invalidates
-it early: deploying a model does not change what is deployable.
+one, and every open of the create dialog asks for it. Nothing invalidates it early: deploying a model
+does not change what is deployable. An **empty** answer is not cached at all, so a transient window
+where every account 404s cannot pin "catalogue unavailable" on the dialog for five minutes.
 
 ## Admin
 

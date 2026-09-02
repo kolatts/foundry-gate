@@ -85,8 +85,11 @@ screen rather than replacing them with an error.
 
 The hard-stopped card counts active users whose current allocation is hard-stopped — someone whose
 key was taken away while their account is still live, which is an outage for that developer — so a
-non-zero count is rendered as an alert and links to `/audit?action=key.revoked`, the only place that
-says who and when. Quota exhaustion never sets that flag: the gateway 403s an over-budget request
+non-zero count is rendered as an alert and links to `/audit?action=user.deactivated`, the trail of
+the pipeline that sets the flag (its details carry `allocationHardStopped`). Not `key.revoked`:
+`DELETE /keys/{userId}` writes that too and explicitly leaves the allocation alone, so it would land
+on a set that is mostly other people. [#208](https://github.com/kolatts/foundry-gate/issues/208) will
+replace this with a link to the affected users themselves. Quota exhaustion never sets that flag: the gateway 403s an over-budget request
 itself. **Who has run out of tokens** is the separate `overBudgetUserCount`, shown with the tokens
 reconciled this period as a caption above the consumers grid — both are usage figures, so they sit
 next to the list they describe rather than in an enforcement-looking card.
@@ -146,8 +149,10 @@ The page also shows the **previous** run — when it happened and what it did �
 `GET /users/sync/last`, which reads the `LastUserSyncDate` / `LastUserSyncResult` rows the sync writes
 in its own unit of work. So a run triggered from anywhere (another admin, another browser, a script)
 shows up here, and finishing a run re-reads the record rather than assuming it. A fork that has never
-synced says so instead of showing a blank. Only the most recent run is kept; `/audit` filtered to
-`users.synced` has the full history, which the note links to.
+synced says so instead of showing a blank, and a read that *failed* says that instead — "couldn't
+read the last run" and "there was no last run" are different facts, and only one of them is something
+the page learned. Only the most recent run is kept; `/audit` filtered to `users.synced` has the full
+history, which the note links to.
 
 ### `/groups`, `/groups/new` and `/groups/{id}`
 
@@ -192,12 +197,19 @@ delete is disabled outright on Anthropic rows.
 The model, version and SKU pickers are filled from
 [`GET /foundry/catalog`](/foundry-gate/reference/api/#get-foundrycatalog) — what the configured
 accounts can actually serve — rather than from a list typed into the dialog, which went stale the
-week after it shipped. Picking a catalogued model fills in its newest version, its first SKU and the
-capacity ARM suggests, so the common case is one pick rather than four; nothing already filled in is
-overwritten, and a capacity you typed is never replaced. Every field still coerces whatever is typed,
-so a model Azure lists before this endpoint does is still deployable — ARM decides either way. If the
-catalogue can't be read, the dialog says so and the fields fall back to plain free text rather than
-to another hardcoded list.
+week after it shipped. The catalogue is filtered to **OpenAI-format** models here: the endpoint lists
+Claude models too, but this form submits `modelFormat: OpenAI`, so offering one would send an
+Anthropic create disguised as an OpenAI one, straight past the API's refusal. Retired models
+(`Deprecated`, or past their retirement date) are hidden behind a toggle — deploying one is
+legitimate, but it should be deliberate.
+
+Picking a catalogued model fills in **ARM's default version**, **ARM's default SKU** and the capacity
+ARM suggests for that SKU, so the common case is one pick rather than four. Those three are *derived*
+values: change the model and they are re-derived, because the previous model's version and SKU are
+not an answer to the new question. A field you typed yourself is yours and is left alone. Every field
+still coerces whatever is typed, so a model Azure lists before this endpoint does is still
+deployable — ARM decides either way. If the catalogue can't be read, the dialog says so and the
+fields fall back to plain free text rather than to another hardcoded list.
 
 A new deployment reaches developers through the gateway only once it is in the right backend pool
 ([#83](https://github.com/kolatts/foundry-gate/issues/83)), which the page also says.
@@ -228,9 +240,13 @@ audit writers use, so the dropdowns cannot drift from what is actually written.
 The actor filter searches [`GET /users?search=`](/foundry-gate/reference/api/#users) as you type
 (debounced, active and deactivated alike — a departed employee's entries are still in the log) and
 resolves the pick to `actorUserId`. An admin reading the log knows "Ada Lovelace", not "user 41".
-Typing a bare **id** still works: an all-digits term also asks `GET /users/{id}` and offers that
-person. Both query parameters are deep links — `?actor=41` applies the id and shows whose it is (and
-still filters if the name cannot be resolved), and `?action=` filters to one kind of entry, which is
-how the dashboard's hard-stopped card hands over the revocations rather than the whole log. An
-action the constants do not name is ignored. Expanding a row shows its `details` blob, pretty-printed when it is JSON and verbatim when
+Typing a bare **id** still works: type it and tab out, and the id is resolved when the field loses
+focus rather than while you type — `GET /users/{id}` is the detail endpoint, far too heavy to fire at
+every pause in typing "412" — and an id that matches nobody leaves the filter alone rather than
+emptying the grid over a typo. Both query parameters are deep links applied once, when the page
+loads: `?actor=41` applies the id and shows whose it is (and still filters if the name cannot be
+resolved), and `?action=` filters to one kind of entry, which is how the dashboard's hard-stopped
+card hands over the relevant trail rather than the whole log. An action the constants do not name is
+ignored. Neither is re-applied afterwards — nothing rewrites the URL when a filter changes, so
+re-applying would quietly restore the value you just cleared. Expanding a row shows its `details` blob, pretty-printed when it is JSON and verbatim when
 it is not — a viewer that hid malformed rows would hide exactly the rows worth reading.
