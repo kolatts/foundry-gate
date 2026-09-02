@@ -177,6 +177,9 @@ param sqlDatabaseSku object = {
 @description('Azure SQL backup storage redundancy: Local for dev, Geo for prod.')
 param sqlBackupStorageRedundancy string = 'Local'
 
+@description('Zone-redundant Azure SQL database (prod). Costs roughly the compute line again and needs a region with availability zones and a SKU that supports ZR; false for dev.')
+param sqlZoneRedundant bool = false
+
 @description('Entra tenant the API validates bearer tokens against (AzureAd__TenantId).')
 param entraTenantId string = tenant().tenantId
 
@@ -196,6 +199,23 @@ param containerAppMinReplicas int = 1
 @minValue(1)
 @description('Container App maximum replicas (HTTP concurrency scale rule, 50 concurrent requests per replica).')
 param containerAppMaxReplicas int = 3
+
+@description('vCPU per API replica, as a decimal string. Only the Consumption profile pairs are valid: 0.25/0.5Gi, 0.5/1.0Gi, 0.75/1.5Gi, 1.0/2.0Gi, ... The default matches the published cost model.')
+param containerAppCpu string = '0.25'
+
+@description('Memory per API replica — must be the pair of containerAppCpu (see above).')
+param containerAppMemory string = '0.5Gi'
+
+@description('Zone-redundant Container Apps environment. ARM rejects it without a VNet-integrated environment (infrastructureSubnetId), so it stays false until private networking (spec §11) lands — plumbed now so that change is one parameter, tracked in #196.')
+param containerAppsZoneRedundant bool = false
+
+@allowed(['Standard_LRS', 'Standard_ZRS', 'Standard_GRS'])
+@description('Functions runtime storage SKU: Standard_LRS for dev, Standard_ZRS for prod.')
+param functionsStorageSku string = 'Standard_LRS'
+
+@allowed(['Basic', 'Standard', 'Premium'])
+@description('Container registry SKU: Basic for dev, Standard for prod (10x the included storage and higher throughput; Premium only buys geo-replication and private link).')
+param containerRegistrySku string = 'Basic'
 
 @allowed(['Free', 'Standard'])
 @description('Static Web App tier: Free for dev, Standard for prod (custom domain, SLA).')
@@ -358,12 +378,18 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     sqlAdminGroupName: sqlAdminGroupName
     sqlDatabaseSku: sqlDatabaseSku
     sqlBackupStorageRedundancy: sqlBackupStorageRedundancy
+    sqlZoneRedundant: sqlZoneRedundant
     entraTenantId: entraTenantId
     entraApiClientId: entraApiClientId
     entraApiAudience: entraApiAudience
     apiContainerImage: apiContainerImage
     containerAppMinReplicas: containerAppMinReplicas
     containerAppMaxReplicas: containerAppMaxReplicas
+    containerAppCpu: containerAppCpu
+    containerAppMemory: containerAppMemory
+    containerAppsZoneRedundant: containerAppsZoneRedundant
+    functionsStorageSku: functionsStorageSku
+    containerRegistrySku: containerRegistrySku
     staticWebAppSku: staticWebAppSku
     staticWebAppLocation: staticWebAppLocation
     functionsRuntimeVersion: functionsRuntimeVersion

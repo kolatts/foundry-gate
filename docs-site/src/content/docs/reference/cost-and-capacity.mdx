@@ -29,20 +29,30 @@ The gateway + control plane costs roughly the same whether it serves 5 developer
 | Storage + Key Vault + ACR Basic | | ~$6 |
 | **Total** | | **≈ $190–215** |
 
-### Production configuration (~$450 with Basic v2 · ~$1,000 with Standard v2)
+### Production configuration (~$610 with Basic v2 · ~$1,160 with Standard v2)
+
+This row-for-row matches `infra/parameters/prod.bicepparam` — the production-grade knobs
+(zone redundancy, storage/ACR SKU, container size) are real parameters, not aspirations.
 
 | Component | SKU | Monthly |
 |---|---|---|
 | API Management | Standard v2 ($0.96/hr, 50M calls incl.) — or keep Basic v2 | $700.80 / $153.30 |
-| Azure SQL | GP serverless always-on at the 0.683-vCore floor ($0.52/vCore-hr) | ~$260 |
-| Container Apps | 1–3 replicas | ~$15–30 |
+| Azure SQL | `GP_Gen5_2` provisioned, **zone-redundant**, Geo backups ($0.152/vCore-hr + $0.091/vCore-hr ZR) | ~$356 |
+| Container Apps | 1–3 replicas × **0.5 vCPU / 1.0 GiB** (double the dev size) | ~$35–70 |
 | Static Web Apps | Standard (SLA) | $9 |
 | Log Analytics + App Insights | ~1M gateway requests/mo | ~$15–30 |
-| Functions + Storage + Key Vault + ACR | | ~$7 |
-| **Total** | | **≈ $450 (Basic v2) · ≈ $1,020 (Standard v2)** |
+| Functions + Key Vault + Storage (**ZRS**) + **ACR Standard** ($0.667/day vs Basic's $0.167) | | ~$25 |
+| **Total** | | **≈ $610 (Basic v2) · ≈ $1,160 (Standard v2)** |
+
+Zone redundancy is the single biggest line item after the gateway: it adds **60%** to the
+SQL compute meter ($222 → $356) to survive the loss of one availability zone without a
+restore. The Container Apps *environment* is **not** zone-redundant yet — ARM only accepts
+that on a VNet-integrated environment, which arrives with private networking
+([#196](https://github.com/kolatts/foundry-gate/issues/196)); it costs nothing extra when
+it does.
 
 <Aside type="tip">
-At 50 developers, the machinery costs **$4–20 per developer per month** — a rounding
+At 50 developers, the machinery costs **$4–25 per developer per month** — a rounding
 error next to model consumption. Basic v2 carries every gateway feature FoundryGate
 uses (token policies, pools, circuit breakers); Standard v2 buys headroom, not features.
 </Aside>

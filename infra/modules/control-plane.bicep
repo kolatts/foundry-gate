@@ -56,6 +56,8 @@ param sqlAdminGroupObjectId string
 param sqlAdminGroupName string
 param sqlDatabaseSku object
 param sqlBackupStorageRedundancy string
+@description('Spread the SQL database across availability zones (prod). Adds roughly the compute line again; the region must offer AZs and the SKU must support ZR.')
+param sqlZoneRedundant bool = false
 
 // ---- Entra (API app registration) -----------------------------------------------
 param entraTenantId string
@@ -67,6 +69,16 @@ param entraApiAudience string = ''
 param apiContainerImage string
 param containerAppMinReplicas int
 param containerAppMaxReplicas int
+@description('vCPU per API replica, as a decimal string. Consumption profile pairs only: 0.25/0.5Gi, 0.5/1.0Gi, 1.0/2.0Gi, ...')
+param containerAppCpu string = '0.25'
+@description('Memory per API replica. Must be the pair of containerAppCpu above.')
+param containerAppMemory string = '0.5Gi'
+@description('Zone-redundant Container Apps environment. Requires VNet integration, so false everywhere until private networking lands (#196).')
+param containerAppsZoneRedundant bool = false
+@description('Functions storage account SKU. Standard_ZRS for prod; Standard_LRS is the cheap default.')
+param functionsStorageSku string = 'Standard_LRS'
+@description('Container registry SKU. Standard for prod (more included storage and throughput); Basic is the cheap default.')
+param containerRegistrySku string = 'Basic'
 param staticWebAppSku string
 param staticWebAppLocation string
 param functionsRuntimeVersion string
@@ -118,6 +130,7 @@ module registry 'container-registry.bicep' = {
     registryName: names.registry
     location: location
     tags: controlPlaneTags
+    sku: containerRegistrySku
   }
 }
 
@@ -127,6 +140,7 @@ module storage 'storage-account.bicep' = {
     storageAccountName: names.storage
     location: location
     tags: controlPlaneTags
+    skuName: functionsStorageSku
   }
 }
 
@@ -141,6 +155,7 @@ module sql 'sql.bicep' = {
     entraAdminGroupName: sqlAdminGroupName
     databaseSku: sqlDatabaseSku
     backupStorageRedundancy: sqlBackupStorageRedundancy
+    zoneRedundant: sqlZoneRedundant
   }
 }
 
@@ -211,6 +226,9 @@ module containerApp 'container-app.bicep' = {
     targetPort: apiPort
     minReplicas: containerAppMinReplicas
     maxReplicas: containerAppMaxReplicas
+    cpu: containerAppCpu
+    memory: containerAppMemory
+    zoneRedundant: containerAppsZoneRedundant
     environmentVariables: concat(
       [
         { name: 'ASPNETCORE_ENVIRONMENT', value: appEnvironment }

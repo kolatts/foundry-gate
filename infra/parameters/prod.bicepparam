@@ -51,19 +51,31 @@ param sqlDatabaseSku = {
   capacity: 2
 }
 param sqlBackupStorageRedundancy = 'Geo'
+// Zone-redundant database: survives the loss of one availability zone in eastus2 without a
+// restore. Roughly doubles the SQL compute line (docs reference/cost-and-capacity).
+param sqlZoneRedundant = true
 
 param entraApiClientId = readEnvironmentVariable('FG_ENTRA_API_CLIENT_ID', '00000000-0000-0000-0000-000000000000')
 param apiContainerImage = readEnvironmentVariable('FG_API_IMAGE')
 
 param containerAppMinReplicas = 1
 param containerAppMaxReplicas = 3
+// Double the dev replica size (the next valid Consumption pair up from 0.25/0.5Gi). The API
+// is the Blazor UI's only backend and the gateway's management plane; 0.25 vCPU is a dev
+// budget, not a production one.
+param containerAppCpu = '0.5'
+param containerAppMemory = '1.0Gi'
+// Zone redundancy for the Container Apps environment is deliberately still false: ARM only
+// accepts zoneRedundant:true on a VNet-integrated environment (infrastructureSubnetId), which
+// arrives with private networking (spec §11). Flipping this to true is then a one-line change.
+param containerAppsZoneRedundant = false
+// Zone-redundant Functions storage: the deployment package and the host's own state.
+param functionsStorageSku = 'Standard_ZRS'
+// Standard ACR: 100 GB included storage and higher throughput than Basic's 10 GB, which one
+// image per deploy fills quickly. Premium only adds geo-replication and private link.
+param containerRegistrySku = 'Standard'
 // Standard: custom domain + SLA for the admin UI.
 param staticWebAppSku = 'Standard'
 // Irreversible once on — which is the point for prod.
 param keyVaultPurgeProtection = true
 param keyVaultSoftDeleteRetentionInDays = 90
-
-// Deliberately v1-scoped: zone redundancy (SQL/Container Apps env), storage SKU, ACR SKU
-// and Container App CPU/memory are leaf-module params not yet plumbed through
-// modules/control-plane.bicep — the defaults (no ZR, Standard_LRS, Basic ACR,
-// 0.25 vCPU/0.5 GiB) are what prod gets today. Tracked in #134.

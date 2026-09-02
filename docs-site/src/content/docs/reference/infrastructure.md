@@ -107,9 +107,9 @@ workflows resolve resources from these patterns — changing one is a contract c
 | `control-plane.bicep` | orchestrates everything below; owns the control-plane naming |
 | `managed-identities.bicep` | the two user-assigned identities |
 | `key-vault.bicep` | RBAC-mode vault, soft delete, optional purge protection, optional `fg-apim-key-encryption` RSA-3072 key |
-| `sql.bicep` | Entra-only SQL server, `AllowAllWindowsAzureIps` firewall rule, database |
-| `container-registry.bicep` | Basic ACR, admin user disabled |
-| `storage-account.bicep` | Functions storage, shared keys off, `function-deployments` container |
+| `sql.bicep` | Entra-only SQL server, `AllowAllWindowsAzureIps` firewall rule, database (zone-redundant in prod) |
+| `container-registry.bicep` | ACR (Basic dev / Standard prod), admin user disabled |
+| `storage-account.bicep` | Functions storage (LRS dev / ZRS prod), shared keys off, `function-deployments` container |
 | `static-web-app.bicep` | SWA (Free/Standard), `provider: Custom` |
 | `control-plane-rbac.bicep` | all role assignments below |
 | `container-app.bicep` | Container Apps environment (logs via diagnostic setting — no workspace key) + the API app; bootstrap-image detection (port 80, `/health`-only probes) |
@@ -124,11 +124,16 @@ workflows resolve resources from these patterns — changing one is a contract c
 | `sqlAdminGroupObjectId` / `sqlAdminGroupName` | `SG_IMAGILE_SQL_ADMINS` | `$FG_SQL_ADMIN_GROUP_OBJECT_ID` / `$FG_SQL_ADMIN_GROUP_NAME` (required) | SQL server administrator (Entra-only auth; no SQL login exists) |
 | `sqlDatabaseSku` | `GP_S_Gen5` ×1 — serverless, 60-min auto-pause | `GP_Gen5_2`, provisioned | serverless is derived from the SKU name (`GP_S_*`) |
 | `sqlBackupStorageRedundancy` | `Local` | `Geo` | |
+| `sqlZoneRedundant` | `false` | `true` | survives the loss of one availability zone without a restore; adds ~60% to the SQL compute meter (see [Cost & capacity](/foundry-gate/reference/cost-and-capacity/)) |
 | `entraTenantId` | tenant | tenant | `AzureAd__TenantId` |
 | `entraApiClientId` | `$FG_ENTRA_API_CLIENT_ID` | same | `AzureAd__ClientId`; zero GUID until the app registration exists |
 | `entraApiAudience` | `api://{clientId}` | same | `AzureAd__Audience` |
 | `apiContainerImage` | `$FG_API_IMAGE` (required) | same | see re-run invariant 2 |
 | `containerAppMinReplicas` / `MaxReplicas` | 1 / 2 | 1 / 3 | min 1 — the admin API is the UI's only backend |
+| `containerAppCpu` / `containerAppMemory` | `0.25` / `0.5Gi` | `0.5` / `1.0Gi` | only the Consumption profile pairs are valid (0.25/0.5Gi, 0.5/1.0Gi, 0.75/1.5Gi, 1.0/2.0Gi, …) |
+| `containerAppsZoneRedundant` | `false` | `false` | plumbed but not enabled: ARM rejects it without a VNet-integrated environment, so it waits on private networking ([#196](https://github.com/kolatts/foundry-gate/issues/196)) |
+| `functionsStorageSku` | `Standard_LRS` | `Standard_ZRS` | Functions host state + the Flex deployment container |
+| `containerRegistrySku` | `Basic` | `Standard` | 100 GB included storage and higher throughput vs Basic's 10 GB; Premium only adds geo-replication and private link |
 | `staticWebAppSku` / `staticWebAppLocation` | `Free` / `eastus2` | `Standard` / `eastus2` | SWA is only offered in a handful of regions |
 | `functionsRuntimeVersion` | `10.0` | `10.0` | .NET isolated worker |
 | `keyVaultPurgeProtection` | `false` | `true` | irreversible once on |
