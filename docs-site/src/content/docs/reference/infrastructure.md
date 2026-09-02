@@ -154,7 +154,7 @@ All scoped to the individual resource, never the resource group; names are
 | API | Log Analytics Reader | workspace | usage queries for the admin dashboard |
 | Functions | Key Vault Secrets User | Key Vault | |
 | Functions | Log Analytics Reader | workspace | reconciliation reads `ApiManagementGatewayLlmLog` |
-| Functions | Storage Blob Data Owner | storage | host state + Flex deployment container |
+| Functions | Storage Blob Data Owner | storage | host state + Flex deployment container + the monthly reset's lock lease (`foundrygate-locks`) |
 | Functions | Storage Queue Data Contributor | storage | queue triggers/outputs |
 | Functions | Storage Table Data Contributor | storage | table bindings |
 | APIM (system-assigned) | Cognitive Services User | each Foundry account | gateway → model backends, no account keys |
@@ -228,7 +228,7 @@ Core configuration paths (`__` = section separator). None of them is a secret.
 | `OpenTelemetry__Enabled` / `OpenTelemetry__ConnectionString` | `true` / App Insights connection string |
 | `Gateway__SubscriptionId`, `Gateway__ResourceGroup`, `Gateway__ApimName`, `Gateway__ApimGatewayUrl`, `Gateway__KeyEncryptionKeyUri`, `Gateway__FoundryAccountNames__{i}` | gateway addressing for the APIM key service, Foundry deployment service and reconciliation ([#108](https://github.com/kolatts/foundry-gate/issues/108)) |
 | `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | the workspace **GUID** (`customerId` — what `LogsQueryClient.QueryWorkspaceAsync` and `/v1/workspaces/{id}/query` mean by "workspace id") / the ARM resource id (`QueryResourceAsync`, management plane) |
-| `AzureWebJobsStorage__accountName` / `__credential=managedidentity` / `__clientId` (Functions) | identity-based host storage |
+| `AzureWebJobsStorage__accountName` / `__credential=managedidentity` / `__clientId` (Functions) | identity-based host storage — also where the monthly reset takes its lock lease, so the reset needed no setting of its own |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` (Functions) | host telemetry |
 
 ## Outputs contract

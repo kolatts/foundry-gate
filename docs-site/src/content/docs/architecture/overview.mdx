@@ -165,7 +165,11 @@ product's policy carries that tier's budget and TPM cap, and changing a develope
 quota means moving their subscription between products. Subscription *suspension* is
 reserved for deactivation and offboarding — not quota exhaustion.
 
-The usage-sync Function still runs, but as **reconciliation**, not enforcement:
+The usage-sync Function still runs, but as **reconciliation**, not enforcement. It is a
+.NET isolated worker on a Flex Consumption plan — scale-to-zero, so it costs nothing between
+ticks — reading the gateway's own log with the Function App's managed identity. The query it
+runs is a plain `.kql` file checked into the repo, so an operator can paste it into the Log
+Analytics blade and get exactly the number the Function got:
 
 <Pipeline
   label="UsageSyncFunction — reconciliation, every 15 minutes"
@@ -175,15 +179,24 @@ The usage-sync Function still runs, but as **reconciliation**, not enforcement:
       detail: "The gateway's LLM log table records prompt/completion/total tokens per request. Joined to ApiManagementGatewayLogs on CorrelationId to attribute each request to an APIM subscription.",
     },
     {
-      title: "Update QuotaAllocation.TokensUsed in SQL",
-      detail: "Authoritative consumption figures for the UI, dashboards, and audit — and drift detection against what the gateway policies enforced.",
+      title: "Overwrite QuotaAllocation.TokensUsed in SQL",
+      detail: "Period totals, not deltas — so a re-run, or a catch-up after an outage, converges on the same numbers rather than double-counting. These are the figures the UI, dashboards and audit trail report.",
     },
     {
-      title: "Compute per-developer cost",
-      detail: "Tokens × rate card (SystemConfiguration). Necessary because Claude bills as a single aggregate Marketplace CCU meter that Azure Cost Management cannot break down per user or deployment.",
+      title: "Record drift; never enforce",
+      detail: "A developer whose reconciled usage exceeds their budget is logged as drift with the delta, because the tier product's policy should already have returned 403. The sync never suspends anyone and never sets the hard-stop flag — that flag means offboarding, not \"over budget\".",
     },
   ]}
 />
+
+<Aside type="note">
+**These totals are a floor, not a ceiling.** A stream the client interrupts can leave the
+gateway's LLM log with a low or missing token count, so reconciled usage can read slightly
+under what was really spent. That is survivable precisely because nothing depends on it:
+the gateway's own counter — the one that returns `403` — is separate and authoritative.
+Per-developer cost estimates (tokens × rate card) build on these figures and are tracked
+separately.
+</Aside>
 
 <Aside type="note">
 **Deployment-level limits are mitigated, not repealed.** Foundry still enforces shared
@@ -195,20 +208,28 @@ for the ceilings and [Feasibility &amp; Strategic Direction](/foundry-gate/archi
 for the mitigation architecture.
 </Aside>
 
+The monthly reset is the other scheduled job. It wakes **every day** at 00:01 UTC and acts
+only on the day of the month the fork configured (`ResetDayOfMonth`, the 1st by default), so
+changing that setting takes effect the next day rather than at the next deployment:
+
 <Pipeline
-  label="MonthlyResetFunction — 00:01 UTC on the 1st of each month"
+  label="MonthlyResetFunction — 00:01 UTC daily, acting on the configured reset day"
   steps={[
     {
-      title: "Resolve quota for new period and insert QuotaAllocation",
-      detail: "For each active developer, run the five-level quota resolution for the new month and INSERT a fresh QuotaAllocation row.",
+      title: "Is today the configured reset day?",
+      detail: "Reads SystemConfiguration[ResetDayOfMonth] (1–28) and stops here on every other day. One replica then takes a short blob lease, so two instances waking together cannot both run — though the reset is idempotent either way.",
+    },
+    {
+      title: "Resolve quota for the new period and upsert QuotaAllocation",
+      detail: "For each active developer, run the five-level quota resolution for the new month and insert their row. A row that already exists is re-resolved but keeps its reconciled TokensUsed — zeroing it mid-period would only make the dashboard disagree with the gateway.",
     },
     {
       title: "Clear hard-stop mirrors",
-      detail: "Gateway token-quota counters reset themselves at the UTC month boundary — no APIM counter manipulation needed. The Function only clears the IsHardStopped mirror (the 403 state reported by reconciliation) so dashboards start the month clean. It never touches subscription state.",
+      detail: "Gateway token-quota counters reset themselves at the UTC month boundary — no APIM counter manipulation needed, and no subscription state is touched. The Function only clears the IsHardStopped mirror so dashboards start the month clean.",
     },
     {
-      title: "Write audit log entry",
-      detail: "Records the reset event as quota.monthly-reset in the AuditLog table.",
+      title: "Write one audit log entry",
+      detail: "A single quota.monthly-reset row, committed in the same transaction as every allocation it describes. The same code runs behind an admin's manual POST /quota/reset, which audits as quota.reset and names the admin.",
     },
   ]}
 />
@@ -296,6 +317,7 @@ ids.
 | `FoundryGate.Api` | REST API + services, Azure Container Apps, Entra auth, APIM management-plane calls |
 | `FoundryGate.Data` | EF Core entities, `AppDbContext`, seeding — schema ships as a dacpac, no EF migrations |
 | `FoundryGate.Domain` | Shared DTOs and enums — no framework deps |
+| `FoundryGate.Core` | Services more than one host needs — quota resolution, the monthly reset, the tier map. References Data + Domain; no ASP.NET Core, which is what lets the isolated Functions worker use it |
 | `FoundryGate.Functions` | Timer-triggered Azure Functions (monthly reset + usage reconciliation) |
 | `FoundryGate.Web` | Blazor WASM frontend (MudBlazor), Azure Static Web Apps — references Domain only |
 | `FoundryGate.Database` | SQL Server project (.sqlproj) — builds the dacpac for CI/CD |

@@ -65,7 +65,7 @@ That works fine when you have three engineers sharing a dev environment. It brea
 | Entra-based auto-provisioning | ❌ Manual RBAC assignment | ✅ Assigned in Entra → account + key |
 | Team budgets from the directory | ❌ Nothing to sync | ✅ Entra group membership → that team's budget tier |
 | Automatic deprovisioning | ❌ Manual RBAC removal | ✅ Access removed in Entra → key deleted |
-| Monthly reset | ❌ Manual | ✅ Azure Function fires at 00:01 UTC on the 1st |
+| Monthly reset | ❌ Manual | ✅ Azure Function runs at 00:01 UTC on the day you set (the 1st by default) |
 | Quota increase workflow | ❌ None | ✅ Submit → admin approves → quota applied |
 | Per-developer usage visibility | ❌ Aggregate only | ✅ Dashboard + audit log per user |
 | Model deployment management | ❌ Portal only | ✅ Claude models are set up by the infrastructure deploy; admins manage OpenAI model deployments from the FoundryGate UI |

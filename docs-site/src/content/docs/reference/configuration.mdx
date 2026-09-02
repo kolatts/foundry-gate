@@ -18,7 +18,7 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 | `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. **Superseded** for deployment management by the `Gateway__*` environment variables below (the gateway runs one account per region, and infra sets them, so nothing has to be typed here); kept as seeded reference data. |
 | `EntraTenantId` | `""` | Azure AD tenant ID used by the Microsoft Graph SDK for bulk user sync. |
 | `EntraGroupSyncEnabled` | `"false"` | Set to `"true"` to enable automatic Entra group member sync. When `false`, group sync must be triggered manually from the admin UI. |
-| `ResetDayOfMonth` | `"1"` | Day the monthly quota reset fires. Always `"1"` in v1 — changing this is unsupported and reserved for a future release. |
+| `ResetDayOfMonth` | `"1"` | Day of month the monthly quota reset acts on, `1`–`28` (no month is short of a 28th). The reset Function wakes daily at 00:01 UTC and does nothing on any other day, so a change here takes effect the next day with no redeploy. A value outside the range falls back to `1` with a warning rather than never resetting. Note this moves *FoundryGate's* allocation rows only — the gateway's own `token-quota` window is a UTC calendar month and always resets on the 1st, whatever this says. |
 
 <Aside type="caution">
 Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl` and `ApimProductId` are set to real values. Foundry deployment management reads the `Gateway__*` variables instead, which infra sets automatically.
@@ -100,3 +100,25 @@ Azure Functions (Flex Consumption) gets the same `Azure__*`, `ConnectionStrings_
 | `AZURE_FUNCTIONS_ENVIRONMENT` / `DOTNET_ENVIRONMENT` | `qa` or `prod` — the Functions host reads the first, the isolated worker's generic host the second |
 | `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage__credential=managedidentity` / `AzureWebJobsStorage__clientId` | Identity-based host storage. There is no storage connection string: shared-key access is disabled on the account |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Functions host telemetry |
+
+Of the shared `Gateway__*` values the Functions host actually reads two: `Gateway__Tiers__*`
+(quota resolution — shipped in the Functions project's own `appsettings.json`, which a
+predeployment test keeps byte-identical to the API's) and `Gateway__LogAnalyticsWorkspaceId`
+(usage reconciliation). That last one must be the workspace **GUID**, not the ARM resource id
+— it is what the Log Analytics query API calls the "workspace id" — and the host now refuses
+to start if it is given anything else. With it absent, the reconciliation job logs a warning
+each pass and does nothing, which is the correct behaviour for a fork that has not enabled
+the gateway's GenAI diagnostic setting.
+
+It also has two settings of its own, both optional and both normally left unset:
+
+| Key | Default | Description |
+|---|---|---|
+| `Storage__AccountName` | *(unset)* | Storage account for the monthly reset's distributed lock. Left empty, the host uses the account it already knows from `AzureWebJobsStorage__accountName`, so no extra configuration is needed in Azure |
+| `Storage__ConnectionString` | *(unset)* | Local Azurite only (`UseDevelopmentStorage=true`). A cloud connection string is refused at startup — the storage account does not accept shared keys |
+| `Storage__LockContainerName` | `foundrygate-locks` | Blob container holding the lock blob; created on demand |
+| `Storage__LockLeaseSeconds` | `60` | How long the reset's lease is held. It expires by itself, so a crashed run never needs unlocking |
+
+Locally, copy `src/FoundryGate.Functions/local.settings.template.json` to
+`local.settings.json` (gitignored) and point `ConnectionStrings__FoundryGate` at the
+docker SQL container.
