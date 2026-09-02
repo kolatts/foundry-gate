@@ -20,30 +20,109 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
   <meta property="og:description" content="Give every developer their own AI budget. FoundryGate hands out the keys, watches the meter, and stops overspending — automatically." />
   <meta property="og:image" content={`${base}og-logo.png`} />
   <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
-  <script is:inline>document.documentElement.classList.add('js');</script>
+  <script is:inline>
+    document.documentElement.classList.add('js');
+    // Theme: same mechanism as the Starlight docs pages (data-theme + the
+    // "starlight-theme" localStorage key) so a choice made on one side of the site
+    // carries over to the other. Inlined + try/catch'd to avoid FOUC and to survive
+    // localStorage being unavailable (private browsing, blocked storage, etc). #114
+    (function () {
+      var stored = null;
+      try {
+        stored = localStorage.getItem('starlight-theme');
+      } catch (e) {
+        /* ignore — fall through to system preference */
+      }
+      var theme =
+        stored === 'light' || stored === 'dark'
+          ? stored
+          : window.matchMedia('(prefers-color-scheme: light)').matches
+            ? 'light'
+            : 'dark';
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <style>
     /* ── Tokens ─────────────────────────────────────────── */
     :root {
+      --fg-bg-base:     #F8FAFC;
+      --fg-bg-surface:  #EEF2F7;
+      --fg-bg-raised:   #FFFFFF;
+      --fg-bg-overlay:  #E3E9F0;
+      --fg-border-subtle: #D7DFE9;
+      --fg-border-strong: #B7C3D1;
+      --fg-azure-dim:   #0558A0;
+      --fg-azure:       #0078D4;
+      --fg-azure-hover: #1462A8;
+      --fg-azure-neon:  #0369A1;
+      --fg-ember-soft:  #B45309;
+      --fg-ember:       #F58025;
+      --fg-ember-hot:   #C2410C;
+      --fg-text-primary:   #10192A;
+      --fg-text-secondary: #33445A;
+      --fg-text-muted:     #5C6E82;
+      --fg-success: #15803D;
+      --fg-info:    #0E7490;
+      --fg-font-ui:   'Inter', system-ui, -apple-system, sans-serif;
+      --fg-font-mono: 'Monaspace Argon', 'Fira Code', monospace;
+      /* Ambient nebula/orbs were designed against a dark ground (#114) */
+      --fg-ambient-nebula-opacity: 0.05;
+      --fg-ambient-orb-opacity: 0.45;
+      /* icons.png is dark-stroke line art inverted to white for a dark ground; on a
+         light ground it reads fine unmodified (#114). */
+      --fg-icon-invert: 0;
+      /* logo-cropped.png's silver wordmark is tuned for a dark ground; darken it in
+         light mode so "foundry" stays legible against white (#114). */
+      --fg-logo-filter: brightness(0.45) saturate(1.15);
+      color-scheme: light;
+    }
+
+    [data-theme='dark'] {
       --fg-bg-base:     #080C12;
       --fg-bg-surface:  #0D1520;
       --fg-bg-raised:   #111927;
       --fg-bg-overlay:  #162032;
       --fg-border-subtle: #1E2D42;
       --fg-border-strong: #2D4460;
-      --fg-azure-dim:   #0558A0;
-      --fg-azure:       #0078D4;
       --fg-azure-hover: #3BA3E8;
       --fg-azure-neon:  #4DCFFF;
       --fg-ember-soft:  #FFB347;
-      --fg-ember:       #F58025;
       --fg-ember-hot:   #FF5400;
       --fg-text-primary:   #E8EEF5;
       --fg-text-secondary: #A0B0C0;
       --fg-text-muted:     #6B7E94;
       --fg-success: #22C55E;
       --fg-info:    #38BDF8;
-      --fg-font-ui:   'Inter', system-ui, -apple-system, sans-serif;
-      --fg-font-mono: 'Monaspace Argon', 'Fira Code', monospace;
+      --fg-ambient-nebula-opacity: 0.32;
+      --fg-ambient-orb-opacity: 1;
+      --fg-icon-invert: 1;
+      --fg-logo-filter: brightness(1.1) drop-shadow(0 0 8px rgba(77,207,255,0.2));
+      color-scheme: dark;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme='light']) {
+        --fg-bg-base:     #080C12;
+        --fg-bg-surface:  #0D1520;
+        --fg-bg-raised:   #111927;
+        --fg-bg-overlay:  #162032;
+        --fg-border-subtle: #1E2D42;
+        --fg-border-strong: #2D4460;
+        --fg-azure-hover: #3BA3E8;
+        --fg-azure-neon:  #4DCFFF;
+        --fg-ember-soft:  #FFB347;
+        --fg-ember-hot:   #FF5400;
+        --fg-text-primary:   #E8EEF5;
+        --fg-text-secondary: #A0B0C0;
+        --fg-text-muted:     #6B7E94;
+        --fg-success: #22C55E;
+        --fg-info:    #38BDF8;
+        --fg-ambient-nebula-opacity: 0.32;
+        --fg-ambient-orb-opacity: 1;
+        --fg-icon-invert: 1;
+        --fg-logo-filter: brightness(1.1) drop-shadow(0 0 8px rgba(77,207,255,0.2));
+        color-scheme: dark;
+      }
     }
 
     /* ── Reset ──────────────────────────────────────────── */
@@ -55,6 +134,10 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       color: var(--fg-text-primary);
       font-family: var(--fg-font-ui);
       -webkit-font-smoothing: antialiased;
+      /* .dashboard-wrap's glow pseudo-elements bleed ~40px past their box by design;
+         clip it at the viewport edge instead of letting it force horizontal scroll
+         on narrow screens (pre-existing, found during #114/#115 verification). */
+      overflow-x: hidden;
     }
 
     a { text-decoration: none; color: inherit; }
@@ -83,7 +166,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
 
     .nav-logo img {
       height: 48px;
-      filter: brightness(1.15) drop-shadow(0 0 6px rgba(77,207,255,0.15));
+      filter: var(--fg-logo-filter);
     }
 
     .nav-links {
@@ -312,7 +395,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     .hero-icons img {
       height: 18px;
       opacity: 0.35;
-      filter: invert(1);
+      filter: invert(var(--fg-icon-invert, 0));
     }
 
     /* ── Dashboard screenshot ───────────────────────────── */
@@ -688,7 +771,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       background-repeat: no-repeat;
       /* background-image set inline on the element via ${base} so the page stays
          relocatable — the image is the one asset CSS can't reach base for. */
-      opacity: 0.32;
+      opacity: var(--fg-ambient-nebula-opacity, 0.32);
       mix-blend-mode: screen;
     }
 
@@ -697,6 +780,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       border-radius: 50%;
       filter: blur(90px);
       will-change: transform;
+      opacity: var(--fg-ambient-orb-opacity, 1);
     }
 
     .aurora-1 {
@@ -1015,7 +1099,7 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       </div>
 
       <div class="hero-icons">
-        <img src={`${base}icons.png`} alt="Foundry Gate UI icons" style="height:22px;opacity:0.25;filter:invert(1) brightness(2);" />
+        <img src={`${base}icons.png`} alt="Foundry Gate UI icons" style="height:22px;opacity:0.25;filter:invert(var(--fg-icon-invert, 0)) brightness(2);" />
       </div>
     </div>
 
