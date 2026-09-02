@@ -519,34 +519,36 @@ public sealed class ApimKeyService(
     /// query's answer is one short by construction; the alternative — saving first — would split the
     /// reveal and its anomaly across two transactions.
     /// </para>
+    /// <para>
+    /// <b>One query, one index.</b> Both questions — how many reveals, and has this window already been
+    /// reported — are answered by a single grouped count, and <c>AuditLog</c> carries a composite
+    /// <c>(Action, TargetType, TargetId, OccurredDate)</c> index so each is an index-only seek rather
+    /// than a range scan of every audit row written in the window (#211 review).
+    /// </para>
     /// </remarks>
     private async Task DetectRevealAnomalyAsync(User user, CancellationToken cancellationToken)
     {
         var since = timeProvider.GetUtcNow() - revealAnomaly.Window;
         var targetId = TargetId(user);
 
-        var revealCount = 1 + await dbContext.AuditLogs.AsNoTracking()
-            .CountAsync(
-                row => row.Action == AuditActions.KeyRevealed
-                    && row.TargetType == AuditTargetTypes.ApiKey
-                    && row.TargetId == targetId
-                    && row.OccurredDate >= since,
-                cancellationToken);
+        // One round trip for both questions: how many reveals this key has had in the window, and
+        // whether the window already carries an anomaly row. Grouping by action lets the composite
+        // (Action, TargetType, TargetId, OccurredDate) index seek each of the two narrow ranges and
+        // count them without touching the table.
+        var windowCounts = await dbContext.AuditLogs.AsNoTracking()
+            .Where(row => (row.Action == AuditActions.KeyRevealed || row.Action == AuditActions.KeyRevealAnomaly)
+                && row.TargetType == AuditTargetTypes.ApiKey
+                && row.TargetId == targetId
+                && row.OccurredDate >= since)
+            .GroupBy(row => row.Action)
+            .Select(group => new { Action = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.Action, row => row.Count, StringComparer.Ordinal, cancellationToken);
 
-        if (revealCount < revealAnomaly.Threshold)
-        {
-            return;
-        }
+        // The reveal being served counts: its row is on the change tracker, not in the table yet.
+        var revealCount = 1 + windowCounts.GetValueOrDefault(AuditActions.KeyRevealed);
+        var alreadyReported = windowCounts.GetValueOrDefault(AuditActions.KeyRevealAnomaly) > 0;
 
-        var alreadyReported = await dbContext.AuditLogs.AsNoTracking()
-            .AnyAsync(
-                row => row.Action == AuditActions.KeyRevealAnomaly
-                    && row.TargetType == AuditTargetTypes.ApiKey
-                    && row.TargetId == targetId
-                    && row.OccurredDate >= since,
-                cancellationToken);
-
-        if (alreadyReported)
+        if (revealCount < revealAnomaly.Threshold || alreadyReported)
         {
             return;
         }

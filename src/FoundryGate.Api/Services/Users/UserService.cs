@@ -380,19 +380,20 @@ public sealed class UserService(
     }
 
     /// <summary>
-    /// What a developer needs to point a CLI at this fork's gateway. Every field is sourced honestly:
-    /// the origin comes from <c>Gateway:ApimGatewayUrl</c> (infra sets it — empty locally, where there is
-    /// no gateway), and the two paths are the ones <c>infra/modules/ai-gateway.bicep</c> creates. The
-    /// alias list is empty because the alias map lives only in bicep today; #153 exposes it to the
-    /// control plane, and until then the docs' CLI setup page is the source developers use for model
-    /// names.
+    /// What a developer on <paramref name="tierProductId"/> needs to point a CLI at this fork's gateway.
+    /// Every field is sourced honestly: the origin comes from <c>Gateway:ApimGatewayUrl</c> (infra sets
+    /// it — empty locally, where there is no gateway), the two paths are the ones
+    /// <c>infra/modules/ai-gateway.bicep</c> creates, and the aliases come from the same
+    /// <c>productModelAliases</c> map that becomes gateway policy (#153).
     /// </summary>
-    /// <summary>
-    /// The "Configure your CLI" payload for a developer on <paramref name="tierProductId"/>. The alias
-    /// list is filtered to that tier's product because the gateway's alias map <em>is</em> its
-    /// allowlist (#86/#153): handing every developer the union would tell a Standard developer they
-    /// can use <c>opus</c> and let them discover the 403 at their first request.
-    /// </summary>
+    /// <remarks>
+    /// The alias list is filtered to the caller's own tier product because the gateway's alias map
+    /// <em>is</em> its allowlist (#86): handing every developer the union would tell a Standard
+    /// developer they can use <c>opus</c> and let them discover the <c>403 model_not_permitted</c> at
+    /// their first request. On a host where infra has not set the map it is empty, and the docs' CLI
+    /// setup page is where developers get model names.
+    /// </remarks>
+    /// <param name="tierProductId">The tier product this developer's allocation resolved to.</param>
     private GatewayConnectionInfo BuildCliConfig(string tierProductId) =>
         new(
             GatewayBaseUrl: string.IsNullOrWhiteSpace(gateway.ApimGatewayUrl) ? string.Empty : gateway.ApimGatewayUrl.TrimEnd('/'),

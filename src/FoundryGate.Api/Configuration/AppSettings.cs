@@ -150,7 +150,12 @@ public class RevealAnomalyOptions
     [Range(1, 10_080)]
     public int WindowMinutes { get; set; } = 60;
 
-    /// <summary>Set <see cref="Threshold"/> unreachably high rather than turning this off; there is no <c>Enabled</c> flag because the check costs one indexed <c>COUNT</c> on a route that already writes a row.</summary>
+    /// <summary>
+    /// Set <see cref="Threshold"/> unreachably high rather than turning this off; there is no
+    /// <c>Enabled</c> flag because the check is a single grouped <c>COUNT</c> served by
+    /// <c>AuditLog</c>'s <c>(Action, TargetType, TargetId, OccurredDate)</c> index, on a route that
+    /// already writes a row and decrypts a key.
+    /// </summary>
     public TimeSpan Window => TimeSpan.FromMinutes(WindowMinutes);
 }
 
