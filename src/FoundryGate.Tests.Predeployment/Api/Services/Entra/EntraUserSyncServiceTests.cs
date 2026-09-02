@@ -11,6 +11,7 @@ using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
+using FoundryGate.Domain.Keys;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.AspNetCore.DataProtection;
@@ -102,6 +103,59 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         Assert.False(saved.IsActive);
         Assert.Equal(Now, saved.LastSyncedDate);
         Assert.Equal("Test User", saved.DisplayName); // fields untouched: the directory has nothing newer
+    }
+
+    [Fact]
+    public async Task A_departure_runs_the_full_deprovision_pipeline_not_just_the_inactive_flag()
+    {
+        // #65: before this, a departed employee kept a working gateway key until someone noticed.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        var departed = await SeedUserAsync("oid-departed-with-key");
+        var subscriptionName = ApimSubscriptionNames.ForUser(departed.UserId);
+        _ = Apim.Seed(subscriptionName, GatewayTiers.Standard);
+        departed.ApimSubscriptionId = Apim.GetSubscriptionResourceId(subscriptionName);
+        departed.ApimSubscriptionKeyHint = "1a2b";
+        departed.ApimKeyIssuedDate = Now;
+        Context.QuotaAllocations.Add(new QuotaAllocation
+        {
+            UserId = departed.UserId,
+            PeriodYear = Now.Year,
+            PeriodMonth = Now.Month,
+            AllocatedTokens = TestGatewayTiers.StandardCap,
+            TierProductId = GatewayTiers.Standard,
+        });
+        _ = await Context.SaveChangesAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+
+        var result = await CreateService(admin.EntraObjectId).SyncUsersAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.DeactivatedCount);
+
+        // The APIM subscription is gone and the key fields are cleared — not merely a flag flip.
+        Assert.False(Apim.Contains(subscriptionName));
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == departed.UserId);
+        Assert.False(saved.IsActive);
+        Assert.Empty(saved.ApimSubscriptionId);
+        Assert.Empty(saved.ApimSubscriptionKeyHint);
+        Assert.Null(saved.ApimKeyIssuedDate);
+
+        var allocation = await Context.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == departed.UserId);
+        Assert.True(allocation.IsHardStopped);
+
+        // The departure's own rows are system-attributed; the users.synced row still names the caller.
+        var targetId = departed.UserId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var deactivation = await Context.AuditLogs.AsNoTracking()
+            .SingleAsync(a => a.Action == AuditActions.UserDeactivated && a.TargetId == targetId);
+        Assert.Null(deactivation.ActorUserId);
+        Assert.Contains("EntraDeparture", deactivation.Details, StringComparison.Ordinal);
+
+        var revocation = await Context.AuditLogs.AsNoTracking()
+            .SingleAsync(a => a.Action == AuditActions.KeyRevoked && a.TargetId == targetId);
+        Assert.Null(revocation.ActorUserId);
+
+        var synced = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.UsersSynced);
+        Assert.Equal(admin.UserId, synced.ActorUserId);
     }
 
     [Fact]
