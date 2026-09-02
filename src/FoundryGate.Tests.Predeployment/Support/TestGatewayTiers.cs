@@ -1,5 +1,5 @@
-using FoundryGate.Api.Configuration;
-using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Constants;
 
 namespace FoundryGate.Tests.Predeployment.Support;

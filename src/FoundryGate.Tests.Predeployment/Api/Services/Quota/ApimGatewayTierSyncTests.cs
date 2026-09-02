@@ -5,6 +5,7 @@ using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Quota;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Core.Quota;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;

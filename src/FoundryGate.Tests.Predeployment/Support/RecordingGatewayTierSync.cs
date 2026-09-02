@@ -1,4 +1,4 @@
-using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Quota;
 using FoundryGate.Data.Entities;
 
 namespace FoundryGate.Tests.Predeployment.Support;

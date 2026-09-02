@@ -1,4 +1,5 @@
 using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
 using FoundryGate.Tests.Predeployment.Support;
 using Imagile.Framework.Configuration.Exceptions;
 using Imagile.Framework.Configuration.Extensions;

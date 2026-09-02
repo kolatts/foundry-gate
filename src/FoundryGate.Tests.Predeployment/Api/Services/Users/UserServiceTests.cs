@@ -8,6 +8,8 @@ using FoundryGate.Api.Services.Quota;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Api.Services.Users;
+using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Quota;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Common;
@@ -173,9 +175,9 @@ public class UserServiceTests : InMemoryDatabaseTest
         var quotaAllocations = new QuotaAllocationService(
             Context,
             quotaResolution,
+            new QuotaResetService(Context, quotaResolution, writer, _timeProvider, NullLogger<QuotaResetService>.Instance),
             tierMapper,
             accessor,
-            audit,
             _timeProvider,
             NullLogger<QuotaAllocationService>.Instance);
         var quotaRequests = new QuotaRequestService(Context, quotaResolution, tierMapper, accessor, audit, _timeProvider);

@@ -1,9 +1,9 @@
-using FoundryGate.Api.Configuration;
-using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Configuration;
+using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Tests.Predeployment.Support;
 
-namespace FoundryGate.Tests.Predeployment.Api.Services.Quota;
+namespace FoundryGate.Tests.Predeployment.Core.Quota;
 
 /// <summary>
 /// "A budget is a tier" (D-013), pinned from both faces: <see cref="GatewayTierMapper.Map"/> is an exact

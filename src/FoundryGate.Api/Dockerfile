@@ -23,11 +23,13 @@ WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props NuGet.config .editorconfig ./
 COPY src/FoundryGate.Domain/FoundryGate.Domain.csproj src/FoundryGate.Domain/
 COPY src/FoundryGate.Data/FoundryGate.Data.csproj src/FoundryGate.Data/
+COPY src/FoundryGate.Core/FoundryGate.Core.csproj src/FoundryGate.Core/
 COPY src/FoundryGate.Api/FoundryGate.Api.csproj src/FoundryGate.Api/
 RUN dotnet restore src/FoundryGate.Api/FoundryGate.Api.csproj
 
 COPY src/FoundryGate.Domain/ src/FoundryGate.Domain/
 COPY src/FoundryGate.Data/ src/FoundryGate.Data/
+COPY src/FoundryGate.Core/ src/FoundryGate.Core/
 COPY src/FoundryGate.Api/ src/FoundryGate.Api/
 
 # Warnings are errors (Directory.Build.props) — the image build fails the same way CI does.

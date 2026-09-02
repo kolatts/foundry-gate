@@ -1,6 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.RegularExpressions;
-using FoundryGate.Api.Configuration;
+using FoundryGate.Core.Configuration;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Tests.Predeployment.Support;
 using Imagile.Framework.Configuration.Extensions;

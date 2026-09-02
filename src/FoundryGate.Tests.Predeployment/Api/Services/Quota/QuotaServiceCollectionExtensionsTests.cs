@@ -1,6 +1,7 @@
 using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Keys;
 using FoundryGate.Api.Services.Quota;
+using FoundryGate.Core.Quota;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.Extensions.DependencyInjection;
 

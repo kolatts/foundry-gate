@@ -13,7 +13,7 @@ namespace FoundryGate.Api.Configuration;
 /// which throws <see cref="Imagile.Framework.Configuration.Exceptions.ConfigurationValidationException"/>
 /// with every violation aggregated into one message rather than failing on the first.
 /// </summary>
-public class AppSettings
+public class AppSettings : IValidatableObject
 {
     /// <summary>Entra ID bearer-token validation (spec §4, §11). Always required — every
     /// <c>/api/v1</c> endpoint needs a valid token, in every environment including local.</summary>
@@ -50,6 +50,16 @@ public class AppSettings
 
     /// <summary>How <c>User.ApimSubscriptionKey</c> is encrypted at rest (#95).</summary>
     public KeyProtectionOptions KeyProtection { get; set; } = new();
+
+    /// <summary>
+    /// Validates the sections whose option classes live in <c>FoundryGate.Core</c>:
+    /// <c>ValidateRecursively()</c> only recurses into types from the root object's own assembly, so
+    /// <see cref="Gateway"/> has to be handed to it explicitly (see
+    /// <see cref="CoreOptionsValidation"/>). Everything declared in this assembly is still walked
+    /// automatically.
+    /// </summary>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext) =>
+        CoreOptionsValidation.ValidateGateway(Gateway, nameof(Gateway));
 }
 
 /// <summary>Which <c>IKeyProtector</c> encrypts <c>User.ApimSubscriptionKey</c> at rest (#95).</summary>

@@ -1,5 +1,5 @@
-using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Keys;
+using FoundryGate.Core.Configuration;
 using FoundryGate.Tests.Predeployment.Support;
 
 namespace FoundryGate.Tests.Predeployment.Api.Services.Keys;
