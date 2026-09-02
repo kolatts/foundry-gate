@@ -253,7 +253,7 @@ public sealed class UserService(
     /// What a developer needs to point a CLI at this fork's gateway. Every field is sourced honestly:
     /// the origin comes from <c>Gateway:ApimGatewayUrl</c> (infra sets it — empty locally, where there is
     /// no gateway), and the two paths are the ones <c>infra/modules/ai-gateway.bicep</c> creates. The
-    /// alias list is empty because the alias map lives only in bicep today; #137 exposes it to the
+    /// alias list is empty because the alias map lives only in bicep today; #153 exposes it to the
     /// control plane, and until then the docs' CLI setup page is the source developers use for model
     /// names.
     /// </summary>

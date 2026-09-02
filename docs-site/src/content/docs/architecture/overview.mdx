@@ -108,7 +108,7 @@ Admins can link a FoundryGate group to an Entra group ID. Running `POST /groups/
 
 ### Bulk user sync
 
-`POST /users/sync` pages through all users assigned to the FoundryGate service principal via Graph and upserts them. New users get a record with the default quota; departed users are deactivated. Useful for an initial import of your entire org before any developer has logged in.
+`POST /users/sync` pages through all users assigned to the FoundryGate service principal via Graph and upserts them. New users get a record with the default quota; departed users run the same deprovision pipeline an admin deactivation does — subscription deleted, allocation hard-stopped, pending requests rejected — so the sync and the admin button can never drift apart. The whole run commits in one transaction. Useful for an initial import of your entire org before any developer has logged in.
 
 ---
 

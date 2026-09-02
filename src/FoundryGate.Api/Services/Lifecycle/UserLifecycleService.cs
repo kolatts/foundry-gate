@@ -293,6 +293,7 @@ public sealed class UserLifecycleService(
         {
             // Two tabs, one first login: EntraObjectId is unique, so the loser lands here. A retry
             // finds the winner's row and returns it, which is why this is a 409 and not a 500.
+            // #154 makes the retry automatic so the caller never sees the race at all.
             dbContext.Entry(user).State = EntityState.Detached;
             throw new ConflictException(
                 $"Another request provisioned oid {entraObjectId} at the same time. Retry GET /users/me.",

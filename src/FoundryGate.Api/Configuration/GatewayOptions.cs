@@ -40,7 +40,7 @@ public class GatewayOptions : IValidatableObject
     /// <c>infra/modules/ai-gateway.bicep</c> creates it (<c>anthropicApiPath</c>). A constant rather
     /// than a setting because the bicep hard-codes it: making it configurable here would let the
     /// control plane hand developers a path the data plane does not serve. If it ever becomes a
-    /// bicep parameter, it becomes a <c>Gateway__*</c> env var at the same time (#137).
+    /// bicep parameter, it becomes a <c>Gateway__*</c> env var at the same time (#153).
     /// </summary>
     public const string AnthropicBasePath = "/anthropic";
 

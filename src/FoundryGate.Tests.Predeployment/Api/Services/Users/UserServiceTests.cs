@@ -47,7 +47,7 @@ public class UserServiceTests : InMemoryDatabaseTest
         Assert.Equal(GatewayOptions.AnthropicBasePath, profile.CliConfig.AnthropicBasePath);
         Assert.Equal(GatewayOptions.OpenAiBasePath, profile.CliConfig.OpenAiBasePath);
 
-        // #137: the alias map lives only in bicep today, so the honest answer is "none", not a guess.
+        // #153: the alias map lives only in bicep today, so the honest answer is "none", not a guess.
         Assert.Empty(profile.CliConfig.ModelAliases);
     }
 

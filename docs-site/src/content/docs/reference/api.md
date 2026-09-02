@@ -9,15 +9,57 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/users` | Admin | List all users, paged. Query: `?search=&page=&pageSize=` |
-| `GET` | `/users/me` | Any | Own profile + current quota. Auto-provisions on first call. |
-| `GET` | `/users/{id}` | Admin | User detail including group memberships and allocation |
-| `PUT` | `/users/{id}/quota` | Admin | Set `MonthlyTokenQuota` or `IsUnlimited` |
-| `POST` | `/users/{id}/activate` | Admin | Re-activate user — runs full provision pipeline |
-| `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription |
+| `GET` | `/users` | Admin | List users, paged, ordered by display name. Query: `?search=&isActive=&page=&pageSize=` |
+| `GET` | `/users/me` | Any | Own profile, current quota, masked key and CLI connection details. Auto-provisions on first call. |
+| `GET` | `/users/{id}` | Admin | User detail: the list row plus group memberships, current-period allocation and masked key |
+| `PUT` | `/users/{id}/quota` | Admin | Set `monthlyTokenQuota` or `isUnlimited`; re-resolves the period and moves the APIM subscription to the new tier product |
+| `POST` | `/users/{id}/activate` | Admin | Re-activate user — runs the full provision pipeline |
+| `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription, hard-stops the allocation, rejects pending requests |
 | `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount, skippedGroupAssignmentCount }` |
 
-`POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned are set `isActive = false` — never deleted, never auto-reactivated if they later return. One `users.synced` audit row is written per run.
+### `GET /users/me` — first login provisions everything
+
+A developer's first call creates their whole footprint in **one transaction**: the `User` row (from
+the token's Entra claims, enriched from Microsoft Graph when `Entra:Enabled`), their allocation for
+the current month, and their APIM subscription under the tier that allocation resolved to. If the
+gateway refuses the subscription, nothing is written — no half-provisioned user, no `502` with a row
+left behind. Later calls are idempotent: display name and email are refreshed from the token,
+`lastSyncedDate` is stamped, and the same key and allocation come back.
+
+The response carries `quota` (the same shape as `/quota/allocations/me`), `apiKey` (masked to the
+last four characters — the plaintext only ever comes from `/keys/*`), and `cliConfig`:
+`gatewayBaseUrl` (the gateway origin, empty on a host with no gateway configured),
+`anthropicBasePath` (`/anthropic`), `openAiBasePath` (`/openai/v1`), and `modelAliases` — currently
+always empty, because the alias map lives only in the gateway's Bicep
+([#153](https://github.com/kolatts/foundry-gate/issues/153)); use
+[CLI setup](/foundry-gate/getting-started/cli-setup/) for model names until it lands.
+
+Errors: `403` when the caller's account is deactivated, `409` when two first logins for the same
+identity race (retry — [#154](https://github.com/kolatts/foundry-gate/issues/154) will absorb it),
+`502` when the gateway or Graph failed, `503` when APIM key management is not configured on the host.
+
+### Deactivate and activate are the lifecycle pipelines
+
+`POST /users/{id}/deactivate` is the full offboarding sequence, committed atomically: **delete** the
+APIM subscription (there is no suspended state), clear the stored key, `isActive = false`, hard-stop
+the current allocation, and reject every Pending quota-increase request of theirs with the note
+"User deactivated" and no reviewer. `POST /users/{id}/activate` runs the provision pipeline in
+reverse: `isActive = true`, quota re-resolved, and a fresh APIM subscription minted — adopting an
+orphan named `foundrygate-{userId}` if a previous deprovision left one behind, rather than creating a
+duplicate. The new key is **not** returned to the admin; the developer reveals their own with
+`POST /keys/me/reveal`. Both are `409` when the user is already in the target state and `404` for an
+unknown user; a gateway failure is `502` and leaves the user as they were.
+
+To take a key away without deactivating anyone, use `DELETE /keys/{userId}` instead — that leaves the
+user active, their quota untouched, and their requests pending.
+
+`PUT /users/{id}/quota` accepts only a configured tier cap or `isUnlimited` (see
+[Quota](#quota) below); `isUnlimited: true` clears any numeric override. Because a budget *is* a
+gateway tier, a change here re-scopes the developer's APIM subscription to the new tier product —
+their key is unchanged, so nothing needs reconfiguring — and a gateway that refuses the move fails
+the request rather than leaving the database claiming a tier nobody enforces.
+
+`POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned run the **same deprovision pipeline as `POST /users/{id}/deactivate`** — APIM subscription deleted, `isActive = false`, allocation hard-stopped, pending requests rejected — so a departed employee never keeps a working gateway key. Rows are never deleted and never auto-reactivated if the person later returns; an admin must re-activate them. The whole run (adds, updates, departures) commits in one transaction, with one `users.synced` audit row attributed to the caller and system-attributed `user.deactivated` / `key.revoked` rows per departure.
 
 **Group-assigned access suspends departure detection.** Only *user* assignees are read today; an app-role assignment granted to a *group* is not expanded to its members yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Because a user assigned through such a group is invisible to the sync, "not in the user list" cannot mean "departed" — so when the directory reports one or more group assignments the run still adds and updates users but deactivates nobody, returns `deactivatedCount: 0` with `skippedGroupAssignmentCount > 0`, names the groups in a warning log and in the audit row (`departureDetectionSuspended: true`). Assign developers individually to the application if you need departure detection before #121 lands.
 
