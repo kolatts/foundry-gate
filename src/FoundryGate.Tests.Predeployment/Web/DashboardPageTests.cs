@@ -128,13 +128,42 @@ public class DashboardPageTests : WebTestContext
         page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 2), TimeSpan.FromSeconds(5));
 
         await DisposeComponentsAsync();
-        var callsAtDisposal = Api.CallCount("GetDashboardAsync");
 
-        // A timer that outlives its page keeps hitting an admin-only endpoint forever.
+        // A timer that outlives its page keeps hitting an admin-only endpoint forever. Asserting
+        // that by sampling the count once and again a fixed delay later made this test a race with
+        // the thread pool (#195): under load a tick already in flight lands inside the window and
+        // the count moves for a reason that is not the bug. Waiting for the count to stop moving,
+        // and only then requiring it to stay still, tests "the loop stopped" rather than "the loop
+        // was slower than 200 ms".
+        var settled = await SettledCallCountAsync("GetDashboardAsync");
+
         await Task.Delay(200);
-        Assert.True(
-            Api.CallCount("GetDashboardAsync") <= callsAtDisposal + 1,
-            $"Refresh loop kept running after disposal: {callsAtDisposal} calls at disposal, {Api.CallCount("GetDashboardAsync")} after.");
+        Assert.Equal(settled, Api.CallCount("GetDashboardAsync"));
+    }
+
+    /// <summary>
+    /// Polls until the named call count is the same twice running, and answers that count. Fails
+    /// the test rather than looping forever if it never settles — a count that never stops moving
+    /// is the bug this is here to catch.
+    /// </summary>
+    private async Task<int> SettledCallCountAsync(string method)
+    {
+        var previous = -1;
+
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            var current = Api.CallCount(method);
+            if (current == previous)
+            {
+                return current;
+            }
+
+            previous = current;
+            await Task.Delay(50);
+        }
+
+        Assert.Fail($"{method} never stopped being called after the page was disposed.");
+        return previous;
     }
 
     [Fact]

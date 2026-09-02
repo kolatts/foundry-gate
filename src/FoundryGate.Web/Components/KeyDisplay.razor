@@ -216,6 +216,15 @@
     private async Task SetRevealedAsync(string? value)
     {
         _revealedKey = value;
+
+        // Render this component's own change now, rather than inheriting it from the parent's
+        // re-render. ComponentBase renders after the handler's Task completes, and that Task
+        // includes the round trip through RevealedKeyChanged — so without this, "Hide" leaves the
+        // plaintext on screen until the parent has finished reacting. Under load that gap is
+        // visible, and it was the whole of #195: a hidden key that was still readable for a frame
+        // is a worse bug than the flaky test that found it.
+        StateHasChanged();
+
         await RevealedKeyChanged.InvokeAsync(value);
     }
 }
