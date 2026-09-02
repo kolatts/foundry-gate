@@ -51,6 +51,28 @@ public record UpdateSystemConfigRequest
     [Required(AllowEmptyStrings = true)]
     [StringLength(ValidationConstants.ConfigValueMaxLength)]
     public string Value { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Optional optimistic-concurrency check (#170): the <c>updatedDate</c> the caller read from
+    /// <c>GET /config</c>. When supplied and it does not match the stored row, the write is refused with
+    /// <c>409</c> naming the current value, timestamp and the admin who got there first, instead of
+    /// silently overwriting them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Optional, and therefore additive: a caller that omits it keeps the original last-write-wins
+    /// behaviour. <c>SystemConfiguration</c> carries no <c>rowversion</c> — it is reference data whose
+    /// columns are all <c>[DoNotUpdate]</c>, so a real EF concurrency token would complicate the seeder
+    /// for a seven-row table — and the contention this guards against is between two humans with the
+    /// config form open, which is exactly where the caller has a timestamp to echo back.
+    /// </para>
+    /// <para>
+    /// Compared as an <em>instant</em>, not as text: <see cref="DateTimeOffset"/> equality ignores the
+    /// offset, so a client that normalizes to UTC (or a SQLite-backed test, which always reads back
+    /// <c>+00:00</c>) still matches a row SQL Server stored with a different offset.
+    /// </para>
+    /// </remarks>
+    public DateTimeOffset? ExpectedUpdatedDate { get; init; }
 }
 
 /// <summary>

@@ -9,6 +9,7 @@ using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
 using FoundryGate.Core.Quota;
+using FoundryGate.Core.Requests;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
@@ -569,7 +570,7 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
             tierMapper,
             new NullGatewayTierSync(NullLogger<NullGatewayTierSync>.Instance),
             NullLogger<QuotaResolutionService>.Instance);
-        var quotaRequests = new QuotaRequestService(Context, quotaResolution, tierMapper, accessor, audit, _timeProvider);
+        var quotaRequests = new QuotaRequestService(Context, quotaResolution, new QuotaRequestExpiry(Context, writer, _timeProvider, NullLogger<QuotaRequestExpiry>.Instance), tierMapper, accessor, audit, _timeProvider);
         var lifecycle = new UserLifecycleService(
             Context,
             quotaResolution,

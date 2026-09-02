@@ -343,7 +343,22 @@ public sealed class QuotaResolutionService(
             return _systemDefault!.Value;
         }
 
-        var raw = await dbContext.SystemConfigurations.AsNoTracking()
+        // Change tracker first, database second — the same rule as FindExistingAsync and
+        // LoadGroupPoliciesAsync, and the reason a caller can edit state and re-resolve against it in one
+        // unit of work. A projection query cannot see a pending change at all, so a caller that mutates
+        // this row through the change tracker and then re-resolves would otherwise have the OLD default
+        // written back onto every default-tier developer while still saving the new one (#193).
+        // `PUT /config` no longer relies on it — it claims the row with a conditional UPDATE, so the new
+        // value is already in the database inside its transaction by the time this runs — but the read
+        // stays, because resolution reading this key differently from how it reads allocations and group
+        // policies is what made that bug possible in the first place.
+        //
+        // OrdinalIgnoreCase, matching ConfigService's own key lookup: SQL Server's default collation is
+        // case-insensitive, so a tracked row could carry a casing an Ordinal compare would miss — and
+        // missing the tracker hit is the quiet failure, not a loud one.
+        var raw = dbContext.SystemConfigurations.Local
+                .FirstOrDefault(c => string.Equals(c.Key, SystemConfigurationKeys.DefaultMonthlyTokenQuota, StringComparison.OrdinalIgnoreCase))?.Value
+            ?? await dbContext.SystemConfigurations.AsNoTracking()
             .Where(c => c.Key == SystemConfigurationKeys.DefaultMonthlyTokenQuota)
             .Select(c => c.Value)
             .SingleOrDefaultAsync(cancellationToken)

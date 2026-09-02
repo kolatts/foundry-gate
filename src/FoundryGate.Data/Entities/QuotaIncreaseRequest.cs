@@ -26,6 +26,15 @@ namespace FoundryGate.Data.Entities;
 // applies with no user filter and a filter that applies with no ordering advantage.
 [Index(nameof(CreatedDate))]
 [Index(nameof(UserId), nameof(StatusType))]
+
+// "One PENDING request per user per period" (#147), as a constraint rather than only as
+// QuotaRequestService's read-then-write check — two concurrent submissions (a double-clicked button, a
+// retrying client) can both pass that check and both insert. Read this attribute together with
+// QuotaIncreaseRequestConfiguration's HasFilter: the uniqueness applies ONLY to rows whose StatusType
+// is Pending, which is what lets a user accumulate a decided request per period and file a new one
+// after each decision. An unfiltered unique index here would let a developer be refused for the rest
+// of the month by their own approved request.
+[Index(nameof(UserId), nameof(PeriodYear), nameof(PeriodMonth), IsUnique = true, Name = QuotaIncreaseRequestConfiguration.PendingPerUserPeriodIndexName)]
 public class QuotaIncreaseRequest : ICreatedDate
 {
     public int QuotaIncreaseRequestId { get; set; }
@@ -73,15 +82,39 @@ public class QuotaIncreaseRequest : ICreatedDate
 }
 
 /// <summary>
-/// Three separate FKs into <see cref="User"/>. Only <see cref="QuotaIncreaseRequest.UserId"/>
+/// The filtered unique index's <c>WHERE</c> clause (an attribute cannot express one), plus the three
+/// separate FKs into <see cref="User"/>. Only <see cref="QuotaIncreaseRequest.UserId"/>
 /// is the entity's cascade path (deleting the subject user removes their requests); the requester
 /// and reviewer links stay <see cref="DeleteBehavior.NoAction"/> so deleting an admin account never
 /// cascades into unrelated users' request history.
 /// </summary>
 internal sealed class QuotaIncreaseRequestConfiguration : IEntityTypeConfiguration<QuotaIncreaseRequest>
 {
+    /// <summary>
+    /// Name of the filtered unique index declared by <see cref="QuotaIncreaseRequest"/>'s
+    /// <c>[Index]</c> attribute; referenced here so the filter lands on that index rather than
+    /// creating a second, unnamed one.
+    /// </summary>
+    internal const string PendingPerUserPeriodIndexName = "IX_QuotaIncreaseRequests_PendingPerUserPeriod";
+
+    /// <summary>
+    /// The half of that index an attribute cannot express, written identically here and in
+    /// <c>dbo/Tables/QuotaIncreaseRequests.sql</c> — <c>SchemaParityTests</c> compares the two as text.
+    /// The literal is <see cref="QuotaRequestStatusType.Pending"/>'s stored <c>int</c>: an index filter
+    /// is database text, so it cannot name the enum. Valid on SQLite too (partial indexes, and
+    /// bracket-quoted identifiers), which is what lets the test harness create the same constraint the
+    /// deployed database has.
+    /// </summary>
+    internal const string PendingStatusFilter = "[StatusType] = 0";
+
     public void Configure(EntityTypeBuilder<QuotaIncreaseRequest> builder)
     {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        _ = builder
+            .HasIndex([nameof(QuotaIncreaseRequest.UserId), nameof(QuotaIncreaseRequest.PeriodYear), nameof(QuotaIncreaseRequest.PeriodMonth)], PendingPerUserPeriodIndexName)
+            .HasFilter(PendingStatusFilter);
+
         builder.HasOne(r => r.User)
             .WithMany()
             .HasForeignKey(r => r.UserId)

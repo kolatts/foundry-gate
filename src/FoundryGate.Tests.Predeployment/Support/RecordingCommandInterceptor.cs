@@ -28,6 +28,14 @@ public sealed class RecordingCommandInterceptor : DbCommandInterceptor
     /// <summary>The exception thrown for a matching statement.</summary>
     public Exception Failure { get; set; } = new InvalidOperationException("The database connection dropped.");
 
+    /// <summary>
+    /// Runs just before each statement executes, with its SQL. Defaults to doing nothing. Where
+    /// <see cref="FailWhen"/> breaks a statement, this one lets a test <em>change the world</em> at a
+    /// chosen moment — the only way to open the read-then-write window a concurrency guard exists to
+    /// close, by inserting the competing row after a service has checked for it and before it saves.
+    /// </summary>
+    public Action<string> BeforeExecuting { get; set; } = _ => { };
+
     /// <inheritdoc />
     public override InterceptionResult<DbDataReader> ReaderExecuting(
         DbCommand command,
@@ -78,6 +86,8 @@ public sealed class RecordingCommandInterceptor : DbCommandInterceptor
     {
         ArgumentNullException.ThrowIfNull(command);
         _commands.Add(command.CommandText);
+
+        BeforeExecuting(command.CommandText);
 
         if (FailWhen(command.CommandText))
         {

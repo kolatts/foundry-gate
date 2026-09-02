@@ -87,7 +87,7 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
         ApiCallResult<QuotaAllocationResponse>.Ok(WebTestData.Allocation());
 
     public ApiCallResult<QuotaResetResult> QuotaResetResult { get; set; } =
-        ApiCallResult<QuotaResetResult>.Ok(new QuotaResetResult(0, 2026, 9, DateTimeOffset.UnixEpoch));
+        ApiCallResult<QuotaResetResult>.Ok(new QuotaResetResult(0, 2026, 9, DateTimeOffset.UnixEpoch, 0));
 
     public ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>> RequestsResult { get; set; } =
         ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>.Ok(WebTestData.Page<QuotaIncreaseRequestResponse>());

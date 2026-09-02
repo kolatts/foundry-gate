@@ -253,9 +253,20 @@ exist are re-resolved (`allocatedTokens`, level, tier, capped flag) but **keep t
 `tokensUsed`** — the gateway's monthly window resets itself, so zeroing the mirror mid-month
 would only make dashboards lie. Every touched row gets `isHardStopped = false` and
 `resetDate = now`. Exactly one audit row (`quota.reset`, attributed to the calling admin, details
-`{ usersResetCount, periodYear, periodMonth, createdCount, tierSyncCount }`) per run. Returns
-`{ usersResetCount, periodYear, periodMonth, resetDate }`. Running it twice in a month produces
-the same row count.
+`{ usersResetCount, periodYear, periodMonth, tierChangeCount, expiredRequestCount }`)
+per run. `tierChangeCount` is named for what it means to a human reading the trail — every one of those
+is a developer whose *enforced* budget moved this run — not for the seam it went through.
+Returns `{ usersResetCount, periodYear, periodMonth, resetDate, expiredRequestCount }`. Running it twice in a
+month produces the same row count.
+
+**The reset also sweeps the review queue.** In the same transaction, every quota increase request
+still `Pending` from a *closed* period is set to `Rejected` with a system note and no reviewer — the
+same shape a departing user's requests get ([#159](https://github.com/kolatts/foundry-gate/issues/159)).
+Those requests can no longer be approved anyway (see below), so leaving them Pending would only mean
+an admin opens the queue each month with last month's dead entries still in it. When the sweep closes
+anything it writes one additional `quota.requests-expired` audit row (no actor, no target, details
+`{ expiredCount, currentPeriodYear, currentPeriodMonth, expiredRequestIds }`); a sweep that finds
+nothing writes no row at all. The scheduled monthly job runs exactly the same code.
 
 ## Quota Increase Requests
 
@@ -267,6 +278,7 @@ the same row count.
 | `GET` | `/requests/{id}` | Owner or Admin | Request detail. `404` for anyone else — see below |
 | `POST` | `/requests/{id}/approve` | Admin | Approve. Applies the tier to the user and re-resolves the current period immediately |
 | `POST` | `/requests/{id}/reject` | Admin | Reject. Nothing about the user's quota changes |
+| `POST` | `/requests/expire-stale` | Admin | Close every request left `Pending` from a period that has ended. No body. Returns `{ expiredCount }` |
 
 **A request asks for a tier, not a number.** `requestedQuota` must be `null` (unlimited) or exactly
 one of the configured tier caps from `GET /quota/tiers` — anything else is `400` listing the allowed
@@ -294,8 +306,20 @@ appears on their first `GET /quota/allocations/me` of the month, as it always di
 
 **One open request per user per period.** A second submission while one is still `Pending` in the
 same UTC calendar month is `409`; a decided (approved or rejected) request frees the slot at once, so
-a rejected developer can re-ask with a better justification. The check is not yet backed by a database
-constraint, so two simultaneous submissions can both land ([#147](https://github.com/kolatts/foundry-gate/issues/147)).
+a rejected developer can re-ask with a better justification. The rule is backed by a **filtered unique
+index** on `(userId, periodYear, periodMonth) WHERE status = Pending`
+([#147](https://github.com/kolatts/foundry-gate/issues/147)), so two simultaneous submissions — a
+double-clicked button, a retrying client — get the same `409` as two sequential ones instead of both
+landing and showing the same person twice in the reviewer queue. The filter is what keeps a *decided*
+request from blocking the rest of the month.
+
+**A request only applies to the period it was filed for.** Approval re-resolves the *current* period,
+so approving a July request in September would raise September's budget while the row and the response
+still said `periodYear: 2026, periodMonth: 7` — the number in the UI and the month actually affected
+disagreeing. Approving a request whose period has closed is therefore `409` naming both periods
+([#159](https://github.com/kolatts/foundry-gate/issues/159)). **Rejection is always allowed**, so an
+admin can clear an old queue by hand; and the monthly reset closes stale requests itself, so in
+practice this `409` only covers the window between a period ending and the next reset running.
 
 Every submission writes `quota.requested`; approval writes `quota.approved` with the before/after
 quota, the quota and level resolution reported at review time, the tier product and whether the gateway
@@ -419,13 +443,13 @@ where every account 404s cannot pin "catalogue unavailable" on the dialog for fi
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/config` | Admin | Every `SystemConfiguration` key, ordered by key: `{ key, value, updatedDate, updatedByUserId, updatedByDisplayName, isReadOnly }`. The editor fields are `null` for a seeded key no admin has edited; `isReadOnly` marks a key the system writes for itself, which `PUT` refuses with `409` |
-| `PUT` | `/config/{key}` | Admin | Set one key's value. Returns the row as it now stands |
+| `PUT` | `/config/{key}` | Admin | Set one key's value. Returns the row as it now stands. Optional `expectedUpdatedDate` makes the write conditional (`409` if someone else got there first) |
 | `GET` | `/audit` | Admin | Audit log, paged. Filter: `?actorUserId=&action=&targetType=&targetId=&fromDate=&toDate=` |
 | `GET` | `/dashboard` | Admin | Summary stats for the dashboard. `?fresh=true` bypasses the 30-second cache |
 
 ### `PUT /config/{key}`
 
-Body: `{ "value": "..." }`. The key is matched case-insensitively; an unknown one is `404`. The
+Body: `{ "value": "...", "expectedUpdatedDate": "..." }` (the second field optional). The key is matched case-insensitively; an unknown one is `404`. The
 value is validated **per key** before it is stored — a configuration editor that accepts a value
 the system cannot use only moves the failure somewhere harder to find — and stored **normalized**
 (trimmed, booleans lower-cased, URLs and resource ids without a trailing slash), so two admins
@@ -451,9 +475,40 @@ answered `409 read-only`; now the rows are gone entirely (the next `db seed-refe
 `GET /config` does not list them, and `PUT` on one is the ordinary `404`. What replaced each is in the
 [Configuration Reference](/foundry-gate/reference/configuration/#retired-keys).
 
+**Optimistic concurrency is opt-in per request.** Send back the `updatedDate` you read from
+`GET /config` as `expectedUpdatedDate` and the write is refused with `409` if anyone has changed the
+row since — the `detail` names the value it holds now, when it changed and, when the row has an
+editor, who they were, so a config page can say "Ada Lovelace changed this while you were editing"
+without another round trip. Omit the field and the write is last-write-wins, exactly as before
+([#170](https://github.com/kolatts/foundry-gate/issues/170)). The check runs *before* the per-key
+value rule, so a stale write with a bad value is the `409`, not the `400`: a caller whose view of the
+row is out of date has to re-read it whatever they were trying to write. The timestamp is compared as
+an instant, so a client that normalizes to UTC still matches.
+
+**Changing `DefaultMonthlyTokenQuota` re-resolves the developers it governs.** That key is level 5 of
+the quota precedence chain, so the moment it changes, every **active** user who falls through to it —
+no `isUnlimited`, no user quota, no group that would win at levels 3–4 — plus anyone whose current
+allocation already reads `SystemDefault`, is re-resolved for the current period **in the same
+transaction**, which moves their APIM subscription to the new tier product
+([#193](https://github.com/kolatts/foundry-gate/issues/193)). Before this, the key changed and nobody
+moved: the allocation row said one thing, the gateway enforced another, and the first thing to notice
+was usually the scheduled monthly reset — which runs in the Functions host, has no APIM management
+client, and so could only log the divergence it was creating. Re-saving the key's existing value
+re-resolves nobody, and deactivated users are skipped (their key is revoked; there is nothing to move).
+
+A failed gateway move fails the whole edit, so **the database never claims a default the gateway is not
+enforcing**. The converse is not guaranteed, and on a large fork it is the likelier failure: the
+subscriptions are re-scoped one at a time, so if developer 200 of 400 throws, 199 have already been
+moved at the gateway and nothing commits — the gateway then enforces a default SQL never recorded. The
+next reset or config edit converges it, and the direction is the safe one (the record is behind the
+enforcement, not ahead of it), but it is a real partial state. It is the same shape the monthly reset
+has, and [#199](https://github.com/kolatts/foundry-gate/issues/199) — which is about not doing thousands
+of ARM calls inside one request at all — is where it gets solved.
+
 Every accepted edit stamps `updatedByUserId` (the calling admin) and `updatedDate`, and writes one
-`config.updated` audit row with `{ key, before, after }` — in the same transaction as the change, so
-a value can never move without a trail. The calling admin must already have a FoundryGate user row
+`config.updated` audit row with `{ key, before, after, reresolvedUserCount, tierChangeCount }` — in the
+same transaction as the change, so a value can never move without a trail, and an admin who changed one
+value and moved 200 developers between products has an entry that says so. The calling admin must already have a FoundryGate user row
 (`GET /users/me` provisions one) or the write is `403`; reading `/config` needs no such row.
 
 **A deploy never reverts an edit.** `SystemConfiguration`'s value, timestamp and editor columns are

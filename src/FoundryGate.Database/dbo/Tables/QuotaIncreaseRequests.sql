@@ -44,6 +44,13 @@ CREATE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_UserId_StatusType]
     ON [dbo].[QuotaIncreaseRequests]([UserId] ASC, [StatusType] ASC);
 GO
 
+-- One PENDING request per user per period (#147). Filtered on StatusType = 0 (Pending) so a decided
+-- request never blocks the next submission for the same month; without the filter a developer would be
+-- locked out for the rest of the period by their own approved request.
+CREATE UNIQUE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_PendingPerUserPeriod]
+    ON [dbo].[QuotaIncreaseRequests]([UserId] ASC, [PeriodYear] ASC, [PeriodMonth] ASC) WHERE ([StatusType] = 0);
+GO
+
 CREATE NONCLUSTERED INDEX [IX_QuotaIncreaseRequests_RequestedByUserId]
     ON [dbo].[QuotaIncreaseRequests]([RequestedByUserId] ASC);
 GO

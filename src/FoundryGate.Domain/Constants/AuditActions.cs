@@ -59,6 +59,14 @@ public static class AuditActions
     /// <summary>PUT /requests/{id}/reject.</summary>
     public const string QuotaIncreaseRejected = "quota.rejected";
 
+    /// <summary>
+    /// One row per run of the stale-request sweep (#159): requests left pending past the billing period
+    /// they were filed for are closed as <c>Rejected</c> with a system note and no reviewer. Written by
+    /// the monthly reset (both the Functions timer and <c>POST /quota/reset</c>) and by the Api's
+    /// <c>ExpireStaleAsync</c>; the details carry the count and the ids, never one row per request.
+    /// </summary>
+    public const string QuotaRequestsExpired = "quota.requests-expired";
+
     // -- Keys (spec 4.5, 5.2, 5.3) --
 
     public const string KeyProvisioned = "key.provisioned";

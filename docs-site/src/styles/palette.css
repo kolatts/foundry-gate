@@ -1,0 +1,114 @@
+/* Foundry Gate design tokens — the palette itself, no font @imports.
+   Light is the default palette on :root; dark values apply when the visitor's system
+   prefers dark (unless they've explicitly picked light) or when Starlight's theme
+   select sets data-theme="dark"/"light" (persisted to localStorage by Starlight itself).
+   Split out from tokens.css (#114 PR review) so index.astro can import just the
+   palette without re-triggering the @fontsource CSS @imports a second time — doing
+   that broke Vite's asset-URL rewriting for the font files (unresolved "./files/..."
+   paths, 404s in the built site). tokens.css imports this file plus the fonts; import
+   THIS file (not tokens.css) from anywhere that only needs the --fg-* variables. */
+
+:root {
+  /* Background scale (lightest → darkest) */
+  --fg-bg-base:     #F8FAFC;
+  --fg-bg-surface:  #EEF2F7;
+  --fg-bg-raised:   #FFFFFF;
+  --fg-bg-overlay:  #E3E9F0;
+  --fg-border-subtle: #D7DFE9;
+  --fg-border-strong: #B7C3D1;
+
+  /* Azure primary — brand blue stays constant across themes */
+  --fg-azure-dim:   #0558A0;
+  --fg-azure:       #0078D4;
+  /* -hover and -neon are also used as text/heading/link colour (see CONVENTIONS.md
+     §Architecture diagrams + diagrams.css); the dark-tuned bright variants read at
+     ~1.7-2.6:1 on a light background, so light mode gets darker, WCAG AA-safe
+     variants of the same hue. Dark mode keeps the original bright accents below. */
+  --fg-azure-hover: #1462A8;
+  --fg-azure-neon:  #0369A1;
+
+  /* Ember — quota / spend / alerts. Same rationale as azure-hover/-neon above: -soft
+     and -hot are used as status text, so light mode gets darker, legible variants. */
+  --fg-ember-soft:  #B45309;
+  --fg-ember:       #F58025;
+  --fg-ember-hot:   #C2410C;
+
+  /* Text scale — legible on a light bg (body text ≥ 4.5:1 against --fg-bg-base) */
+  --fg-text-primary:   #10192A;  /* headings, primary content */
+  --fg-text-secondary: #33445A;  /* body text — main reading copy */
+  --fg-text-muted:     #5C6E82;  /* labels, captions, sidebar */
+  --fg-text-disabled:  #A7B3C0;
+
+  /* Semantic — also darkened for light-mode text legibility; see azure/ember note above */
+  --fg-success: #15803D;
+  --fg-info:    #0E7490;
+
+  /* Ambient background art (nebula / aurora orbs) was designed against a dark ground;
+     dial it back in light mode instead of redrawing it (#114). */
+  --fg-ambient-nebula-opacity: 0.05;
+  --fg-ambient-orb-opacity: 0.45;
+
+  /* logo-cropped.png bakes in a silver-gradient wordmark tuned for a near-black
+     background; darken it in light mode so "foundry" stays legible against white.
+     A proper light-mode logo asset is tracked separately (#114 follow-up). */
+  --fg-logo-filter: brightness(0.45) saturate(1.15);
+}
+
+/* ── Dark theme — explicit choice via Starlight's ThemeSelect (data-theme, persisted
+   to localStorage as "starlight-theme") ── */
+[data-theme='dark'] {
+  --fg-bg-base:     #07090F;
+  --fg-bg-surface:  #0C1420;
+  --fg-bg-raised:   #101B2A;
+  --fg-bg-overlay:  #152234;
+  --fg-border-subtle: #1C2E44;
+  --fg-border-strong: #2A4260;
+
+  --fg-azure-hover: #3BA3E8;
+  --fg-azure-neon:  #4DCFFF;
+
+  --fg-ember-soft:  #FFB347;
+  --fg-ember-hot:   #FF5400;
+
+  --fg-text-primary:   #EDF2F7;
+  --fg-text-secondary: #C4D0DC;
+  --fg-text-muted:     #7E96AD;
+  --fg-text-disabled:  #3A4F63;
+
+  --fg-success: #22C55E;
+  --fg-info:    #38BDF8;
+
+  --fg-ambient-nebula-opacity: 0.32;
+  --fg-ambient-orb-opacity: 1;
+  --fg-logo-filter: brightness(1.1) drop-shadow(0 0 8px rgba(77,207,255,0.2));
+}
+
+/* ── Dark theme — system preference, unless the visitor explicitly picked light ── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --fg-bg-base:     #07090F;
+    --fg-bg-surface:  #0C1420;
+    --fg-bg-raised:   #101B2A;
+    --fg-bg-overlay:  #152234;
+    --fg-border-subtle: #1C2E44;
+    --fg-border-strong: #2A4260;
+
+    --fg-azure-hover: #3BA3E8;
+    --fg-azure-neon:  #4DCFFF;
+
+    --fg-ember-soft:  #FFB347;
+    --fg-ember-hot:   #FF5400;
+
+    --fg-text-primary:   #EDF2F7;
+    --fg-text-secondary: #C4D0DC;
+    --fg-text-muted:     #7E96AD;
+    --fg-text-disabled:  #3A4F63;
+
+    --fg-success: #22C55E;
+    --fg-info:    #38BDF8;
+
+    --fg-ambient-nebula-opacity: 0.32;
+    --fg-ambient-orb-opacity: 1;
+  --fg-logo-filter: brightness(1.1) drop-shadow(0 0 8px rgba(77,207,255,0.2));
+  }
+}

@@ -110,9 +110,13 @@ public class DashboardServiceTests : InMemoryDatabaseTest
     [Fact]
     public async Task Pending_request_count_ignores_reviewed_requests()
     {
+        // Two *different* requesters for the two pending rows: one user can hold at most one pending
+        // request per period (#147's filtered unique index), and their decided rows are what this is
+        // actually checking are excluded from the count.
         var user = await SeedUserAsync("Requester");
+        var other = await SeedUserAsync("Other requester");
         await SeedRequestAsync(user, QuotaRequestStatusType.Pending);
-        await SeedRequestAsync(user, QuotaRequestStatusType.Pending);
+        await SeedRequestAsync(other, QuotaRequestStatusType.Pending);
         await SeedRequestAsync(user, QuotaRequestStatusType.Approved);
         await SeedRequestAsync(user, QuotaRequestStatusType.Rejected);
 
