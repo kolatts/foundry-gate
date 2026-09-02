@@ -138,6 +138,48 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
     }
 
     /// <inheritdoc />
+    public async Task<FoundryDeploymentResponse> UpdateCapacityAsync(string accountName, string deploymentName, string skuName, int capacity, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(deploymentName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(skuName);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+
+        var deployment = armClient.GetCognitiveServicesAccountDeploymentResource(
+            CognitiveServicesAccountDeploymentResource.CreateResourceIdentifier(
+                RequiredSubscriptionId, RequiredResourceGroup, accountName, deploymentName));
+
+        // PatchResourceTagsAndSku is the body of Deployments_Update — a PATCH carrying { sku, tags }
+        // and nothing else. Same WaitUntil.Started reasoning as create: ARM may report Updating for a
+        // while and an HTTP request must not block on it.
+        var patch = new PatchResourceTagsAndSku
+        {
+            Sku = new CognitiveServicesSku(skuName) { Capacity = capacity },
+        };
+
+        try
+        {
+            var operation = await deployment.UpdateAsync(WaitUntil.Started, patch, cancellationToken).ConfigureAwait(false);
+            if (operation.HasValue)
+            {
+                return Map(accountName, operation.Value.Data);
+            }
+        }
+        catch (RequestFailedException ex) when (IsAccountMissing(ex))
+        {
+            throw new FoundryAccountNotFoundException(accountName, ex);
+        }
+        catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
+        {
+            throw new KeyNotFoundException($"Deployment '{deploymentName}' was not found in Foundry account '{accountName}'.");
+        }
+
+        return await GetDeploymentAsync(accountName, deploymentName, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                $"Deployment '{deploymentName}' in account '{accountName}' was resized by Azure but could not be read back.");
+    }
+
+    /// <inheritdoc />
     public async Task<bool> DeleteDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);

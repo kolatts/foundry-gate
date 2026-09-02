@@ -384,6 +384,126 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
         Assert.Empty(_client.DeleteCalls);
     }
 
+    [Fact]
+    public async Task UpdateCapacityAsync_patches_the_sku_capacity_in_place_and_audits_before_and_after()
+    {
+        // The one mutation that is safe on an existing deployment (#130): ARM's Deployments_Update is a
+        // PATCH whose body is { sku, tags } — no model, so it is not the re-PUT that wedges a create-once
+        // resource. The sku name goes back unchanged because ARM's patch body requires it.
+        _client.Seed(Primary, "gpt-4-1-mini", capacity: 10);
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+
+        var updated = await service.UpdateCapacityAsync(Primary, "gpt-4-1-mini", new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 }, CancellationToken.None);
+
+        Assert.Equal(25, updated.Capacity);
+        Assert.Equal("gpt-4.1-mini", updated.ModelName);
+        Assert.Equal("2025-04-14", updated.ModelVersion);
+        Assert.Equal([(Primary, "gpt-4-1-mini", "GlobalStandard", 25)], _client.CapacityCalls);
+        Assert.Empty(_client.CreateCalls);
+        Assert.Empty(_client.DeleteCalls);
+
+        var audit = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.FoundryDeploymentCapacityChanged);
+        Assert.Equal(actor.UserId, audit.ActorUserId);
+        Assert.Equal($"{Primary}/gpt-4-1-mini", audit.TargetId);
+        Assert.Contains("\"before\":10", audit.Details, StringComparison.Ordinal);
+        Assert.Contains("\"after\":25", audit.Details, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UpdateCapacityAsync_to_the_capacity_it_already_has_touches_nothing()
+    {
+        // A PATCH to the same value changes nothing at ARM; an audit row claiming otherwise would be a
+        // lie, and the call would be pure churn on a create-once resource.
+        _client.Seed(Primary, "gpt-4-1-mini", capacity: 10);
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+
+        var unchanged = await service.UpdateCapacityAsync(Primary, "gpt-4-1-mini", new UpdateFoundryDeploymentCapacityRequest { Capacity = 10 }, CancellationToken.None);
+
+        Assert.Equal(10, unchanged.Capacity);
+        Assert.Empty(_client.CapacityCalls);
+        Assert.Empty(Context.ChangeTracker.Entries<AuditLog>());
+    }
+
+    [Fact]
+    public async Task UpdateCapacityAsync_refuses_an_Anthropic_deployment_until_a_live_PATCH_has_been_proven()
+    {
+        // Not the same reason as create and delete: the reasoning says a capacity PATCH is safe, but
+        // nobody has run one against a live Claude deployment, and E-007 is what happens when a Claude
+        // write is assumed rather than observed.
+        _client.Seed(Primary, "claude-sonnet-4-5", "Anthropic", "claude-sonnet-4-5", "20250929", capacity: 5);
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+
+        var exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateCapacityAsync(Primary, "claude-sonnet-4-5", new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 }, CancellationToken.None));
+
+        Assert.Contains("#205", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(_client.CapacityCalls);
+        Assert.Equal(5, (await _client.GetDeploymentAsync(Primary, "claude-sonnet-4-5", CancellationToken.None))!.Capacity);
+        Assert.Empty(Context.ChangeTracker.Entries<AuditLog>());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(ValidationConstants.FoundryDeploymentMaxCapacity + 1)]
+    public async Task UpdateCapacityAsync_refuses_a_capacity_out_of_range_before_any_ARM_call(int capacity)
+    {
+        _client.Seed(Primary, "gpt-4-1-mini");
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateCapacityAsync(Primary, "gpt-4-1-mini", new UpdateFoundryDeploymentCapacityRequest { Capacity = capacity }, CancellationToken.None));
+
+        Assert.Empty(_client.CapacityCalls);
+    }
+
+    [Fact]
+    public async Task UpdateCapacityAsync_throws_KeyNotFound_for_an_absent_deployment_or_an_unconfigured_account()
+    {
+        _client.Seed("not-ours", "gpt-4-1-mini");
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+        var request = new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 };
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.UpdateCapacityAsync(Primary, "ghost", request, CancellationToken.None));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.UpdateCapacityAsync("not-ours", "gpt-4-1-mini", request, CancellationToken.None));
+
+        Assert.Empty(_client.CapacityCalls);
+    }
+
+    [Fact]
+    public async Task UpdateCapacityAsync_refuses_an_unprovisioned_caller_before_any_ARM_call()
+    {
+        _client.Seed(Primary, "gpt-4-1-mini");
+        var service = CreateService("no-user-row");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.UpdateCapacityAsync(Primary, "gpt-4-1-mini", new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 }, CancellationToken.None));
+
+        Assert.Empty(_client.CapacityCalls);
+    }
+
+    [Fact]
+    public async Task UpdateCapacityAsync_audits_even_when_the_caller_disconnects_the_moment_ARM_accepts()
+    {
+        // CONVENTIONS.md commit point: once ARM has taken the change, a client hanging up must not turn
+        // an accepted resize into an unaudited one.
+        _client.Seed(Primary, "gpt-4-1-mini", capacity: 10);
+        var actor = await SeedUserAsync("Ada Lovelace");
+        var service = CreateService(actor.EntraObjectId);
+        using var cancellation = new CancellationTokenSource();
+        _client.OnUpdateCapacity = (_, _) => cancellation.Cancel();
+
+        var updated = await service.UpdateCapacityAsync(Primary, "gpt-4-1-mini", new UpdateFoundryDeploymentCapacityRequest { Capacity = 25 }, cancellation.Token);
+
+        Assert.Equal(25, updated.Capacity);
+        Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.FoundryDeploymentCapacityChanged).ToListAsync());
+    }
+
     private static CreateFoundryDeploymentRequest Request(string accountName, string deploymentName) =>
         new()
         {

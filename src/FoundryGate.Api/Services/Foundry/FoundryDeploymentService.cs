@@ -253,6 +253,102 @@ public sealed class FoundryDeploymentService(
             });
     }
 
+    /// <inheritdoc />
+    public async Task<FoundryDeploymentResponse> UpdateCapacityAsync(string accountName, string deploymentName, UpdateFoundryDeploymentCapacityRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(deploymentName);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var capacity = request.Capacity;
+        if (capacity < 1 || capacity > ValidationConstants.FoundryDeploymentMaxCapacity)
+        {
+            // The record's [Range] already refuses this through model binding; the service repeats it
+            // because the service is the contract, and nothing else stops a direct caller sending 0.
+            throw new ArgumentException(
+                $"Capacity must be between 1 and {ValidationConstants.FoundryDeploymentMaxCapacity} thousand tokens per minute.",
+                nameof(request));
+        }
+
+        // 403 for an unprovisioned caller before any ARM call — see the interface remarks.
+        _ = await currentUser.GetRequiredUserAsync(cancellationToken);
+
+        var account = TryResolveConfiguredAccount(accountName)
+            ?? throw new KeyNotFoundException($"'{accountName}' is not one of this gateway's Foundry accounts.");
+
+        // Read first: the format guard, the ARM patch body (which needs the current sku name) and the
+        // audit row's "before" all come from the existing deployment.
+        var existing = await GetExistingAsync(account, deploymentName, cancellationToken)
+            ?? throw DeploymentNotFound(account, deploymentName);
+
+        if (string.Equals(existing.ModelFormat, AnthropicFormat, StringComparison.OrdinalIgnoreCase))
+        {
+            // Not the same reason as create and delete. Those are blocked by real, observed limits
+            // (#126/#107, E-006/E-007). This one is blocked only because nobody has run a capacity
+            // PATCH against a live Claude deployment yet — and E-007's lesson is that Claude
+            // deployments punish assumptions, however sound the reasoning. The reasoning here is sound:
+            // ARM's Deployments_Update body schema is { sku, tags }, with no model and no
+            // modelProviderData to re-send, so it is not the re-PUT that wedged one before.
+            throw new ArgumentException(
+                $"Deployment '{existing.DeploymentName}' is an Anthropic (Claude) deployment, whose capacity the API does not change yet. " +
+                "The underlying operation is a PATCH of sku.capacity — it cannot re-send the model or its Marketplace attestation, so it " +
+                "should be safe — but it has never been run against a live Claude deployment, and a failed Claude write has wedged a " +
+                "subscription's Marketplace agreement before (see GitHub issue #205). Resize it in the Azure portal until that is confirmed. " +
+                "OpenAI-format deployments can be resized here.");
+        }
+
+        if (existing.Capacity == capacity)
+        {
+            // A PATCH to the value it already holds changes nothing; an audit row saying otherwise
+            // would be a lie, and the ARM call would be pure churn on a create-once resource.
+            logger.LogDebug(
+                "Foundry deployment {Account}/{Deployment} is already at capacity {Capacity}; nothing to change",
+                account,
+                existing.DeploymentName,
+                capacity);
+            return existing;
+        }
+
+        FoundryDeploymentResponse updated;
+        try
+        {
+            updated = await managementClient.UpdateCapacityAsync(account, existing.DeploymentName, existing.SkuName, capacity, cancellationToken);
+        }
+        catch (FoundryAccountNotFoundException ex)
+        {
+            throw MissingAccount(ex);
+        }
+
+        // ---- commit point: ARM has accepted the resize. Nothing below observes cancellationToken. ----
+        // The developer view carries provisioningState, which a resize can move, so the cache goes.
+        cache.Remove(ModelsCacheKey);
+
+        logger.LogInformation(
+            "Foundry deployment {Account}/{Deployment} capacity change accepted: {Before} -> {After} (thousand TPM); state {State}",
+            account,
+            updated.DeploymentName,
+            existing.Capacity,
+            capacity,
+            updated.ProvisioningState);
+
+        await AuditAfterCommitAsync(
+            AuditActions.FoundryDeploymentCapacityChanged,
+            account,
+            updated.DeploymentName,
+            new
+            {
+                AccountName = account,
+                updated.DeploymentName,
+                updated.ModelFormat,
+                updated.ModelName,
+                updated.SkuName,
+                before = existing.Capacity,
+                after = capacity,
+            });
+
+        return updated;
+    }
+
     /// <summary>
     /// Audit + save for a change ARM has already accepted. Runs on <see cref="CancellationToken.None"/>:
     /// the caller's disconnect must not turn an accepted change into an unaudited one. If the save

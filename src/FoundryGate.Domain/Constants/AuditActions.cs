@@ -99,6 +99,13 @@ public static class AuditActions
     public const string FoundryDeploymentCreated = "foundry.deployment.created";
     public const string FoundryDeploymentDeleted = "foundry.deployment.deleted";
 
+    /// <summary>
+    /// <c>PATCH /foundry/deployments/{account}/{name}/capacity</c> — a live TPM rebalance (#130).
+    /// Details carry <c>{ before, after }</c> capacities. Named for what changed rather than
+    /// "resized", matching <see cref="KeyTierChanged"/>; the deployment itself is untouched.
+    /// </summary>
+    public const string FoundryDeploymentCapacityChanged = "foundry.deployment.capacity-changed";
+
     // -- Config (spec 4.6) --
 
     public const string ConfigUpdated = "config.updated";

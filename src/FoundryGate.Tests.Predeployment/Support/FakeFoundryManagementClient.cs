@@ -29,8 +29,20 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
     /// <summary>Every delete the service asked for, in order.</summary>
     public List<(string AccountName, string DeploymentName)> DeleteCalls { get; } = [];
 
+    /// <summary>Every capacity PATCH the service asked for, in order — including the sku name it echoed back (#130).</summary>
+    public List<(string AccountName, string DeploymentName, string SkuName, int Capacity)> CapacityCalls { get; } = [];
+
     /// <summary>State a freshly created deployment reports — ARM's initial response is typically <c>Creating</c>.</summary>
     public string CreatedProvisioningState { get; set; } = "Creating";
+
+    /// <summary>State a freshly resized deployment reports — ARM applies capacity asynchronously.</summary>
+    public string UpdatedProvisioningState { get; set; } = "Updating";
+
+    /// <summary>When set, <see cref="UpdateCapacityAsync"/> throws this instead of resizing — simulates ARM refusing a quota increase.</summary>
+    public Exception? ThrowOnUpdateCapacity { get; set; }
+
+    /// <summary>Runs inside <see cref="UpdateCapacityAsync"/> after the call is recorded — e.g. to cancel the request token "while ARM was working".</summary>
+    public Action<string, string>? OnUpdateCapacity { get; set; }
 
     /// <summary>When set, <see cref="CreateDeploymentAsync"/> throws this instead of creating — simulates an ARM rejection.</summary>
     public Exception? ThrowOnCreate { get; set; }
@@ -118,6 +130,30 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
             request.Capacity,
             CreatedProvisioningState);
         return Task.FromResult(created);
+    }
+
+    /// <inheritdoc />
+    public Task<FoundryDeploymentResponse> UpdateCapacityAsync(string accountName, string deploymentName, string skuName, int capacity, CancellationToken cancellationToken)
+    {
+        CapacityCalls.Add((accountName, deploymentName, skuName, capacity));
+        OnUpdateCapacity?.Invoke(accountName, deploymentName);
+
+        if (ThrowOnUpdateCapacity is not null)
+        {
+            throw ThrowOnUpdateCapacity;
+        }
+
+        var deployments = RequireAccount(accountName);
+        if (!deployments.TryGetValue(deploymentName, out var existing))
+        {
+            throw new KeyNotFoundException($"Fake: deployment '{deploymentName}' was not found in '{accountName}'.");
+        }
+
+        // ARM reports Updating while it applies the new capacity, the same way a create reports
+        // Creating; the model, version and name are untouched because the PATCH body cannot carry them.
+        var updated = existing with { Capacity = capacity, SkuName = skuName, ProvisioningState = UpdatedProvisioningState };
+        deployments[deploymentName] = updated;
+        return Task.FromResult(updated);
     }
 
     /// <inheritdoc />

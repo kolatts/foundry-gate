@@ -65,6 +65,30 @@ public sealed class FoundryController(IFoundryDeploymentService deploymentServic
             created);
     }
 
+    /// <summary>
+    /// Rebalances one deployment's TPM in place: <c>{ "capacity": 25 }</c> sets ARM's
+    /// <c>sku.capacity</c> to 25 (thousands of tokens per minute) and returns the deployment as ARM
+    /// reported it on acceptance. <c>404</c> for an unknown account or deployment; <c>400</c> for a
+    /// capacity out of range or an Anthropic-format deployment (#130). Asking for the capacity it
+    /// already has is a no-op that returns the deployment unchanged.
+    /// </summary>
+    /// <remarks>
+    /// PATCH, not PUT, all the way down: the ARM operation is <c>Deployments_Update</c>, whose body
+    /// carries <c>sku</c> and <c>tags</c> only — the model is never re-sent, which is what separates
+    /// this from the create path the API refuses to point at an existing deployment.
+    /// </remarks>
+    [HttpPatch("deployments/{accountName}/{deploymentName}/capacity")]
+    [Authorize(Policy = PolicyNames.AdminOnly)]
+    [ProducesResponseType<FoundryDeploymentResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<FoundryDeploymentResponse> UpdateDeploymentCapacityAsync(
+        string accountName,
+        string deploymentName,
+        [FromBody] UpdateFoundryDeploymentCapacityRequest request,
+        CancellationToken cancellationToken) =>
+        deploymentService.UpdateCapacityAsync(accountName, deploymentName, request, cancellationToken);
+
     /// <summary>Deletes one deployment (<c>204</c>). Never recreates; <c>404</c> when absent.</summary>
     [HttpDelete("deployments/{accountName}/{deploymentName}")]
     [Authorize(Policy = PolicyNames.AdminOnly)]

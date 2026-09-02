@@ -45,6 +45,28 @@ public interface IFoundryManagementClient
     Task<FoundryDeploymentResponse> CreateDeploymentAsync(CreateFoundryDeploymentRequest request, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Changes a live deployment's <c>sku.capacity</c> (thousands of TPM) in place and returns it as
+    /// ARM reports it on acceptance — the one mutation that is safe on an existing deployment (#130).
+    /// </summary>
+    /// <remarks>
+    /// <b>PATCH, never PUT.</b> This is ARM's <c>Deployments_Update</c>
+    /// (<c>PATCH .../deployments/{name}</c>), whose request body schema is <c>{ sku, tags }</c> and has
+    /// no <c>model</c> field — so it structurally cannot re-send the model or the Marketplace
+    /// attestation, which is what makes it different from <see cref="CreateDeploymentAsync"/>'s
+    /// <c>CreateOrUpdate</c> PUT (CLAUDE.md; E-006/E-007). ARM requires the sku's <c>name</c> alongside
+    /// the capacity, so the caller passes the deployment's current
+    /// <see cref="FoundryDeploymentResponse.SkuName"/> back unchanged.
+    /// </remarks>
+    /// <param name="accountName">The Foundry account the deployment lives in.</param>
+    /// <param name="deploymentName">The deployment to resize.</param>
+    /// <param name="skuName">The deployment's current <c>sku.name</c> — sent unchanged; ARM's patch body requires it.</param>
+    /// <param name="capacity">New <c>sku.capacity</c>, in thousands of TPM.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="FoundryAccountNotFoundException">The account itself does not exist.</exception>
+    /// <exception cref="KeyNotFoundException">No deployment of that name exists in the account.</exception>
+    Task<FoundryDeploymentResponse> UpdateCapacityAsync(string accountName, string deploymentName, string skuName, int capacity, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Starts deleting a deployment. <see langword="true"/> when ARM accepted the delete,
     /// <see langword="false"/> when no such deployment existed — nothing is retried or
     /// recreated either way.
