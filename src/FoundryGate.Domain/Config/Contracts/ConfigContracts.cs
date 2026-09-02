@@ -11,11 +11,17 @@ namespace FoundryGate.Domain.Config.Contracts;
 /// Null for a seeded row an admin has never edited (the data-layer entity is nullable for the
 /// same reason — reconciled in #92, see the row's <c>[DoNotUpdate]</c> seeding semantics).
 /// </param>
+/// <param name="UpdatedByDisplayName">
+/// The editing admin's display name, joined from <c>SystemConfiguration.UpdatedByUser</c> so the
+/// config editor (#55) can render "last changed by" without a second round trip per row. Null
+/// exactly when <paramref name="UpdatedByUserId"/> is.
+/// </param>
 public record SystemConfigEntryResponse(
     string Key,
     string Value,
     DateTimeOffset UpdatedDate,
-    int? UpdatedByUserId);
+    int? UpdatedByUserId,
+    string? UpdatedByDisplayName);
 
 /// <summary>PUT /config/{key} body. Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).</summary>
 public record UpdateSystemConfigRequest
