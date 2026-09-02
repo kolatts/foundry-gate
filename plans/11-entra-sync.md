@@ -35,9 +35,11 @@ people. Added memberships carry `AddedByUserId = null` — the system actor, bec
 the membership and the audit trail must not credit the calling admin. Orphan Entra members (no local
 `User`) are skipped, logged at Warning and counted in `GroupSyncResult.SkippedUnknownUserCount`; a
 non-zero count means `POST /users/sync` should run first. Quota re-resolution covers every **active**
-user whose membership moved, in the same save. A group with no `EntraGroupId` is a `400`, as is a host
-with `Entra:Enabled` false (`DisabledEntraDirectoryClient`). One `group.entra-synced` audit row per
-group per run.
+user whose membership moved, in the same save. A group with no `EntraGroupId` is a `400` (a real caller
+error); a host with `Entra:Enabled` false is a `503` — `DisabledEntraDirectoryClient` was moved from
+`ArgumentException` to `FeatureNotConfiguredException` in the same PR, since nothing about the request
+is wrong and CONVENTIONS.md's optional-feature rule postdates that class. One `group.entra-synced`
+audit row per group per run.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/GroupsController.cs`

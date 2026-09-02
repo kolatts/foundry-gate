@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FoundryGate.Api.Services.Entra;
+using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Groups.Contracts;
@@ -18,7 +19,7 @@ namespace FoundryGate.Tests.Predeployment.Api.Endpoints;
 /// <summary>
 /// <c>/api/v1/groups</c> through the real pipeline (#30, #31, #41): the admin-only auth matrix, the
 /// created/updated/deleted status codes and their conflicts, the paged envelopes, the member roster,
-/// and Entra sync — <c>400</c> on the default host (<c>Entra:Enabled</c> false) and the real
+/// and Entra sync — <c>503</c> on the default host (<c>Entra:Enabled</c> false) and the real
 /// reconciliation on a derived host whose directory is a <see cref="FakeEntraDirectoryClient"/>.
 /// </summary>
 /// <remarks>
@@ -265,10 +266,55 @@ public class GroupsEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
         Assert.Equal(5_000_000, allocation.AllocatedTokens); // back to the system default
     }
 
+    [Fact]
+    public async Task Manual_membership_edits_on_an_Entra_linked_group_return_409()
+    {
+        // The trap: without this, the add succeeds and the next sync-entra silently undoes it.
+        var admin = await factory.SeedUserAsync();
+        using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
+        var group = await CreateGroupAsync(client, Marker("DirectoryOwned"), entraGroupId: Guid.NewGuid().ToString());
+        var user = await factory.SeedUserAsync();
+
+        var add = await client.PostAsJsonAsync(
+            new Uri($"{GroupsPath}/{group.GroupId}/members", UriKind.Relative),
+            new AddGroupMemberRequest { UserId = user.UserId },
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Conflict, add.StatusCode);
+        var problem = await add.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
+        Assert.NotNull(problem);
+        Assert.Contains("sync-entra", problem.Detail, StringComparison.Ordinal);
+
+        await using (var seed = factory.CreateDbContext())
+        {
+            _ = seed.GroupMembers.Add(new GroupMember { GroupId = group.GroupId, UserId = user.UserId });
+            _ = await seed.SaveChangesAsync();
+        }
+
+        var remove = await client.DeleteAsync(new Uri($"{GroupsPath}/{group.GroupId}/members/{user.UserId}", UriKind.Relative));
+        Assert.Equal(HttpStatusCode.Conflict, remove.StatusCode);
+    }
+
+    [Fact]
+    public async Task Create_refuses_a_second_group_linked_to_the_same_Entra_group()
+    {
+        var admin = await factory.SeedUserAsync();
+        using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
+        var entraGroupId = Guid.NewGuid().ToString();
+        _ = await CreateGroupAsync(client, Marker("LinkOne"), entraGroupId: entraGroupId);
+
+        var response = await client.PostAsJsonAsync(
+            new Uri(GroupsPath, UriKind.Relative),
+            new CreateGroupRequest { Name = Marker("LinkTwo"), EntraGroupId = entraGroupId },
+            JsonOptions);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
     // -- Entra sync --
 
     [Fact]
-    public async Task Sync_entra_on_a_host_with_Entra_disabled_returns_400_naming_the_setting()
+    public async Task Sync_entra_on_a_host_with_Entra_disabled_returns_503_naming_the_setting()
     {
         var admin = await factory.SeedUserAsync();
         using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
@@ -276,7 +322,8 @@ public class GroupsEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
 
         var response = await client.PostAsync(new Uri($"{GroupsPath}/{group.GroupId}/sync-entra", UriKind.Relative), null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        // 503, not 400: the request is fine, the host is not configured for the feature.
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
         Assert.NotNull(problem);
         Assert.Contains("Entra:Enabled", problem.Detail, StringComparison.Ordinal);
@@ -309,7 +356,14 @@ public class GroupsEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
 
         var joining = await factory.SeedUserAsync();
         var departing = await factory.SeedUserAsync();
-        _ = await AddMemberAsync(seedClient, group.GroupId, departing.UserId);
+
+        // Seeded directly, not via POST /members: a linked group's roster is Entra's, and the endpoint
+        // refuses manual edits (see Manual_membership_edits_on_an_Entra_linked_group_return_409).
+        await using (var seed = factory.CreateDbContext())
+        {
+            _ = seed.GroupMembers.Add(new GroupMember { GroupId = group.GroupId, UserId = departing.UserId });
+            _ = await seed.SaveChangesAsync();
+        }
 
         var directory = new FakeEntraDirectoryClient();
         directory.GroupMembers[entraGroupId] = [joining.EntraObjectId, Guid.NewGuid().ToString()];

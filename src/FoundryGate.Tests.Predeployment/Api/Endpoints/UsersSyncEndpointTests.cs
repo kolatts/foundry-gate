@@ -16,7 +16,7 @@ namespace FoundryGate.Tests.Predeployment.Api.Endpoints;
 
 /// <summary>
 /// <c>POST /api/v1/users/sync</c> through the real pipeline: the auth matrix (401/403/200), the
-/// <c>400</c> the default host returns while <c>Entra:Enabled</c> is false, and — on a derived host
+/// <c>503</c> the default host returns while <c>Entra:Enabled</c> is false, and — on a derived host
 /// whose <see cref="IEntraDirectoryClient"/> is a <see cref="FakeEntraDirectoryClient"/> — the 200
 /// body, the 403 for an unprovisioned admin, and the 409 empty-directory guard.
 /// </summary>
@@ -52,14 +52,14 @@ public class UsersSyncEndpointTests(ApiTestFactory factory) : IClassFixture<ApiT
     }
 
     [Fact]
-    public async Task Admin_on_a_host_with_Entra_disabled_gets_400_naming_the_setting()
+    public async Task Admin_on_a_host_with_Entra_disabled_gets_503_naming_the_setting()
     {
         var admin = await factory.SeedUserAsync();
         using var client = factory.CreateClientAs(admin.EntraObjectId, isAdmin: true);
 
         var response = await client.PostAsync(new Uri(SyncPath, UriKind.Relative), null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(JsonOptions);
         Assert.NotNull(problem);
         Assert.Contains("Entra:Enabled", problem.Detail, StringComparison.Ordinal);

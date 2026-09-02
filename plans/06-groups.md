@@ -20,7 +20,11 @@ Deletion is a **hard** delete of the group and its `GroupMember` rows — there 
 service (case-insensitively, so SQL Server and the SQLite test harness agree) and by a new unique index
 `IX_Groups_Name`, so two concurrent creates cannot both win. Quota values go through
 `GatewayTierMapper.EnsureValidQuota` (D-013), and a quota change re-resolves every **active** member in
-the same unit of work — which is what moves their APIM tier product.
+the same unit of work — which is what moves their APIM tier product. Because that re-resolution is an
+external side effect, every write path resolves the actor and makes every refusal *before* it, and
+commits on `CancellationToken.None` once the gateway has accepted a move (CONVENTIONS.md; #163 sweeps
+the callers outside this area). An Entra-linked group's roster is refused with a `409` here — the next
+sync would undo the edit — while its name/description/quota stay editable.
 
 Files expected to be created or modified:
 - `src/FoundryGate.Api/Controllers/GroupsController.cs`
@@ -51,3 +55,4 @@ Files expected to be created or modified:
 - [x] Sync endpoint reconciles members against a mock Graph response (`FakeEntraDirectoryClient`, service and endpoint level)
 - [x] Audit log contains entries for all membership changes
 - [x] Deleting a group with active members without `force=true` returns `409`
+- [x] A group name and an Entra link are each unique, enforced by an index (`IX_Groups_Name`, and the filtered `IX_Groups_EntraGroupId`) and mapped to `409` by the identifier the provider names in the violation, so the answer does not depend on the database's collation

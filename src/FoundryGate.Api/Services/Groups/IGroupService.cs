@@ -31,6 +31,14 @@ namespace FoundryGate.Api.Services.Groups;
 /// <c>GatewayTierMapper.EnsureValidQuota</c> before persisting, so a group can never carry a budget
 /// the gateway has no product for.
 /// </para>
+/// <para>
+/// <b>An Entra-linked group's roster is read-only here.</b> <see cref="AddMemberAsync"/> and
+/// <see cref="RemoveMemberAsync"/> refuse with a <c>409</c> when the group has an
+/// <c>EntraGroupId</c>: the edit would succeed and then be silently undone by the next
+/// <see cref="IEntraGroupSyncService.SyncAsync"/>, which is a worse answer than "no". Change the
+/// membership in the directory and sync. Group <em>policy</em> (name, description, quota) stays
+/// editable — the directory owns who is in the group, not what the group is worth.
+/// </para>
 /// </remarks>
 public interface IGroupService
 {
@@ -40,7 +48,7 @@ public interface IGroupService
     /// so nothing is re-resolved. Audited as <c>group.created</c>.
     /// </summary>
     /// <exception cref="ArgumentException">The quota is not a configured tier cap (→ 400).</exception>
-    /// <exception cref="Domain.Exceptions.ConflictException">A group with that name already exists (→ 409).</exception>
+    /// <exception cref="Domain.Exceptions.ConflictException">A group with that name, or with that <c>EntraGroupId</c>, already exists (→ 409).</exception>
     Task<GroupResponse> CreateAsync(CreateGroupRequest request, CancellationToken cancellationToken);
 
     /// <summary>
@@ -82,13 +90,17 @@ public interface IGroupService
     /// (<c>AddedByUserId</c>), and re-resolves them. Audited as <c>group.member-added</c>.
     /// </summary>
     /// <exception cref="KeyNotFoundException">No such group, or no such user (→ 404).</exception>
-    /// <exception cref="Domain.Exceptions.ConflictException">The user is already a member (→ 409).</exception>
+    /// <exception cref="Domain.Exceptions.ConflictException">
+    /// The user is already a member, or the group's roster is managed by Entra (→ 409) — see
+    /// the type remarks on why a linked group refuses manual edits.
+    /// </exception>
     Task<GroupMemberResponse> AddMemberAsync(int groupId, AddGroupMemberRequest request, CancellationToken cancellationToken);
 
     /// <summary>
     /// Removes one membership and re-resolves the user. Audited as <c>group.member-removed</c>.
     /// </summary>
     /// <exception cref="KeyNotFoundException">No such group, or the user is not a member of it (→ 404).</exception>
+    /// <exception cref="Domain.Exceptions.ConflictException">The group's roster is managed by Entra (→ 409).</exception>
     Task RemoveMemberAsync(int groupId, int userId, CancellationToken cancellationToken);
 
     /// <summary>The group's members, ordered by display name, paged.</summary>

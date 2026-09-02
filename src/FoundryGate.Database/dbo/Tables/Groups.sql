@@ -4,7 +4,6 @@ CREATE TABLE [dbo].[Groups] (
     [Name]               NVARCHAR (200)    NOT NULL,
     [Description]        NVARCHAR (1000)   NOT NULL,
     [EntraGroupId]       NVARCHAR (64)     NOT NULL,
-    [IsEntraSynced]      BIT               NOT NULL,
     [MonthlyTokenQuota]  BIGINT            NULL,
     [IsUnlimited]        BIT               NOT NULL,
     [CreatedDate]        DATETIMEOFFSET (7) NOT NULL
@@ -23,4 +22,10 @@ GO
 -- list's default ordering, so the constraint and the index are the same object.
 CREATE UNIQUE NONCLUSTERED INDEX [IX_Groups_Name]
     ON [dbo].[Groups]([Name] ASC);
+GO
+
+-- One Entra group backs at most one FoundryGate group. Filtered because the column is non-nullable
+-- and empty means "not linked" — without the filter only one native group could exist.
+CREATE UNIQUE NONCLUSTERED INDEX [IX_Groups_EntraGroupId]
+    ON [dbo].[Groups]([EntraGroupId] ASC) WHERE ([EntraGroupId] <> '');
 GO

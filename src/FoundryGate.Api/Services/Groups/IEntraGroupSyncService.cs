@@ -41,9 +41,12 @@ public interface IEntraGroupSyncService
 {
     /// <summary>Reconciles one group against its linked Entra group.</summary>
     /// <exception cref="KeyNotFoundException">No such group (→ 404).</exception>
-    /// <exception cref="ArgumentException">
-    /// The group has no <c>EntraGroupId</c> — there is nothing to sync it against (→ 400) — or Entra
-    /// is disabled on this host (<c>Entra:Enabled</c> is false; the message names the setting).
+    /// <exception cref="ArgumentException">The group has no <c>EntraGroupId</c> — there is nothing to sync it against (→ 400).</exception>
+    /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (→ 403; call <c>GET /users/me</c> first).</exception>
+    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">
+    /// Entra is disabled on this host (<c>Entra:Enabled</c> is false) → 503; the message names the
+    /// setting and the Graph roles to grant. A 503 rather than a 400 because nothing about the request
+    /// is wrong — the host has not been configured for the feature.
     /// </exception>
     Task<GroupSyncResult> SyncAsync(int groupId, CancellationToken cancellationToken);
 
@@ -54,6 +57,7 @@ public interface IEntraGroupSyncService
     /// re-running is idempotent; whether to isolate failures per group instead, and to share one user
     /// map across the loop, is issue #149.
     /// </summary>
-    /// <exception cref="ArgumentException">Entra is disabled on this host and at least one group is linked (→ 400).</exception>
+    /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (→ 403).</exception>
+    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Entra is disabled on this host and at least one group is linked (→ 503).</exception>
     Task<IReadOnlyList<GroupSyncResult>> SyncAllAsync(CancellationToken cancellationToken);
 }

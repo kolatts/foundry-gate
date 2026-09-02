@@ -21,7 +21,7 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 
 **Group-assigned access suspends departure detection.** Only *user* assignees are read today; an app-role assignment granted to a *group* is not expanded to its members yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Because a user assigned through such a group is invisible to the sync, "not in the user list" cannot mean "departed" — so when the directory reports one or more group assignments the run still adds and updates users but deactivates nobody, returns `deactivatedCount: 0` with `skippedGroupAssignmentCount > 0`, names the groups in a warning log and in the audit row (`departureDetectionSuspended: true`). Assign developers individually to the application if you need departure detection before #121 lands.
 
-Errors: `400` when `Entra:Enabled` is false on the host, `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role).
+Errors: `403` when the calling admin has no `User` row yet (call `GET /users/me` first), `409` when the directory returns no assigned users while active users exist locally (nothing is changed — almost always a wrong service principal or a missing Graph role), `503` when `Entra:Enabled` is false on the host (the message names the setting and the Graph roles to grant — the request is fine, the host is not configured for the feature).
 
 ## Groups
 
@@ -46,8 +46,20 @@ product their key is scoped to. Every route is admin-only.
 exactly one configured tier cap, or the request is `400` listing the allowed values — the same rule
 `PUT /users/{id}/quota` follows. `GET /quota/tiers` is the list to offer.
 
-**Names are unique.** A duplicate is `409` — case-insensitively, and enforced by a unique index so two
-concurrent creates cannot both win.
+**Names are unique.** A duplicate is `409` — case-insensitively, and enforced by the unique index
+`IX_Groups_Name` so two concurrent creates cannot both win. **`entraGroupId` is unique too** (among the
+groups that have one): one Entra group backs at most one FoundryGate group, or both would claim its
+members and hand them the larger of the two quotas. A second link is `409`.
+
+**An Entra-linked group's roster is read-only through this API.** `POST /groups/{id}/members` and
+`DELETE /groups/{id}/members/{userId}` return `409` when the group has an `entraGroupId`: the edit
+would be applied and then silently undone by the next `sync-entra`, which is a worse answer than
+refusing. Change the membership in the directory group and sync. The group's *policy* — name,
+description, quota — stays editable; the directory owns who is in the group, not what the group is
+worth.
+
+`isEntraSynced` in the response is derived from `entraGroupId` being set; it is not a separate stored
+flag that could disagree with the link.
 
 **Every quota-visible write re-resolves the members it affects**, in the same transaction as the
 mutation and its audit row: a quota change on `PUT /groups/{id}` re-resolves every current member;
@@ -87,8 +99,10 @@ reports zeros. Returns `{ groupId, addedCount, removedCount, skippedUnknownUserC
 `POST /groups/sync-entra` does the same for every group that has an `entraGroupId`, one unit of work
 each, in group-id order; groups with no link are skipped and do not appear in the result.
 
-Errors: `400` when the group has no `entraGroupId`, or when `Entra:Enabled` is false on the host (the
-message names the setting and the Graph roles to grant); `404` for an unknown group.
+Errors: `400` when the group has no `entraGroupId` (a real caller error — this group has nothing to
+sync against); `404` for an unknown group; `503` when `Entra:Enabled` is false on the host — the
+message names the setting and the Graph roles to grant. The 503 is deliberate: the request is
+well-formed and the caller can do nothing about it, so it is the operator's problem, not theirs.
 
 ## Quota
 

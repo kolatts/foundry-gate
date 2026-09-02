@@ -8,6 +8,7 @@ using FoundryGate.Api.Services.Quota;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
@@ -193,10 +194,28 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
         var admin = await SeedUserAsync("Admin");
         var group = await SeedLinkedGroupAsync("Linked", quota: null);
 
-        var exception = await Assert.ThrowsAsync<ArgumentException>(
+        var exception = await Assert.ThrowsAsync<FeatureNotConfiguredException>(
             () => CreateService(admin, new DisabledEntraDirectoryClient()).SyncAsync(group.GroupId, CancellationToken.None));
 
         Assert.Contains("Entra:Enabled", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SyncAsync_refuses_before_reading_the_directory_when_the_caller_has_no_user_row()
+    {
+        await SeedReferenceDataAsync();
+        var group = await SeedLinkedGroupAsync("Unprovisioned", quota: TestGatewayTiers.PowerCap);
+        var member = await SeedUserAsync("Member");
+        _directory.GroupMembers[group.EntraGroupId] = [member.EntraObjectId];
+
+        // An admin who has never called GET /users/me. The 403 must land before the reconciliation,
+        // not out of the audit writer after memberships and APIM products have already moved.
+        var exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => CreateServiceForOid(Guid.NewGuid().ToString()).SyncAsync(group.GroupId, CancellationToken.None));
+
+        Assert.Contains("GET /users/me", exception.Message, StringComparison.Ordinal);
+        Assert.False(await Context.GroupMembers.AsNoTracking().AnyAsync(m => m.GroupId == group.GroupId));
+        Assert.Empty(_tierSync.Calls);
     }
 
     [Fact]
@@ -226,9 +245,12 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
 
     // -- Helpers --
 
-    private EntraGroupSyncService CreateService(User actor, IEntraDirectoryClient? directory = null)
+    private EntraGroupSyncService CreateService(User actor, IEntraDirectoryClient? directory = null) =>
+        CreateServiceForOid(actor.EntraObjectId, directory);
+
+    private EntraGroupSyncService CreateServiceForOid(string oid, IEntraDirectoryClient? directory = null)
     {
-        var identity = new ClaimsIdentity([new Claim(ClaimConstants.Oid, actor.EntraObjectId)], "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
+        var identity = new ClaimsIdentity([new Claim(ClaimConstants.Oid, oid)], "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
 
@@ -236,6 +258,7 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
             Context,
             directory ?? _directory,
             new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance),
+            accessor,
             new AuditService(Context, new AuditWriter(Context, _clock), accessor),
             _clock,
             NullLogger<EntraGroupSyncService>.Instance);
@@ -261,7 +284,6 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
         {
             Name = name,
             EntraGroupId = Guid.NewGuid().ToString(),
-            IsEntraSynced = true,
             MonthlyTokenQuota = quota,
         };
         _ = Context.Groups.Add(group);

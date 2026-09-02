@@ -20,6 +20,16 @@ namespace FoundryGate.Api.Services.Groups;
 /// <see cref="IQuotaResolutionService"/> and <see cref="IAuditService"/>, so a group mutation, the
 /// allocations it moves and its audit row are one unit of work. Semantics are on the interface.
 /// </summary>
+/// <remarks>
+/// <b>Commit-point discipline</b> (CONVENTIONS.md "external side effects have a commit point"):
+/// re-resolution can reach <see cref="IGatewayTierSync"/> and move a developer's APIM subscription
+/// between tier products. Every method therefore resolves the actor and performs every refusal
+/// <em>before</em> calling <see cref="IQuotaResolutionService.ResolveManyAsync"/>, and — when that call
+/// actually moved the gateway (<see cref="QuotaResolution.TierSyncRequested"/>) — writes its audit row
+/// and saves on <see cref="CancellationToken.None"/>, so a client that hangs up mid-request cannot
+/// leave APIM moved with nothing in the database to show for it. The same rule applies to every other
+/// caller of quota resolution; issue #163 sweeps the ones outside this area.
+/// </remarks>
 public sealed class GroupService(
     AppDbContext dbContext,
     IQuotaResolutionService quotaResolution,
@@ -30,10 +40,26 @@ public sealed class GroupService(
     ILogger<GroupService> logger) : IGroupService
 {
     /// <summary>
+    /// Identifiers a unique violation on the group-name index carries, per provider: SQL Server names
+    /// the index ("Cannot insert duplicate key row … with unique index 'IX_Groups_Name'"), SQLite names
+    /// the column ("UNIQUE constraint failed: Groups.Name"). Matching these rather than re-querying is
+    /// what makes the 409 collation-agnostic — on an accent-insensitive database the index rejects
+    /// "Résumé" against "Resume" and a <c>LOWER(Name)</c> re-query would not have found the collision,
+    /// turning a conflict into a 500. Both markers are identifiers, so neither is affected by a
+    /// localized server message.
+    /// </summary>
+    private static readonly string[] NameIndexMarkers = ["IX_Groups_Name", "Groups.Name"];
+
+    /// <summary>Same idea for the Entra-link index; see <see cref="NameIndexMarkers"/>.</summary>
+    private static readonly string[] EntraGroupIdIndexMarkers = ["IX_Groups_EntraGroupId", "Groups.EntraGroupId"];
+
+    /// <summary>
     /// The one read-side projection, so <c>GET /groups</c> and <c>GET /groups/{id}</c> cannot drift.
     /// <c>MemberCount</c> is a correlated <c>COUNT</c> on the navigation rather than a loaded roster.
     /// The entity stores "no description"/"not Entra-linked" as empty strings (non-nullable string
-    /// convention); the contract exposes them as null, so the translation happens here.
+    /// convention); the contract exposes them as null, so the translation happens here — as does
+    /// <c>IsEntraSynced</c>, which is <em>derived</em> from the link rather than stored, so the two can
+    /// never disagree.
     /// </summary>
     private static readonly Expression<Func<Group, GroupResponse>> Projection = group => new GroupResponse(
         group.GroupId,
@@ -41,7 +67,7 @@ public sealed class GroupService(
         group.Name,
         group.Description == string.Empty ? null : group.Description,
         group.EntraGroupId == string.Empty ? null : group.EntraGroupId,
-        group.IsEntraSynced,
+        group.EntraGroupId != string.Empty,
         group.IsUnlimited,
         group.MonthlyTokenQuota,
         group.GroupMemberships.Count,
@@ -60,30 +86,36 @@ public sealed class GroupService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        await EnsureActorAsync(cancellationToken);
+
         var name = request.Name.Trim();
+        var entraGroupId = request.EntraGroupId?.Trim() ?? string.Empty;
         tierMapper.EnsureValidQuota(request.MonthlyTokenQuota, nameof(request.MonthlyTokenQuota));
         await EnsureNameIsFreeAsync(name, exceptGroupId: null, cancellationToken);
+        await EnsureEntraLinkIsFreeAsync(entraGroupId, exceptGroupId: null, cancellationToken);
 
-        var entraGroupId = request.EntraGroupId?.Trim() ?? string.Empty;
         var group = new Group
         {
             Name = name,
             Description = request.Description?.Trim() ?? string.Empty,
             EntraGroupId = entraGroupId,
-            IsEntraSynced = entraGroupId.Length > 0,
             IsUnlimited = request.IsUnlimited,
             MonthlyTokenQuota = request.MonthlyTokenQuota,
         };
 
         // The only path here that needs two saves: GroupId is an IDENTITY value, so it does not exist
         // until the insert has run, and the audit row's TargetId must be that id (AuditTargetTypes.Group's
-        // contract) rather than a placeholder the admin audit viewer cannot filter on. An explicit
-        // transaction keeps the guarantee the single-save pattern exists for — a group can never be
-        // created without its audit row. A brand-new group has no members, so nothing is re-resolved.
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        // contract) rather than a placeholder the admin audit viewer cannot filter on. A transaction keeps
+        // the guarantee the single-save pattern exists for — a group can never be created without its
+        // audit row. Joins an ambient transaction rather than opening a nested one (which EF refuses) when
+        // an orchestrating service already owns the unit of work; the ApimKeyService precedent. A
+        // brand-new group has no members, so nothing is re-resolved and no gateway call is in play.
+        await using var transaction = dbContext.Database.CurrentTransaction is null
+            ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
         _ = dbContext.Groups.Add(group);
-        await SaveWithNameConflictAsync(name, exceptGroupId: null, cancellationToken);
+        await SaveGroupAsync(name, entraGroupId, exceptGroupId: null, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupCreated,
@@ -100,7 +132,10 @@ public sealed class GroupService(
             cancellationToken);
         _ = await dbContext.SaveChangesAsync(cancellationToken);
 
-        await transaction.CommitAsync(cancellationToken);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
 
         logger.LogInformation("Created group {GroupId} ({GroupName}).", group.GroupId, group.Name);
 
@@ -152,6 +187,8 @@ public sealed class GroupService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Actor and every refusal first — ReresolveAsync below can move APIM.
+        await EnsureActorAsync(cancellationToken);
         var group = await FindTrackedAsync(groupId, cancellationToken);
         var name = request.Name.Trim();
         tierMapper.EnsureValidQuota(request.MonthlyTokenQuota, nameof(request.MonthlyTokenQuota));
@@ -174,9 +211,9 @@ public sealed class GroupService(
         // Levels 3-4 of the chain just moved for everyone in the group; resolution reads the edited
         // (still unsaved) Group through the change tracker, so this sees the new policy and the whole
         // thing commits together.
-        var resolvedCount = quotaChanged
-            ? await ReresolveActiveMembersAsync(groupId, cancellationToken)
-            : 0;
+        var memberIds = quotaChanged ? await ActiveMemberIdsAsync(groupId, cancellationToken) : [];
+        var gatewayMoved = await ReresolveAsync(memberIds, cancellationToken);
+        var commitToken = CommitToken(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupUpdated,
@@ -193,17 +230,17 @@ public sealed class GroupService(
                     group.MonthlyTokenQuota,
                 },
                 QuotaChanged = quotaChanged,
-                MembersReresolvedCount = resolvedCount,
+                MembersReresolvedCount = memberIds.Count,
             },
-            cancellationToken);
+            commitToken);
 
-        await SaveWithNameConflictAsync(name, exceptGroupId: groupId, cancellationToken);
+        await SaveGroupAsync(name, group.EntraGroupId, exceptGroupId: groupId, commitToken);
 
         logger.LogInformation(
             "Updated group {GroupId}; quota changed: {QuotaChanged}, members re-resolved: {MembersReresolvedCount}.",
             groupId,
             quotaChanged,
-            resolvedCount);
+            memberIds.Count);
 
         return await GetGroupResponseAsync(groupId, cancellationToken);
     }
@@ -211,6 +248,7 @@ public sealed class GroupService(
     /// <inheritdoc />
     public async Task DeleteAsync(int groupId, bool force, CancellationToken cancellationToken)
     {
+        await EnsureActorAsync(cancellationToken);
         var group = await FindTrackedAsync(groupId, cancellationToken);
 
         var memberships = await dbContext.GroupMembers
@@ -230,8 +268,9 @@ public sealed class GroupService(
 
         // After the removals, not before: resolution overlays the pending deletes, so the former
         // members resolve down the chain (usually to the system default) exactly as they will read
-        // once the transaction commits.
-        _ = await quotaResolution.ResolveManyAsync(affectedUserIds, BillingPeriod.Current(timeProvider), cancellationToken);
+        // once this commits.
+        var gatewayMoved = await ReresolveAsync(affectedUserIds, cancellationToken);
+        var commitToken = CommitToken(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupDeleted,
@@ -247,9 +286,9 @@ public sealed class GroupService(
                 RemovedMemberCount = memberships.Count,
                 MembersReresolvedCount = affectedUserIds.Count,
             },
-            cancellationToken);
+            commitToken);
 
-        _ = await dbContext.SaveChangesAsync(cancellationToken);
+        _ = await dbContext.SaveChangesAsync(commitToken);
 
         logger.LogInformation(
             "Deleted group {GroupId} ({GroupName}) with {RemovedMemberCount} membership(s).",
@@ -263,7 +302,9 @@ public sealed class GroupService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        _ = await FindTrackedAsync(groupId, cancellationToken);
+        var actor = await currentUser.GetRequiredUserAsync(cancellationToken);
+        var group = await FindTrackedAsync(groupId, cancellationToken);
+        EnsureRosterIsEditable(group);
 
         var user = await dbContext.Users.AsNoTracking()
             .SingleOrDefaultAsync(u => u.UserId == request.UserId, cancellationToken)
@@ -275,7 +316,6 @@ public sealed class GroupService(
         }
 
         // Attributed to the calling admin. AddedDate is stamped by TimestampInterceptor on save.
-        var actor = await currentUser.GetRequiredUserAsync(cancellationToken);
         var membership = new GroupMember
         {
             GroupId = groupId,
@@ -284,7 +324,8 @@ public sealed class GroupService(
         };
         _ = dbContext.GroupMembers.Add(membership);
 
-        var reresolved = await ReresolveAsync(user, cancellationToken);
+        var gatewayMoved = await ReresolveAsync(user.IsActive ? [user.UserId] : [], cancellationToken);
+        var commitToken = CommitToken(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupMemberAdded,
@@ -295,11 +336,11 @@ public sealed class GroupService(
                 user.UserId,
                 user.DisplayName,
                 AddedByUserId = actor.UserId,
-                Reresolved = reresolved,
+                Reresolved = user.IsActive,
             },
-            cancellationToken);
+            commitToken);
 
-        _ = await dbContext.SaveChangesAsync(cancellationToken);
+        _ = await dbContext.SaveChangesAsync(commitToken);
 
         return new GroupMemberResponse(user.UserId, user.UserUnique, user.DisplayName, user.Email, membership.AddedDate, membership.AddedByUserId);
     }
@@ -307,16 +348,21 @@ public sealed class GroupService(
     /// <inheritdoc />
     public async Task RemoveMemberAsync(int groupId, int userId, CancellationToken cancellationToken)
     {
-        _ = await FindTrackedAsync(groupId, cancellationToken);
+        await EnsureActorAsync(cancellationToken);
+        var group = await FindTrackedAsync(groupId, cancellationToken);
+        EnsureRosterIsEditable(group);
 
         var membership = await dbContext.GroupMembers
             .SingleOrDefaultAsync(member => member.GroupId == groupId && member.UserId == userId, cancellationToken)
             ?? throw new KeyNotFoundException($"User {userId} is not a member of group {groupId}.");
 
+        var user = await dbContext.Users.AsNoTracking().SingleOrDefaultAsync(u => u.UserId == userId, cancellationToken);
+
         _ = dbContext.GroupMembers.Remove(membership);
 
-        var user = await dbContext.Users.AsNoTracking().SingleOrDefaultAsync(u => u.UserId == userId, cancellationToken);
-        var reresolved = user is not null && await ReresolveAsync(user, cancellationToken);
+        var reresolved = user is { IsActive: true };
+        var gatewayMoved = await ReresolveAsync(reresolved ? [userId] : [], cancellationToken);
+        var commitToken = CommitToken(gatewayMoved, cancellationToken);
 
         _ = await audit.LogAsync(
             AuditActions.GroupMemberRemoved,
@@ -329,9 +375,9 @@ public sealed class GroupService(
                 membership.AddedDate,
                 Reresolved = reresolved,
             },
-            cancellationToken);
+            commitToken);
 
-        _ = await dbContext.SaveChangesAsync(cancellationToken);
+        _ = await dbContext.SaveChangesAsync(commitToken);
     }
 
     /// <inheritdoc />
@@ -351,6 +397,51 @@ public sealed class GroupService(
     // -- Helpers --
 
     private static string TargetId(int groupId) => groupId.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Resolves the caller up front so an unprovisioned admin's 403 lands before anything external
+    /// happens, rather than out of <see cref="IAuditService.LogAsync"/> after a tier move.
+    /// </summary>
+    private async Task EnsureActorAsync(CancellationToken cancellationToken) =>
+        _ = await currentUser.GetRequiredUserAsync(cancellationToken);
+
+    /// <summary>
+    /// An Entra-linked group's roster belongs to the directory: a manual add or remove here would be
+    /// silently undone by the next <c>sync-entra</c>, which is worse than refusing it.
+    /// </summary>
+    private static void EnsureRosterIsEditable(Group group)
+    {
+        if (group.EntraGroupId.Length > 0)
+        {
+            throw new ConflictException(
+                $"Group {group.GroupId} ('{group.Name}') has its roster managed by Entra group {group.EntraGroupId}; memberships cannot be edited directly because the next sync would undo the change. " +
+                $"Change the membership in the Entra group and run POST /groups/{group.GroupId}/sync-entra.");
+        }
+    }
+
+    /// <summary>
+    /// Re-resolves <paramref name="userIds"/> for the current period and reports whether any of them
+    /// actually moved at the gateway — which is what decides the commit token (see the type remarks).
+    /// An empty list is a no-op, so callers pass one rather than branching.
+    /// </summary>
+    private async Task<bool> ReresolveAsync(IReadOnlyCollection<int> userIds, CancellationToken cancellationToken)
+    {
+        if (userIds.Count == 0)
+        {
+            return false;
+        }
+
+        var resolutions = await quotaResolution.ResolveManyAsync(userIds, BillingPeriod.Current(timeProvider), cancellationToken);
+
+        return resolutions.Any(resolution => resolution.TierSyncRequested);
+    }
+
+    /// <summary>
+    /// <see cref="CancellationToken.None"/> once the gateway has accepted a change, the request's own
+    /// token otherwise — a disconnect must not turn an accepted tier move into an unaudited one.
+    /// </summary>
+    private static CancellationToken CommitToken(bool gatewayMoved, CancellationToken cancellationToken) =>
+        gatewayMoved ? CancellationToken.None : cancellationToken;
 
     private IQueryable<GroupMember> MembersOf(int groupId) =>
         dbContext.GroupMembers.AsNoTracking().Where(member => member.GroupId == groupId);
@@ -374,16 +465,11 @@ public sealed class GroupService(
             .SingleOrDefaultAsync(cancellationToken)
         ?? throw new KeyNotFoundException($"Group {groupId} was not found.");
 
-    /// <summary>Case-insensitive on both providers — see the note on the search filter.</summary>
+    /// <summary>
+    /// The friendly pre-check for the name, case-insensitively on both providers (see the note on the
+    /// search filter). <see cref="SaveGroupAsync"/> is what makes uniqueness true under concurrency.
+    /// </summary>
     private async Task EnsureNameIsFreeAsync(string name, int? exceptGroupId, CancellationToken cancellationToken)
-    {
-        if (await NameIsTakenAsync(name, exceptGroupId, cancellationToken))
-        {
-            throw new ConflictException(DuplicateNameMessage(name));
-        }
-    }
-
-    private Task<bool> NameIsTakenAsync(string name, int? exceptGroupId, CancellationToken cancellationToken)
     {
         var comparand = name.ToLowerInvariant();
         var query = dbContext.Groups.AsNoTracking().Where(group => group.Name.ToLower() == comparand);
@@ -392,35 +478,81 @@ public sealed class GroupService(
             query = query.Where(group => group.GroupId != excluded);
         }
 
-        return query.AnyAsync(cancellationToken);
+        if (await query.AnyAsync(cancellationToken))
+        {
+            throw new ConflictException(DuplicateNameMessage(name));
+        }
     }
 
     /// <summary>
-    /// Saves, translating the <c>IX_Groups_Name</c> violation two concurrent writers can still produce
-    /// after <see cref="EnsureNameIsFreeAsync"/> has passed for both into the same <c>409</c> the
-    /// serial case gets. Any other <see cref="DbUpdateException"/> is rethrown untouched — the
-    /// conflict is claimed only when the name really is taken in the database.
+    /// Two groups linked to the same Entra group would both claim its members and hand them the max of
+    /// both quotas off one directory group — deterministic, but never what an admin who double-pasted a
+    /// GUID meant. Backed by the filtered unique index <c>IX_Groups_EntraGroupId</c>; an empty link is
+    /// unconstrained, which is why the index is filtered.
     /// </summary>
-    private async Task SaveWithNameConflictAsync(string name, int? exceptGroupId, CancellationToken cancellationToken)
+    private async Task EnsureEntraLinkIsFreeAsync(string entraGroupId, int? exceptGroupId, CancellationToken cancellationToken)
+    {
+        if (entraGroupId.Length == 0)
+        {
+            return;
+        }
+
+        var query = dbContext.Groups.AsNoTracking().Where(group => group.EntraGroupId == entraGroupId);
+        if (exceptGroupId is { } excluded)
+        {
+            query = query.Where(group => group.GroupId != excluded);
+        }
+
+        if (await query.AnyAsync(cancellationToken))
+        {
+            throw new ConflictException(DuplicateEntraLinkMessage(entraGroupId));
+        }
+    }
+
+    /// <summary>
+    /// Saves, translating the unique-index violations two concurrent writers can still produce after the
+    /// pre-checks have passed for both into the same <c>409</c> the serial case gets. Detection is by
+    /// the identifier the provider names in its error (see <see cref="NameIndexMarkers"/>) rather than by
+    /// re-querying, so it agrees with whatever collation the index actually used. Any other
+    /// <see cref="DbUpdateException"/> is rethrown untouched.
+    /// </summary>
+    private async Task SaveGroupAsync(string name, string entraGroupId, int? exceptGroupId, CancellationToken cancellationToken)
     {
         try
         {
             _ = await dbContext.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException exception)
+        catch (DbUpdateException exception) when (Mentions(exception, NameIndexMarkers))
         {
-            if (!await NameIsTakenAsync(name, exceptGroupId, CancellationToken.None))
-            {
-                throw;
-            }
-
             logger.LogWarning(exception, "Group name '{GroupName}' was taken concurrently; returning 409.", name);
             throw new ConflictException(DuplicateNameMessage(name), exception);
         }
+        catch (DbUpdateException exception) when (Mentions(exception, EntraGroupIdIndexMarkers))
+        {
+            logger.LogWarning(exception, "Entra group {EntraGroupId} was linked concurrently (group {ExceptGroupId} excluded); returning 409.", entraGroupId, exceptGroupId);
+            throw new ConflictException(DuplicateEntraLinkMessage(entraGroupId), exception);
+        }
+    }
+
+    /// <summary>True when any exception in the chain names one of <paramref name="markers"/>.</summary>
+    private static bool Mentions(Exception exception, string[] markers)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (Array.Exists(markers, marker => current.Message.Contains(marker, StringComparison.Ordinal)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string DuplicateNameMessage(string name) =>
         $"A group named '{name}' already exists. Group names are unique.";
+
+    private static string DuplicateEntraLinkMessage(string entraGroupId) =>
+        $"Another group is already linked to Entra group {entraGroupId}. One Entra group can back at most one FoundryGate group.";
 
     private Task<List<int>> ActiveMemberIdsAsync(int groupId, CancellationToken cancellationToken) =>
         MembersOf(groupId)
@@ -428,27 +560,4 @@ public sealed class GroupService(
             .OrderBy(member => member.UserId)
             .Select(member => member.UserId)
             .ToListAsync(cancellationToken);
-
-    private async Task<int> ReresolveActiveMembersAsync(int groupId, CancellationToken cancellationToken)
-    {
-        var userIds = await ActiveMemberIdsAsync(groupId, cancellationToken);
-        _ = await quotaResolution.ResolveManyAsync(userIds, BillingPeriod.Current(timeProvider), cancellationToken);
-        return userIds.Count;
-    }
-
-    /// <summary>
-    /// Re-resolves one member. Deactivated users are skipped for the reason on
-    /// <see cref="IGroupService"/>: they hold no enforceable key, and <c>/quota/allocations/me</c>
-    /// refuses to mint them an allocation.
-    /// </summary>
-    private async Task<bool> ReresolveAsync(User user, CancellationToken cancellationToken)
-    {
-        if (!user.IsActive)
-        {
-            return false;
-        }
-
-        _ = await quotaResolution.ResolveManyAsync([user.UserId], BillingPeriod.Current(timeProvider), cancellationToken);
-        return true;
-    }
 }

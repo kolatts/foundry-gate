@@ -95,6 +95,71 @@ public class GroupServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task CreateAsync_maps_a_unique_index_violation_the_pre_check_could_not_see_to_409()
+    {
+        // The race the index exists for: a row the pre-check's query cannot see (here, one pending in
+        // the same unit of work) is inserted alongside ours and IX_Groups_Name rejects the pair. The
+        // 409 must come from the provider naming the index, not from a re-query — a collation the
+        // service does not model would otherwise turn this into a 500.
+        var admin = await SeedUserAsync("Admin");
+        _ = Context.Groups.Add(new Group { Name = "Racer" });
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(
+            () => CreateService(admin).CreateAsync(new CreateGroupRequest { Name = "Racer" }, CancellationToken.None));
+
+        Assert.Contains("already exists", exception.Message, StringComparison.Ordinal);
+        _ = Assert.IsType<DbUpdateException>(exception.InnerException);
+    }
+
+    [Fact]
+    public async Task CreateAsync_rethrows_a_unique_index_violation_that_is_not_about_the_name()
+    {
+        // Same shape, different index (IX_Groups_GroupUnique): this must NOT be dressed up as a name
+        // conflict, or a genuine fault would reach the caller as a misleading 409.
+        var admin = await SeedUserAsync("Admin");
+        var collidingUnique = Guid.NewGuid();
+        _ = Context.Groups.Add(new Group { Name = "Pending one", GroupUnique = collidingUnique });
+        _ = Context.Groups.Add(new Group { Name = "Pending two", GroupUnique = collidingUnique });
+
+        _ = await Assert.ThrowsAsync<DbUpdateException>(
+            () => CreateService(admin).CreateAsync(new CreateGroupRequest { Name = "Distinct name" }, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CreateAsync_refuses_a_second_group_linked_to_the_same_Entra_group()
+    {
+        var admin = await SeedUserAsync("Admin");
+        var service = CreateService(admin);
+        var entraGroupId = Guid.NewGuid().ToString();
+        _ = await service.CreateAsync(new CreateGroupRequest { Name = "First", EntraGroupId = entraGroupId }, CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<ConflictException>(
+            () => service.CreateAsync(new CreateGroupRequest { Name = "Second", EntraGroupId = entraGroupId }, CancellationToken.None));
+
+        Assert.Contains("already linked", exception.Message, StringComparison.Ordinal);
+
+        // …but two native groups are fine: the index is filtered on a non-empty link.
+        _ = await service.CreateAsync(new CreateGroupRequest { Name = "Native one" }, CancellationToken.None);
+        _ = await service.CreateAsync(new CreateGroupRequest { Name = "Native two" }, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task CreateAsync_joins_an_ambient_transaction_instead_of_opening_a_nested_one()
+    {
+        // An orchestrating service that owns the unit of work: BeginTransactionAsync would throw here,
+        // and committing our own would commit theirs (ApimKeyService's precedent).
+        var admin = await SeedUserAsync("Admin");
+        await using var outer = await Context.Database.BeginTransactionAsync();
+
+        var created = await CreateService(admin).CreateAsync(new CreateGroupRequest { Name = "Ambient" }, CancellationToken.None);
+
+        Assert.NotNull(Context.Database.CurrentTransaction); // still ours to commit
+        await outer.CommitAsync();
+        Assert.True(await Context.Groups.AsNoTracking().AnyAsync(g => g.GroupId == created.GroupId));
+        _ = await SingleAuditAsync(AuditActions.GroupCreated);
+    }
+
+    [Fact]
     public async Task CreateAsync_rejects_a_quota_that_is_not_a_configured_tier()
     {
         var admin = await SeedUserAsync("Admin");
@@ -410,6 +475,66 @@ public class GroupServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task Membership_of_an_Entra_linked_group_cannot_be_edited_by_hand()
+    {
+        // The trap: the write would succeed and the next sync-entra would silently undo it.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var service = CreateService(admin);
+        var group = await service.CreateAsync(
+            new CreateGroupRequest { Name = "Directory owned", EntraGroupId = Guid.NewGuid().ToString() },
+            CancellationToken.None);
+        var user = await SeedUserAsync("Directory Person");
+
+        var add = await Assert.ThrowsAsync<ConflictException>(
+            () => service.AddMemberAsync(group.GroupId, new AddGroupMemberRequest { UserId = user.UserId }, CancellationToken.None));
+        Assert.Contains("managed by Entra group", add.Message, StringComparison.Ordinal);
+        Assert.Contains("sync-entra", add.Message, StringComparison.Ordinal);
+
+        // The sync service writes the row directly, so it is unaffected by the refusal.
+        _ = Context.GroupMembers.Add(new GroupMember { GroupId = group.GroupId, UserId = user.UserId });
+        _ = await Context.SaveChangesAsync();
+
+        var remove = await Assert.ThrowsAsync<ConflictException>(
+            () => service.RemoveMemberAsync(group.GroupId, user.UserId, CancellationToken.None));
+        Assert.Contains("managed by Entra group", remove.Message, StringComparison.Ordinal);
+
+        // Group policy stays editable — the directory owns the roster, not the budget.
+        var renamed = await service.UpdateAsync(group.GroupId, new UpdateGroupRequest { Name = "Renamed" }, CancellationToken.None);
+        Assert.Equal("Renamed", renamed.Name);
+    }
+
+    [Fact]
+    public async Task Write_paths_refuse_an_unprovisioned_caller_before_re_resolving_anything()
+    {
+        // CONVENTIONS: resolve the actor and refuse before the call that can move APIM. Previously the
+        // 403 came out of the audit writer, i.e. after ResolveManyAsync had already moved tiers.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var setup = CreateService(admin);
+        var group = await setup.CreateAsync(
+            new CreateGroupRequest { Name = "Guarded", MonthlyTokenQuota = TestGatewayTiers.StandardCap },
+            CancellationToken.None);
+        var member = await SeedUserAsync("Member", u => u.ApimSubscriptionId = "sub-member");
+        _ = await setup.AddMemberAsync(group.GroupId, new AddGroupMemberRequest { UserId = member.UserId }, CancellationToken.None);
+        _tierSync.Calls.Clear();
+
+        var stranger = CreateServiceForOid(Guid.NewGuid().ToString());
+
+        _ = await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => stranger.UpdateAsync(group.GroupId, new UpdateGroupRequest { Name = "Guarded", MonthlyTokenQuota = TestGatewayTiers.PowerCap }, CancellationToken.None));
+        _ = await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => stranger.DeleteAsync(group.GroupId, force: true, CancellationToken.None));
+        _ = await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => stranger.RemoveMemberAsync(group.GroupId, member.UserId, CancellationToken.None));
+        _ = await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => stranger.AddMemberAsync(group.GroupId, new AddGroupMemberRequest { UserId = member.UserId }, CancellationToken.None));
+
+        Assert.Empty(_tierSync.Calls);
+        Assert.Equal(TestGatewayTiers.StandardCap, (await AllocationAsync(member.UserId)).AllocatedTokens);
+    }
+
+    [Fact]
     public async Task RemoveMemberAsync_drops_the_row_reresolves_the_user_and_404s_when_they_are_not_a_member()
     {
         await SeedReferenceDataAsync();
@@ -438,9 +563,11 @@ public class GroupServiceTests : InMemoryDatabaseTest
     // -- Helpers --
 
     /// <summary>Real accessor + real audit + real resolution over this test's context, as DI would wire them per request.</summary>
-    private GroupService CreateService(User actor)
+    private GroupService CreateService(User actor) => CreateServiceForOid(actor.EntraObjectId);
+
+    private GroupService CreateServiceForOid(string oid)
     {
-        var identity = new ClaimsIdentity([new Claim(ClaimConstants.Oid, actor.EntraObjectId)], "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
+        var identity = new ClaimsIdentity([new Claim(ClaimConstants.Oid, oid)], "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
 

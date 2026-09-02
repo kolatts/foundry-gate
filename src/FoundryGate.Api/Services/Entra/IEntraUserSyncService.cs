@@ -38,7 +38,7 @@ public interface IEntraUserSyncService
     /// replaces the flag-only branch here with <c>DeprovisionAsync(EntraDeparture, userId)</c>.
     /// </remarks>
     /// <returns>Counts of users added, updated and deactivated by this run.</returns>
-    /// <exception cref="ArgumentException">Entra sync is disabled on this host (<c>Entra:Enabled</c> is false) → 400.</exception>
+    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Entra sync is disabled on this host (<c>Entra:Enabled</c> is false) → 503.</exception>
     /// <exception cref="Domain.Exceptions.ConflictException">The directory returned <em>no</em> assigned users while active users exist locally → 409; refusing to deactivate everyone on what is almost certainly a misconfiguration.</exception>
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (and is not among the assigned users being imported) → 403.</exception>
     Task<UserSyncResult> SyncUsersAsync(CancellationToken cancellationToken);

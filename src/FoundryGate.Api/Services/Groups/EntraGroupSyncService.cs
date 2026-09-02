@@ -1,6 +1,7 @@
 using System.Globalization;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Entra;
+using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Quota;
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
@@ -16,10 +17,17 @@ namespace FoundryGate.Api.Services.Groups;
 /// <see cref="AppDbContext"/> so each group's memberships, the allocations they move and the audit row
 /// commit atomically. Semantics are documented on the interface.
 /// </summary>
+/// <remarks>
+/// <b>Commit-point discipline</b> (CONVENTIONS.md): re-resolution can reach
+/// <see cref="IGatewayTierSync"/> and move members' APIM subscriptions, so the actor is resolved and
+/// every refusal is made before it, and the audit row and save run on
+/// <see cref="CancellationToken.None"/> once the gateway has actually been touched.
+/// </remarks>
 public sealed class EntraGroupSyncService(
     AppDbContext dbContext,
     IEntraDirectoryClient directory,
     IQuotaResolutionService quotaResolution,
+    ICurrentUserAccessor currentUser,
     IAuditService audit,
     TimeProvider timeProvider,
     ILogger<EntraGroupSyncService> logger) : IEntraGroupSyncService
@@ -27,6 +35,10 @@ public sealed class EntraGroupSyncService(
     /// <inheritdoc />
     public async Task<GroupSyncResult> SyncAsync(int groupId, CancellationToken cancellationToken)
     {
+        // Actor first: an unprovisioned admin's 403 must land before the directory read and long
+        // before ResolveManyAsync can move anybody's APIM product.
+        _ = await currentUser.GetRequiredUserAsync(cancellationToken);
+
         var group = await dbContext.Groups.SingleOrDefaultAsync(g => g.GroupId == groupId, cancellationToken)
             ?? throw new KeyNotFoundException($"Group {groupId} was not found.");
 
@@ -36,6 +48,8 @@ public sealed class EntraGroupSyncService(
     /// <inheritdoc />
     public async Task<IReadOnlyList<GroupSyncResult>> SyncAllAsync(CancellationToken cancellationToken)
     {
+        _ = await currentUser.GetRequiredUserAsync(cancellationToken);
+
         var groups = await dbContext.Groups
             .Where(group => group.EntraGroupId != string.Empty)
             .OrderBy(group => group.GroupId)
@@ -120,7 +134,14 @@ public sealed class EntraGroupSyncService(
 
         // Resolution overlays the pending membership adds/removes, so this resolves against the roster
         // as it will be once this unit of work commits — and moves the APIM tier for whoever changed.
-        _ = await quotaResolution.ResolveManyAsync(reresolved, BillingPeriod.Current(timeProvider), cancellationToken);
+        // Past this point the gateway may already have accepted a move, so the audit row and the save
+        // below run on CancellationToken.None (see the type remarks).
+        var resolutions = reresolved.Count == 0
+            ? []
+            : await quotaResolution.ResolveManyAsync(reresolved, BillingPeriod.Current(timeProvider), cancellationToken);
+        var commitToken = resolutions.Any(resolution => resolution.TierSyncRequested)
+            ? CancellationToken.None
+            : cancellationToken;
 
         if (skippedUnknown > 0)
         {
@@ -148,9 +169,9 @@ public sealed class EntraGroupSyncService(
                 RemovedUserIds = removed.Select(member => member.UserId).ToArray(),
                 ReresolvedUserIds = reresolved.ToArray(),
             },
-            cancellationToken);
+            commitToken);
 
-        _ = await dbContext.SaveChangesAsync(cancellationToken);
+        _ = await dbContext.SaveChangesAsync(commitToken);
 
         logger.LogInformation(
             "Entra group sync for group {GroupId} ('{GroupName}'): {AddedCount} added, {RemovedCount} removed, {SkippedUnknownUserCount} skipped.",

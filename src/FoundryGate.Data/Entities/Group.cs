@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using FoundryGate.Data.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace FoundryGate.Data.Entities;
 
@@ -32,11 +33,15 @@ public class Group : ICreatedDate
     [StringLength(1000)]
     public string Description { get; set; } = string.Empty;
 
-    /// <summary>Entra group object id this group mirrors; empty when the group is FoundryGate-native.</summary>
+    /// <summary>
+    /// Entra group object id this group mirrors; empty when the group is FoundryGate-native. Unique
+    /// among the non-empty values (<see cref="GroupConfiguration"/>) — two groups backed by one
+    /// directory group would both claim its members. "Is this group Entra-synced?" is this column
+    /// being non-empty and is derived at read time (<c>GroupResponse.IsEntraSynced</c>), never stored
+    /// separately: a second copy of the same fact can only drift from it.
+    /// </summary>
     [StringLength(64)]
     public string EntraGroupId { get; set; } = string.Empty;
-
-    public bool IsEntraSynced { get; set; }
 
     /// <summary>Overrides the system default for members without their own <see cref="User.MonthlyTokenQuota"/> (spec §3.2).</summary>
     public long? MonthlyTokenQuota { get; set; }
@@ -48,4 +53,25 @@ public class Group : ICreatedDate
 
     // Navigation
     public ICollection<GroupMember> GroupMemberships { get; set; } = [];
+}
+
+/// <summary>
+/// The one index an attribute cannot express: <see cref="Group.EntraGroupId"/> is unique only among
+/// the groups that actually have a link. The column is non-nullable (CONVENTIONS.md: strings are
+/// <c>string.Empty</c>, not null), so an unfiltered unique index would allow exactly one native group
+/// in the whole fork.
+/// </summary>
+internal sealed class GroupConfiguration : IEntityTypeConfiguration<Group>
+{
+    /// <summary>The filter, written identically here and in <c>dbo/Tables/Groups.sql</c> — <c>SchemaParityTests</c> compares the two as text.</summary>
+    internal const string EntraGroupIdFilter = "[EntraGroupId] <> ''";
+
+    public void Configure(EntityTypeBuilder<Group> builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        _ = builder.HasIndex(group => group.EntraGroupId)
+            .IsUnique()
+            .HasFilter(EntraGroupIdFilter);
+    }
 }
