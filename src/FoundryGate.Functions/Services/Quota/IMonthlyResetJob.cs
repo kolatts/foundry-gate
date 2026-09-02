@@ -36,12 +36,21 @@ public enum MonthlyResetSkipReasonType
     None = 0,
 
     /// <summary>
-    /// Today is not <c>SystemConfiguration[ResetDayOfMonth]</c>. The timer fires daily and this gate
-    /// decides (#165), rather than the cron expression, so an admin changing the key takes effect the
-    /// same day instead of at the next deployment.
+    /// Today is earlier in the month than <c>SystemConfiguration[ResetDayOfMonth]</c>. The timer fires
+    /// daily and this gate decides (#165), rather than the cron expression, so an admin changing the
+    /// key takes effect the next day instead of at the next deployment.
     /// </summary>
-    NotTheConfiguredDay = 1,
+    BeforeTheConfiguredDay = 1,
 
     /// <summary>Another replica holds the reset lock and is running (or has just run) it.</summary>
     LockHeldElsewhere = 2,
+
+    /// <summary>
+    /// This period already has its <c>quota.monthly-reset</c> audit row, so there is nothing to do on
+    /// any of the month's remaining days. Paired with
+    /// <see cref="BeforeTheConfiguredDay"/> this is what lets the gate be "on <em>or after</em> the
+    /// configured day": a tick lost to an outage is picked up by the next one instead of costing the
+    /// month its reset.
+    /// </summary>
+    AlreadyResetThisPeriod = 3,
 }

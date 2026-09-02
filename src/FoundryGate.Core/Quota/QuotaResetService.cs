@@ -46,12 +46,16 @@ public sealed class QuotaResetService(
 
         // One row per run, no single target (CONVENTIONS.md: empty target when there is none).
         // Added before the save so it commits atomically with every allocation it describes.
+        // periodYear/periodMonth are load-bearing, not decoration: the scheduled job reads them back to
+        // answer "has this period already been reset?" so a missed day is not a missed month (#38).
         var details = new
         {
             usersResetCount = resolutions.Count,
             periodYear = period.Year,
             periodMonth = period.Month,
-            tierSyncCount,
+            // Named for what it means to a human reading the trail, not for the seam it went through:
+            // every one of these is a developer whose enforced budget moved this run.
+            tierChangeCount = tierSyncCount,
         };
 
         _ = trigger.ActorUserId is { } actorUserId
@@ -79,7 +83,7 @@ public sealed class QuotaResetService(
         }
 
         logger.LogInformation(
-            "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierSyncCount} tier syncs.",
+            "Quota reset for {Period} ({AuditAction}): {UsersResetCount} active users, {TierChangeCount} tier change(s).",
             period,
             trigger.AuditAction,
             resolutions.Count,

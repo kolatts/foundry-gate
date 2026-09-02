@@ -14,14 +14,19 @@ namespace FoundryGate.Functions.Services.Quota;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A lease is taken for <see cref="StorageOptions.LockLeaseSeconds"/> and released on dispose. The
-/// duration is a ceiling, not a deadline: if the process dies mid-reset the lease expires by itself,
-/// so no manual unlock is ever needed — which is exactly why a lease beats a "lock row" here.
+/// <b>The lease is renewed, not just taken.</b> Azure caps a fixed-duration lease at 60 seconds, so a
+/// fork large enough for the reset to run longer than that would lose its mutual exclusion mid-run —
+/// and the release on dispose would fail too, because the lease id no longer matches. The handle
+/// therefore renews in the background at a third of the duration for as long as it is held. A renewal
+/// that fails is logged at Warning and the loop stops: the lease then expires on its own, which is the
+/// same state as a crashed replica and is what makes the whole thing recoverable without a manual
+/// unlock.
 /// </para>
 /// <para>
 /// Every storage failure is swallowed into "not acquired" plus a log line, per
-/// <see cref="IResetLock"/>: the job must degrade to "someone else has it" rather than throwing, and
-/// the container is created on demand so a fresh fork needs no setup step.
+/// <see cref="IResetLock"/> — including credential failures, which are exactly what a not-yet-propagated
+/// role assignment or an expired federated token looks like. The container is created on demand so a
+/// fresh fork needs no setup step.
 /// </para>
 /// </remarks>
 public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions options, ILogger<BlobResetLock> logger) : IResetLock
@@ -30,6 +35,8 @@ public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions 
     public async Task<IResetLockHandle> TryAcquireAsync(string lockName, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(lockName);
+
+        var leaseDuration = TimeSpan.FromSeconds(options.LockLeaseSeconds);
 
         try
         {
@@ -50,10 +57,10 @@ public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions 
             }
 
             var lease = blob.GetBlobLeaseClient();
-            _ = await lease.AcquireAsync(TimeSpan.FromSeconds(options.LockLeaseSeconds), cancellationToken: cancellationToken);
+            _ = await lease.AcquireAsync(leaseDuration, cancellationToken: cancellationToken);
 
-            logger.LogDebug("Acquired the {LockName} lease for {LeaseSeconds}s.", lockName, options.LockLeaseSeconds);
-            return new LeaseHandle(lease, lockName, logger);
+            logger.LogDebug("Acquired the {LockName} lease for {LeaseSeconds}s, renewing while held.", lockName, options.LockLeaseSeconds);
+            return new LeaseHandle(lease, lockName, leaseDuration, logger);
         }
         catch (RequestFailedException exception) when (exception.Status == 409)
         {
@@ -70,24 +77,94 @@ public sealed class BlobResetLock(BlobServiceClient blobService, StorageOptions 
                 exception.Status);
             return NotAcquired.Instance;
         }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // Credential failures (an expired federated token, a role assignment that has not propagated
+            // yet) surface as AuthenticationFailedException, not RequestFailedException, and would
+            // otherwise escape and fail the whole reset — the precise outcome IResetLock's
+            // "it does not throw" contract exists to prevent. Error, not Warning: unlike a 409 this is
+            // something an operator has to fix. Cancellation is the host shutting us down, and must
+            // still propagate.
+            logger.LogError(
+                exception,
+                "Unexpected failure taking the {LockName} lease on storage container {Container}; skipping this run. Check the Functions identity's Storage Blob Data Owner assignment on the account.",
+                lockName,
+                options.LockContainerName);
+
+            return NotAcquired.Instance;
+        }
     }
 
-    private sealed class LeaseHandle(BlobLeaseClient lease, string lockName, ILogger logger) : IResetLockHandle
+    private sealed class LeaseHandle : IResetLockHandle
     {
+        private readonly BlobLeaseClient _lease;
+        private readonly string _lockName;
+        private readonly ILogger _logger;
+        private readonly CancellationTokenSource _renewals = new();
+        private readonly Task _renewalLoop;
+
+        public LeaseHandle(BlobLeaseClient lease, string lockName, TimeSpan leaseDuration, ILogger logger)
+        {
+            _lease = lease;
+            _lockName = lockName;
+            _logger = logger;
+
+            // A third of the duration leaves room for two consecutive failures before the lease lapses.
+            _renewalLoop = RenewAsync(leaseDuration / 3, _renewals.Token);
+        }
+
         public bool IsAcquired => true;
 
         public async ValueTask DisposeAsync()
         {
+            await _renewals.CancelAsync();
+
+            try
+            {
+                await _renewalLoop;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: that is how the loop ends.
+            }
+
             try
             {
                 // CancellationToken.None: releasing is cleanup. A cancelled host must not leave the
                 // lease held for its full duration when it could have handed it back immediately.
-                _ = await lease.ReleaseAsync(cancellationToken: CancellationToken.None);
+                _ = await _lease.ReleaseAsync(cancellationToken: CancellationToken.None);
             }
             catch (RequestFailedException exception)
             {
                 // Harmless: the lease expires on its own. Logged so a pattern of these is visible.
-                logger.LogInformation(exception, "Could not release the {LockName} lease; it will expire on its own.", lockName);
+                _logger.LogInformation(exception, "Could not release the {LockName} lease; it will expire on its own.", _lockName);
+            }
+
+            _renewals.Dispose();
+        }
+
+        private async Task RenewAsync(TimeSpan interval, CancellationToken cancellationToken)
+        {
+            using var timer = new PeriodicTimer(interval);
+
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    _ = await _lease.RenewAsync(cancellationToken: cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    // Stop renewing and let the lease lapse. Carrying on would just log the same failure
+                    // every few seconds; the run continues, and the worst case is the one a crashed
+                    // replica already produces — another instance may pick the reset up, idempotently.
+                    _logger.LogWarning(exception, "Could not renew the {LockName} lease; it will lapse and another replica may take it.", _lockName);
+                    return;
+                }
             }
         }
     }

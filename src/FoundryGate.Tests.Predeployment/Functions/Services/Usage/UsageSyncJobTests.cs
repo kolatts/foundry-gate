@@ -137,16 +137,121 @@ public class UsageSyncJobTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task A_pass_with_no_traffic_and_nothing_to_change_writes_no_audit_row()
+    public async Task Five_consecutive_ticks_with_four_no_ops_write_one_audit_row()
     {
-        // 96 ticks a day: an audit row per no-op would bury every real admin action in the viewer.
+        // The review's probe, pinned. The old guard was `usage.Count == 0 && updated == 0`, but the
+        // query returns month-to-date TOTALS, so after the first request of the month usage.Count is
+        // never zero again and every one of the 96 daily ticks wrote a row — the ~35k/year D-016 exists
+        // to prevent.
         var dev = await SeedUserAsync("Ada");
         await SeedAllocationAsync(dev, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 0);
+        var query = new FakeUsageQueryClient(Usage(dev.UserId, total: 4_200));
 
-        var outcome = await CreateJob(new FakeUsageQueryClient()).RunAsync(CancellationToken.None);
+        for (var tick = 0; tick < 5; tick++)
+        {
+            _ = await CreateJob(query).RunAsync(CancellationToken.None);
+            _clock.Advance(TimeSpan.FromMinutes(15));
+        }
 
-        Assert.Equal(0, outcome.SubscriptionsSeen);
-        Assert.Empty(await Context.AuditLogs.AsNoTracking().ToListAsync());
+        var audit = Assert.Single(await Context.AuditLogs.AsNoTracking().ToListAsync());
+        Assert.Equal(AuditActions.UsageSynced, audit.Action);
+        Assert.Contains("\"allocationsUpdated\":1", audit.Details, StringComparison.Ordinal); // the first tick
+    }
+
+    [Fact]
+    public async Task A_pass_with_no_traffic_at_all_writes_one_row_the_first_time_and_none_after()
+    {
+        // The very first recorded pass is worth a row even when it is all zeroes: it is what tells an
+        // operator the job is wired up. After that, silence.
+        var dev = await SeedUserAsync("Ada");
+        await SeedAllocationAsync(dev, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 0);
+        var query = new FakeUsageQueryClient();
+
+        var first = await CreateJob(query).RunAsync(CancellationToken.None);
+        _clock.Advance(TimeSpan.FromMinutes(15));
+        _ = await CreateJob(query).RunAsync(CancellationToken.None);
+
+        Assert.Equal(0, first.SubscriptionsSeen);
+        Assert.Single(await Context.AuditLogs.AsNoTracking().ToListAsync());
+    }
+
+    [Fact]
+    public async Task A_newly_over_budget_developer_is_recorded_even_though_their_usage_did_not_move()
+    {
+        // An admin cutting someone's quota makes them drift without a single token changing hands.
+        // Gating the audit row on `updated` alone would have swallowed it.
+        var dev = await SeedUserAsync("Ada");
+        await SeedAllocationAsync(dev, Period, allocated: TestGatewayTiers.PowerCap, tokensUsed: 0);
+        var query = new FakeUsageQueryClient(Usage(dev.UserId, total: TestGatewayTiers.StandardCap + 1));
+
+        _ = await CreateJob(query).RunAsync(CancellationToken.None); // in budget on Power
+        _clock.Advance(TimeSpan.FromMinutes(15));
+
+        var row = await Context.QuotaAllocations.SingleAsync();
+        row.AllocatedTokens = TestGatewayTiers.StandardCap; // demoted to Standard
+        await Context.SaveChangesAsync();
+
+        var second = await CreateJob(query).RunAsync(CancellationToken.None);
+
+        Assert.Equal(0, second.AllocationsUpdated); // nothing about their usage changed
+        Assert.Equal(1, second.DriftCount);
+        Assert.Equal(2, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.UsageSynced));
+    }
+
+    [Fact]
+    public async Task A_newly_unknown_subscription_is_recorded_even_with_nothing_else_to_change()
+    {
+        var dev = await SeedUserAsync("Ada");
+        await SeedAllocationAsync(dev, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 4_200);
+        var query = new FakeUsageQueryClient(Usage(dev.UserId, total: 4_200));
+
+        _ = await CreateJob(query).RunAsync(CancellationToken.None); // baseline: nothing to update
+        _clock.Advance(TimeSpan.FromMinutes(15));
+        query.Rows.Add(new SubscriptionUsage("someone-elses-subscription", 1, 1, 2, 1));
+
+        var second = await CreateJob(query).RunAsync(CancellationToken.None);
+
+        Assert.Equal(0, second.AllocationsUpdated);
+        Assert.Equal(1, second.UnknownSubscriptions);
+        Assert.Equal(2, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.UsageSynced));
+    }
+
+    [Fact]
+    public async Task Early_in_a_month_the_just_closed_period_is_reconciled_too()
+    {
+        // Otherwise the old month's final pass — plus Log Analytics ingestion lag — is missing from it
+        // permanently, because BillingPeriod.Current never looks back.
+        _clock.SetUtcNow(new DateTimeOffset(2026, 11, 1, 0, 30, 0, TimeSpan.Zero));
+        var dev = await SeedUserAsync("Ada");
+        await SeedAllocationAsync(dev, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 1_000); // October
+        await SeedAllocationAsync(dev, new BillingPeriod(2026, 11), allocated: TestGatewayTiers.StandardCap, tokensUsed: 0);
+        var query = new FakeUsageQueryClient(Usage(dev.UserId, total: 9_999));
+
+        var outcome = await CreateJob(query).RunAsync(CancellationToken.None);
+
+        Assert.True(outcome.IncludedPreviousPeriod);
+        Assert.Equal([new BillingPeriod(2026, 11), Period], query.Queried);
+
+        var rows = await Context.QuotaAllocations.AsNoTracking().ToListAsync();
+        Assert.Equal(9_999, rows.Single(r => r.PeriodMonth == 10).TokensUsed); // the late October traffic landed
+        Assert.Equal(9_999, rows.Single(r => r.PeriodMonth == 11).TokensUsed);
+        Assert.Equal(2, outcome.AllocationsUpdated);
+    }
+
+    [Fact]
+    public async Task Past_the_grace_window_the_closed_month_is_left_alone()
+    {
+        _clock.SetUtcNow(new DateTimeOffset(2026, 11, UsageSyncJob.PreviousPeriodGraceDays + 1, 0, 30, 0, TimeSpan.Zero));
+        var dev = await SeedUserAsync("Ada");
+        await SeedAllocationAsync(dev, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 1_000); // October
+        await SeedAllocationAsync(dev, new BillingPeriod(2026, 11), allocated: TestGatewayTiers.StandardCap, tokensUsed: 0);
+        var query = new FakeUsageQueryClient(Usage(dev.UserId, total: 9_999));
+
+        var outcome = await CreateJob(query).RunAsync(CancellationToken.None);
+
+        Assert.False(outcome.IncludedPreviousPeriod);
+        Assert.Equal([new BillingPeriod(2026, 11)], query.Queried);
+        Assert.Equal(1_000, (await Context.QuotaAllocations.AsNoTracking().SingleAsync(r => r.PeriodMonth == 10)).TokensUsed);
     }
 
     [Fact]

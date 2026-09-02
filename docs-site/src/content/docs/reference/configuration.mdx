@@ -18,7 +18,7 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 | `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. **Superseded** for deployment management by the `Gateway__*` environment variables below (the gateway runs one account per region, and infra sets them, so nothing has to be typed here); kept as seeded reference data. |
 | `EntraTenantId` | `""` | Azure AD tenant ID used by the Microsoft Graph SDK for bulk user sync. |
 | `EntraGroupSyncEnabled` | `"false"` | Set to `"true"` to enable automatic Entra group member sync. When `false`, group sync must be triggered manually from the admin UI. |
-| `ResetDayOfMonth` | `"1"` | Day of month the monthly quota reset acts on, `1`–`28` (no month is short of a 28th). The reset Function wakes daily at 00:01 UTC and does nothing on any other day, so a change here takes effect the next day with no redeploy. A value outside the range falls back to `1` with a warning rather than never resetting. Note this moves *FoundryGate's* allocation rows only — the gateway's own `token-quota` window is a UTC calendar month and always resets on the 1st, whatever this says. |
+| `ResetDayOfMonth` | `"1"` | Day of month the monthly quota reset acts on, `1`–`28` (no month is short of a 28th). The reset Function wakes daily at 00:01 UTC and runs on the first tick **on or after** this day that finds the month not yet reset — so a tick lost to an outage is picked up the next day instead of costing the month its reset, and a change here takes effect the next day with no redeploy. A value outside the range falls back to `1` with a warning rather than never resetting. Note this moves *FoundryGate's* allocation rows only — the gateway's own `token-quota` window is a UTC calendar month and always resets on the 1st, whatever this says. |
 
 <Aside type="caution">
 Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl` and `ApimProductId` are set to real values. Foundry deployment management reads the `Gateway__*` variables instead, which infra sets automatically.
@@ -110,7 +110,7 @@ to start if it is given anything else. With it absent, the reconciliation job lo
 each pass and does nothing, which is the correct behaviour for a fork that has not enabled
 the gateway's GenAI diagnostic setting.
 
-It also has two settings of its own, both optional and both normally left unset:
+It also has four settings of its own, all optional; the two addressing ones are normally left unset:
 
 | Key | Default | Description |
 |---|---|---|

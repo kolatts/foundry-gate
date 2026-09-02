@@ -40,11 +40,13 @@ public static class FunctionsServiceCollectionExtensions
         services.AddSingleton(settings.Gateway);
         services.AddSingleton(settings.Storage);
 
-        // Quota resolution + the monthly reset, shared with the Api (#119). The tier sync is always the
-        // null one here: the reset re-runs resolution over inputs that have not changed, so the tier it
-        // resolves is the tier already recorded and no subscription can need moving — asserted by
-        // MonthlyResetJobTests. Nothing else in this host resolves quota.
-        services.AddScoped<IGatewayTierSync, NullGatewayTierSync>();
+        // Quota resolution + the monthly reset, shared with the Api (#119). The tier sync here reports
+        // rather than moves: this host has no APIM management client, and a reset CAN change a tier —
+        // `PUT /config` on DefaultMonthlyTokenQuota re-resolves nobody, so the next scheduled reset is
+        // the first thing to notice (#193/#194). WarningGatewayTierSync says so at Warning and the run's
+        // audit row counts it; NullGatewayTierSync would have logged "no gateway is configured", which
+        // is false here, at Debug.
+        services.AddScoped<IGatewayTierSync, WarningGatewayTierSync>();
         services.AddQuotaCore();
 
         services.AddScoped<IMonthlyResetJob, MonthlyResetJob>();

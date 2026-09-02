@@ -46,6 +46,7 @@
     <!-- Functions: usage reconciliation reads ApiManagementGatewayLlmLog (#39/#84); the blob
          lease that keeps two replicas from double-running the monthly reset (#38). -->
     <PackageVersion Include="Azure.Monitor.Query" Version="1.7.1" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.2" />
     <PackageVersion Include="Microsoft.Extensions.Azure" Version="1.14.1" />
 

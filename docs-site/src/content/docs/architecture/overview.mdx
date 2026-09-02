@@ -172,11 +172,11 @@ runs is a plain `.kql` file checked into the repo, so an operator can paste it i
 Analytics blade and get exactly the number the Function got:
 
 <Pipeline
-  label="UsageSyncFunction — reconciliation, every 15 minutes"
+  label="UsageSyncFunction — reconciliation, every 15 minutes (and the closed month, for three days)"
   steps={[
     {
       title: "Query ApiManagementGatewayLlmLog for per-request token counts",
-      detail: "The gateway's LLM log table records prompt/completion/total tokens per request. Joined to ApiManagementGatewayLogs on CorrelationId to attribute each request to an APIM subscription.",
+      detail: "The gateway's LLM log table records prompt/completion/total tokens per request. One request can span several entries, so they are collapsed to one row per CorrelationId first, then joined to ApiManagementGatewayLogs — the only table that knows which APIM subscription made the call.",
     },
     {
       title: "Overwrite QuotaAllocation.TokensUsed in SQL",
@@ -190,10 +190,13 @@ Analytics blade and get exactly the number the Function got:
 />
 
 <Aside type="note">
-**These totals are a floor, not a ceiling.** A stream the client interrupts can leave the
-gateway's LLM log with a low or missing token count, so reconciled usage can read slightly
-under what was really spent. That is survivable precisely because nothing depends on it:
-the gateway's own counter — the one that returns `403` — is separate and authoritative.
+**These totals can read low, never high.** One request produces several log entries — the
+request, the response, and a further entry per 32 KB chunk of either — all carrying the same
+per-request token counts, so the query collapses them to one row per request before adding
+anything up. What it cannot recover is a request whose counts were never logged at all: a
+stream the client interrupts can leave the token usage missing or inaccurate at the source.
+So reconciled usage is a floor. That is survivable precisely because nothing depends on it —
+the gateway's own counter, the one that returns `403`, is separate and authoritative.
 Per-developer cost estimates (tokens × rate card) build on these figures and are tracked
 separately.
 </Aside>
@@ -216,8 +219,8 @@ changing that setting takes effect the next day rather than at the next deployme
   label="MonthlyResetFunction — 00:01 UTC daily, acting on the configured reset day"
   steps={[
     {
-      title: "Is today the configured reset day?",
-      detail: "Reads SystemConfiguration[ResetDayOfMonth] (1–28) and stops here on every other day. One replica then takes a short blob lease, so two instances waking together cannot both run — though the reset is idempotent either way.",
+      title: "Is this period still owed a reset?",
+      detail: "Runs on or after SystemConfiguration[ResetDayOfMonth] (1–28) when this month has no reset in the audit log yet, so a tick lost to an outage is picked up by the next day rather than costing the month its reset. One replica then takes a short blob lease, renewed while held, so two instances waking together cannot both run — though the reset is idempotent either way.",
     },
     {
       title: "Resolve quota for the new period and upsert QuotaAllocation",

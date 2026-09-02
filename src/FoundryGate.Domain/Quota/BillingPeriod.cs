@@ -25,6 +25,22 @@ public readonly record struct BillingPeriod(int Year, int Month)
         return FromInstant(timeProvider.GetUtcNow());
     }
 
+    /// <summary>
+    /// The calendar month before this one, rolling the year at January. Used by the usage
+    /// reconciliation job, which keeps re-reading the just-closed period for a few days into the new
+    /// one: the final pass of a month cannot see traffic that Log Analytics had not ingested yet, and
+    /// without a second look those tokens would be missing from the closed month forever (#39/#84).
+    /// </summary>
+    public BillingPeriod Previous() => Month == 1
+        ? new BillingPeriod(Year - 1, 12)
+        : new BillingPeriod(Year, Month - 1);
+
+    /// <summary>Midnight UTC on the first day of this period — the start of the window the gateway's <c>token-quota</c> counts in, and the query time range reconciliation asks for.</summary>
+    public DateTimeOffset StartInstant() => new(Year, Month, 1, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>Midnight UTC on the first day of the <em>next</em> period — the exclusive end of this period's window.</summary>
+    public DateTimeOffset EndInstant() => StartInstant().AddMonths(1);
+
     /// <inheritdoc />
     public override string ToString() => $"{Year:D4}-{Month:D2}";
 }

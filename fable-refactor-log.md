@@ -366,14 +366,54 @@ re-resolve allocations that were already correct. The gateway's own `token-quota
 a UTC calendar month regardless — this setting moves FoundryGate's mirror, not the gateway's
 counter, and the docs say so.
 
-### D-016: The usage sync writes no audit row for a pass that saw nothing
-**Date:** 2026-09-02 (#39/#84)
-**Decision:** `UsageSyncJob` writes its single `usage.synced` row only when the pass saw traffic
-or changed an allocation. A pass that reconciled nothing logs at Debug and saves nothing.
+### D-016: The usage sync writes no audit row for a pass that changed nothing
+**Date:** 2026-09-02 (#39/#84), amended in the #187 review
+**Decision:** `UsageSyncJob` writes its single `usage.synced` row when a `TokensUsed` value actually
+moved, or when the counts that describe a *problem* — unknown subscriptions, drift, developers with
+no allocation row — differ from the last recorded pass. Otherwise it logs at Debug and saves nothing.
 **Why:** The job runs every 15 minutes — 96 rows a day, ~35k a year, of "nothing happened" in the
-table the admin audit viewer pages through. That buries every real admin action behind noise, for
-a heartbeat Application Insights already provides. The rule stays "exactly one audit row per run
-that did something", which is what the audit trail is actually for.
+table the admin audit viewer pages through. That buries every real admin action behind noise, for a
+heartbeat Application Insights already provides.
+**Amendment (review of PR #187):** the first implementation gated on `usage.Count == 0 && updated == 0`,
+which does not work: the query returns month-to-date *totals*, so after the first request of the month
+`usage.Count` is never zero again and every tick wrote a row anyway — the reviewer reproduced five rows
+from five ticks with four no-ops. Two further corrections came out of fixing it. Gating on the raw
+problem counts instead would write a row every 15 minutes for as long as one unknown subscription
+existed (the same flood, differently caused), and gating on `updated` alone would silently swallow the
+first pass on which an admin's quota cut put someone over budget without their usage changing. Hence
+"differs from the last recorded pass", read back from the previous row's own details JSON — state we
+wrote ourselves, and anything unreadable is treated as different, so it fails towards recording.
+
+### D-017: The reconciliation KQL de-duplicates before it sums
+**Date:** 2026-09-02 (#187 review)
+**Problem:** `ApiManagementGatewayLlmLog` emits several entries per `CorrelationId` — request and
+response separately, plus one per 32 KB chunk of either — and the token columns are documented
+per *request* ("PromptTokens: The number of prompt tokens used by the request"), not per entry. The
+first query summed across the join, which multiplies a developer's usage by however many entries their
+requests happened to produce. Left in, it would also have made the architecture page's "these totals
+are a floor" caveat exactly backwards.
+**Decision:** collapse the LLM log to one row per `CorrelationId` with `max()` per token column before
+joining, and `distinct` the gateway-log side so a duplicate there cannot re-multiply.
+**Why `max()` rather than `arg_max(SequenceNumber, *)`:** max is right whether the counts repeat on
+every entry, appear only on the response entry, or appear only on the last one; `arg_max` is right only
+in the last case and picks a token-less entry whenever the highest sequence number belongs to a chunked
+request rather than the response. The one shape max would under-count — counts genuinely partitioned
+per chunk — is ruled out by the "used by the request" wording, and #178 verifies it against a live
+gateway before these numbers are trusted for billing.
+
+### D-018: A missed reset day is not a missed month
+**Date:** 2026-09-02 (#187 review)
+**Problem:** the gate was `today != configuredDay`, so one failed tick at 00:01 — a storage blip, a
+cold start that timed out, a deployment landing on the minute — lost the month's reset entirely, while
+three separate comments in the same files promised "the next tick retries".
+**Decision:** the gate is `today >= configuredDay && not yet reset this period`, where "already reset"
+is the existence of a `quota.monthly-reset` audit row inside the period's own date window. A late run
+logs a Warning naming the day it should have happened.
+**Why the audit row is the state:** it commits in the same transaction as the allocations it describes,
+so "the row exists" and "the reset committed" are the same fact — no separate marker to keep honest.
+The predicate is a date bound rather than a substring match on the details JSON (both come from the
+same `TimeProvider`, `OccurredDate` is indexed, and matching `"periodYear":2026` as text would break
+the day the serializer's formatting changed); the details still carry the period for human readers.
 
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01

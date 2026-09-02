@@ -1,8 +1,9 @@
 // FoundryGate usage reconciliation (#39 / #84) — billing-grade per-developer token totals.
 //
 // Run it by hand: Log Analytics workspace > Logs, set the time range to the billing period, paste.
-// The Function passes the period as the query's *time range* rather than a literal in the text, so
-// this file is parameter-free and the same query answers for any period you select in the portal.
+// The Function passes the period as the query's *time range* (LogsQueryClient's QueryTimeRange, which
+// bounds TimeGenerated server-side) rather than as a literal in the text, so this file is
+// parameter-free and the same query answers for any period you select in the portal.
 //
 // Two tables, because neither alone is enough:
 //   ApiManagementGatewayLlmLog   per-request prompt/completion/total tokens and the model, from the
@@ -11,15 +12,42 @@
 //   ApiManagementGatewayLogs     the gateway's request log, which does carry ApimSubscriptionId.
 // CorrelationId is the same value on both rows for one request, so it is the join key.
 //
-// Caveat (documented in #84 and on the architecture overview): an interrupted stream can leave the
-// LLM log with a low or missing token count, so these totals are a floor, not a ceiling. Enforcement
-// does not depend on them — the gateway's own token-quota counter is what returns 403.
+// *** One request can produce several rows on BOTH sides — de-duplicate before summing. ***
+// The LLM log emits "requests and responses, including chunked messages for large requests and
+// responses ... in separate log entries that you can correlate by using the CorrelationId field"
+// (learn.microsoft.com/azure/api-management/api-management-howto-llm-logs), which is what
+// SequenceNumber indexes. The token columns are documented per *request*, not per entry —
+// "PromptTokens: The number of prompt tokens used by the request"
+// (learn.microsoft.com/azure/azure-monitor/reference/tables/apimanagementgatewayllmlog) — so the same
+// counts repeat across an exchange's entries and a naive sum() multiplies every developer's usage by
+// however many entries their requests happened to produce.
+//
+// The collapse below is max() per column per CorrelationId, deliberately in preference to
+// arg_max(SequenceNumber, *):
+//   - counts repeated on every entry  -> max is that value (sum would multiply)
+//   - counts only on the response entry, 0/null elsewhere -> max is that value
+//   - counts only on the last entry -> max is that value
+// arg_max(SequenceNumber, *) is right only in the last case, and picks a token-less entry whenever
+// the highest sequence number belongs to a chunked request rather than the response. The one shape
+// max would under-count is genuinely partitioned per-chunk counts, which the "used by the request"
+// wording rules out and #178 checks against a live gateway before this is trusted for billing.
+//
+// Caveat that survives the de-duplication (documented in #84 and on the architecture overview):
+// "In scenarios where token usage is missing (such as a broken stream or terminated connection),
+// token usage might not be logged or is inaccurate" — so an interrupted stream can leave a request
+// counted low or not at all. These totals are therefore a floor. Enforcement does not depend on them:
+// the gateway's own token-quota counter is what returns 403.
 ApiManagementGatewayLlmLog
 | where isnotempty(CorrelationId)
+| summarize
+    PromptTokens = max(PromptTokens),
+    CompletionTokens = max(CompletionTokens),
+    TotalTokens = max(TotalTokens)
+  by CorrelationId
 | join kind=inner (
     ApiManagementGatewayLogs
     | where isnotempty(ApimSubscriptionId)
-    | project CorrelationId, ApimSubscriptionId
+    | distinct CorrelationId, ApimSubscriptionId
   ) on CorrelationId
 | summarize
     PromptTokens = sum(PromptTokens),
@@ -27,4 +55,3 @@ ApiManagementGatewayLlmLog
     TotalTokens = sum(TotalTokens),
     RequestCount = count()
   by ApimSubscriptionId
-| order by TotalTokens desc

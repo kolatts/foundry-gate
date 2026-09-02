@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
 using FoundryGate.Domain.Constants;
@@ -19,12 +20,86 @@ public sealed class UsageSyncJob(
     TimeProvider timeProvider,
     ILogger<UsageSyncJob> logger) : IUsageSyncJob
 {
+    /// <summary>
+    /// How far into a new month the just-closed period keeps being reconciled as well.
+    /// </summary>
+    /// <remarks>
+    /// The last pass of a month runs at 23:45 and sees only what Log Analytics had ingested by then;
+    /// everything after that — the final quarter-hour of traffic, plus ingestion lag, which Azure
+    /// Monitor does not bound tightly — would otherwise be missing from that month forever, because
+    /// <c>BillingPeriod.Current</c> never looks back. Three days is generous against documented
+    /// latency and costs 288 extra queries against a period whose row count has stopped growing.
+    /// </remarks>
+    public const int PreviousPeriodGraceDays = 3;
+
     /// <inheritdoc />
     public async Task<UsageSyncOutcome> RunAsync(CancellationToken cancellationToken)
     {
-        var period = BillingPeriod.Current(timeProvider);
-        var usage = await usageQuery.QueryPeriodUsageAsync(period, cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        var current = BillingPeriod.FromInstant(now);
 
+        var periods = new List<BillingPeriod> { current };
+        if (now.UtcDateTime.Day <= PreviousPeriodGraceDays)
+        {
+            periods.Add(current.Previous());
+        }
+
+        var totals = new PeriodTotals();
+        foreach (var period in periods)
+        {
+            totals = totals.Add(await ReconcilePeriodAsync(period, cancellationToken));
+        }
+
+        var outcome = new UsageSyncOutcome(
+            totals.SubscriptionsSeen,
+            totals.AllocationsUpdated,
+            totals.UnknownSubscriptions,
+            totals.DriftCount,
+            current,
+            periods.Count > 1);
+
+        if (!await ShouldAuditAsync(outcome, totals.MissingAllocations, cancellationToken))
+        {
+            // Nothing moved and nothing new is wrong. At 96 ticks a day, auditing this anyway is ~35k
+            // rows a year of "same as last time" burying every real admin action in the audit viewer;
+            // the pass itself is visible in Application Insights either way (D-016).
+            logger.LogDebug("Usage reconciliation for {Periods}: nothing changed since the last recorded pass.", string.Join(", ", periods));
+            return outcome;
+        }
+
+        _ = audit.AddSystem(
+            AuditActions.UsageSynced,
+            string.Empty,
+            string.Empty,
+            new
+            {
+                subscriptionsSeen = outcome.SubscriptionsSeen,
+                allocationsUpdated = outcome.AllocationsUpdated,
+                unknownSubscriptions = outcome.UnknownSubscriptions,
+                missingAllocations = totals.MissingAllocations,
+                driftCount = outcome.DriftCount,
+                periodYear = current.Year,
+                periodMonth = current.Month,
+                periodsReconciled = periods.Select(p => p.ToString()).ToList(),
+            });
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Usage reconciliation for {Periods}: {SubscriptionsSeen} subscription(s) seen, {AllocationsUpdated} allocation(s) updated, {UnknownSubscriptions} unknown, {DriftCount} over budget.",
+            string.Join(", ", periods),
+            outcome.SubscriptionsSeen,
+            outcome.AllocationsUpdated,
+            outcome.UnknownSubscriptions,
+            outcome.DriftCount);
+
+        return outcome;
+    }
+
+    /// <summary>Reconciles one period onto the change tracker. Saves nothing — the caller owns the single commit.</summary>
+    private async Task<PeriodTotals> ReconcilePeriodAsync(BillingPeriod period, CancellationToken cancellationToken)
+    {
+        var usage = await usageQuery.QueryPeriodUsageAsync(period, cancellationToken);
         var (byUserId, unknownSubscriptions) = MapToUsers(usage);
 
         var userIds = byUserId.Keys.ToList();
@@ -78,43 +153,67 @@ public sealed class UsageSyncJob(
                 period);
         }
 
-        var outcome = new UsageSyncOutcome(usage.Count, updated, unknownSubscriptions.Count, drift, period);
+        return new PeriodTotals(usage.Count, updated, unknownSubscriptions.Count, drift, missingAllocations);
+    }
 
-        // A pass that saw no traffic and changed nothing writes nothing at all. The alternative — one
-        // audit row per tick — is 96 rows a day of "nothing happened" burying real admin actions in the
-        // audit viewer; the run itself is visible in Application Insights either way.
-        if (usage.Count == 0 && updated == 0)
+    /// <summary>
+    /// Is there anything worth a row in the audit trail? Yes when a <c>TokensUsed</c> value actually
+    /// moved, and yes when the counts that describe a <em>problem</em> — unknown subscriptions, drift,
+    /// developers with no allocation row — differ from the last recorded pass.
+    /// </summary>
+    /// <remarks>
+    /// The last-pass comparison is what makes "new" mean something. Gating on the raw counts instead
+    /// would write a row every 15 minutes for as long as a single unknown subscription existed, which
+    /// is the same flood with extra steps; gating on <c>updated</c> alone would silently swallow the
+    /// first pass on which an admin's quota cut put someone over budget without their usage changing.
+    /// The previous run's own details JSON is the state — we wrote it, so parsing it back is not a
+    /// contract with anyone else — and anything unreadable is treated as "different", which fails
+    /// towards recording rather than towards silence.
+    /// </remarks>
+    private async Task<bool> ShouldAuditAsync(UsageSyncOutcome outcome, int missingAllocations, CancellationToken cancellationToken)
+    {
+        if (outcome.AllocationsUpdated > 0)
         {
-            logger.LogDebug("Usage reconciliation for {Period}: nothing reported and nothing to change.", period);
-            return outcome;
+            return true;
         }
 
-        _ = audit.AddSystem(
-            AuditActions.UsageSynced,
-            string.Empty,
-            string.Empty,
-            new
-            {
-                subscriptionsSeen = outcome.SubscriptionsSeen,
-                allocationsUpdated = outcome.AllocationsUpdated,
-                unknownSubscriptions = outcome.UnknownSubscriptions,
-                missingAllocations,
-                driftCount = outcome.DriftCount,
-                periodYear = period.Year,
-                periodMonth = period.Month,
-            });
+        var previous = await dbContext.AuditLogs.AsNoTracking()
+            .Where(log => log.Action == AuditActions.UsageSynced)
+            .OrderByDescending(log => log.OccurredDate)
+            .ThenByDescending(log => log.AuditLogId)
+            .Select(log => log.Details)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        if (previous is null)
+        {
+            // No pass has ever been recorded. Write one even if it is all zeroes: the first row is what
+            // tells an operator the job is wired up at all.
+            return true;
+        }
 
-        logger.LogInformation(
-            "Usage reconciliation for {Period}: {SubscriptionsSeen} subscription(s) seen, {AllocationsUpdated} allocation(s) updated, {UnknownSubscriptions} unknown, {DriftCount} over budget.",
-            period,
-            outcome.SubscriptionsSeen,
-            outcome.AllocationsUpdated,
-            outcome.UnknownSubscriptions,
-            outcome.DriftCount);
+        return !MatchesPreviousCounts(previous, outcome, missingAllocations);
+    }
 
-        return outcome;
+    /// <summary>True when the previous <c>usage.synced</c> row describes exactly the same problem counts.</summary>
+    private bool MatchesPreviousCounts(string previousDetails, UsageSyncOutcome outcome, int missingAllocations)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(previousDetails);
+            var root = document.RootElement;
+
+            return Count(root, "unknownSubscriptions") == outcome.UnknownSubscriptions
+                && Count(root, "driftCount") == outcome.DriftCount
+                && Count(root, "missingAllocations") == missingAllocations;
+        }
+        catch (JsonException exception)
+        {
+            logger.LogInformation(exception, "Could not read the previous usage.synced details; recording this pass rather than assuming it is a repeat.");
+            return false;
+        }
+
+        static int? Count(JsonElement root, string property) =>
+            root.TryGetProperty(property, out var value) && value.TryGetInt32(out var count) ? count : null;
     }
 
     /// <summary>
@@ -158,5 +257,21 @@ public sealed class UsageSyncJob(
         }
 
         return (byUserId, unknown);
+    }
+
+    /// <summary>Running totals across the one or two periods a pass reconciles.</summary>
+    private readonly record struct PeriodTotals(
+        int SubscriptionsSeen,
+        int AllocationsUpdated,
+        int UnknownSubscriptions,
+        int DriftCount,
+        int MissingAllocations)
+    {
+        public PeriodTotals Add(PeriodTotals other) => new(
+            SubscriptionsSeen + other.SubscriptionsSeen,
+            AllocationsUpdated + other.AllocationsUpdated,
+            UnknownSubscriptions + other.UnknownSubscriptions,
+            DriftCount + other.DriftCount,
+            MissingAllocations + other.MissingAllocations);
     }
 }

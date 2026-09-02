@@ -38,10 +38,17 @@ public interface IUsageSyncJob
 /// question about the gateway, not about this job: the tier product's <c>token-quota</c> should have
 /// returned <c>403</c> before they got there.
 /// </param>
-/// <param name="Period">The UTC calendar month reconciled.</param>
+/// <param name="Period">The current UTC calendar month — the period every pass reconciles.</param>
+/// <param name="IncludedPreviousPeriod">
+/// True when the pass also re-reconciled the just-closed month. For the first
+/// <c>UsageSyncJob.PreviousPeriodGraceDays</c> days of a month the previous period is queried again,
+/// because the old month's last pass could not see traffic Log Analytics had not ingested yet and
+/// nothing else ever looks back at a closed month.
+/// </param>
 public readonly record struct UsageSyncOutcome(
     int SubscriptionsSeen,
     int AllocationsUpdated,
     int UnknownSubscriptions,
     int DriftCount,
-    BillingPeriod Period);
+    BillingPeriod Period,
+    bool IncludedPreviousPeriod);

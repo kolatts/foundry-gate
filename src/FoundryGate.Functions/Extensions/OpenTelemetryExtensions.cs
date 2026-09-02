@@ -48,12 +48,19 @@ public static class OpenTelemetryExtensions
         var serviceName = assembly.GetName().Name ?? "FoundryGate.Functions";
         var serviceVersion = assembly.GetName().Version?.ToString() ?? "0.0.1";
 
+        // HttpClient + EF Core instrumentation with RecordException, per CONVENTIONS.md — between them
+        // they cover this host's entire workload: SQL through EF Core, and the one outbound HTTP call
+        // per pass to the Log Analytics query API. (ASP.NET Core instrumentation, the third the Api
+        // takes, has nothing to observe in an isolated worker.)
         _ = services.AddOpenTelemetry()
             .UseFunctionsWorkerDefaults()
             .ConfigureResource(resource => resource.AddService(serviceName: serviceName, serviceVersion: serviceVersion))
             .WithTracing(tracing => tracing
+                .AddHttpClientInstrumentation(instrumentation => instrumentation.RecordException = true)
+                .AddEntityFrameworkCoreInstrumentation()
                 .AddAzureMonitorTraceExporter(exporter => exporter.ConnectionString = connectionString))
             .WithMetrics(metrics => metrics
+                .AddHttpClientInstrumentation()
                 .AddAzureMonitorMetricExporter(exporter => exporter.ConnectionString = connectionString));
 
         // Logs are a separate provider in the worker: the host forwards ILogger output over gRPC, but a

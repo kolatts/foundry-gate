@@ -2,6 +2,7 @@ using System.Globalization;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
 using FoundryGate.Domain.Constants;
+using FoundryGate.Domain.Quota;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -22,9 +23,18 @@ namespace FoundryGate.Functions.Services.Quota;
 /// re-resolution, never a lost <c>TokensUsed</c>.
 /// </para>
 /// <para>
+/// <b>The gate is "on or after the configured day, and not yet done this period".</b> An equality gate
+/// turns one failed tick — a storage blip, a cold start that timed out, a deployment landing at 00:01 —
+/// into a lost month, which contradicted every "the next tick retries" comment in this area. "Already
+/// done" is read from the <c>quota.monthly-reset</c> audit row, which commits in the same transaction
+/// as the allocations, so there is no separate state to keep honest.
+/// </para>
+/// <para>
 /// <b>What it never does.</b> No APIM call. The gateway's <c>llm-token-limit</c> monthly window is a
 /// UTC-truncated calendar month that resets itself (#10 direction update), so there is no counter to
-/// clear; enforcement does not depend on this job having run.
+/// clear; enforcement does not depend on this job having run. A tier that <em>does</em> move during a
+/// reset — the <c>DefaultMonthlyTokenQuota</c> case — is reported by
+/// <see cref="WarningGatewayTierSync"/> and counted in the run's audit row.
 /// </para>
 /// </remarks>
 public sealed class MonthlyResetJob(
@@ -46,18 +56,34 @@ public sealed class MonthlyResetJob(
     /// <inheritdoc />
     public async Task<MonthlyResetOutcome> RunAsync(CancellationToken cancellationToken)
     {
-        var today = timeProvider.GetUtcNow().UtcDateTime.Day;
+        var now = timeProvider.GetUtcNow();
+        var today = now.UtcDateTime.Day;
+        var period = BillingPeriod.FromInstant(now);
         var configuredDay = await ReadResetDayOfMonthAsync(cancellationToken);
 
-        if (today != configuredDay)
+        // "On or after the configured day", not "on the configured day": a single failed tick — a
+        // storage blip, a cold-start timeout, a deployment landing at 00:01 — must not cost the month
+        // its reset. Every comment in this area promises "the next tick retries", and with an equality
+        // gate none of them were true.
+        if (today < configuredDay)
         {
             logger.LogDebug(
-                "Not the configured reset day (today is the {DayOfMonth}, {ConfigKey} is {ConfiguredDayOfMonth}); nothing to do.",
+                "Before the configured reset day (today is the {DayOfMonth}, {ConfigKey} is {ConfiguredDayOfMonth}); nothing to do.",
                 today,
                 SystemConfigurationKeys.ResetDayOfMonth,
                 configuredDay);
 
-            return new MonthlyResetOutcome(MonthlyResetSkipReasonType.NotTheConfiguredDay, configuredDay, today, null);
+            return new MonthlyResetOutcome(MonthlyResetSkipReasonType.BeforeTheConfiguredDay, configuredDay, today, null);
+        }
+
+        // What stops it running on all 30 remaining days of the month. Idempotence already made a
+        // second run harmless, but "harmless" is not "free": it is a full re-resolution of every active
+        // user and an audit row nobody asked for.
+        if (await AlreadyResetAsync(period, cancellationToken))
+        {
+            logger.LogDebug("{Period} has already been reset; nothing to do.", period);
+
+            return new MonthlyResetOutcome(MonthlyResetSkipReasonType.AlreadyResetThisPeriod, configuredDay, today, null);
         }
 
         await using var handle = await resetLock.TryAcquireAsync(LockName, cancellationToken);
@@ -73,7 +99,47 @@ public sealed class MonthlyResetJob(
             outcome.Period,
             outcome.UsersResetCount);
 
+        if (today != configuredDay)
+        {
+            logger.LogWarning(
+                "The {Period} reset ran on the {DayOfMonth} rather than the configured {ConfiguredDayOfMonth} — the scheduled tick(s) in between did not complete. Check earlier invocations for the failure.",
+                outcome.Period,
+                today,
+                configuredDay);
+        }
+
         return new MonthlyResetOutcome(MonthlyResetSkipReasonType.None, configuredDay, today, outcome);
+    }
+
+    /// <summary>
+    /// Has a scheduled reset already committed for <paramref name="period"/>?
+    /// </summary>
+    /// <remarks>
+    /// The audit row <em>is</em> the record — it is written in the same transaction as the allocations
+    /// it describes, so "the row exists" and "the reset committed" are the same fact, with no extra
+    /// state to keep in sync. The predicate is a date bound rather than a substring match on the
+    /// details JSON: a run inside period P necessarily has an <c>OccurredDate</c> inside P (both come
+    /// from the same <c>TimeProvider</c>), <c>OccurredDate</c> is indexed, and matching
+    /// <c>"periodYear":2026</c> as text would break the day the serializer's formatting changed. The
+    /// details still carry <c>periodYear</c>/<c>periodMonth</c> for whoever reads the trail.
+    /// <para>
+    /// Only <c>quota.monthly-reset</c> counts. An admin's manual <c>POST /quota/reset</c> the day
+    /// before does not suppress the scheduled run: it is a different action with a different actor, and
+    /// the scheduled run is what the audit trail is expected to show every month.
+    /// </para>
+    /// </remarks>
+    private Task<bool> AlreadyResetAsync(BillingPeriod period, CancellationToken cancellationToken)
+    {
+        // Hoisted out of the expression tree: EF cannot translate a method call on the struct.
+        var start = period.StartInstant();
+        var end = period.EndInstant();
+
+        return dbContext.AuditLogs.AsNoTracking()
+            .AnyAsync(
+                log => log.Action == AuditActions.QuotaMonthlyReset
+                    && log.OccurredDate >= start
+                    && log.OccurredDate < end,
+                cancellationToken);
     }
 
     /// <summary>
