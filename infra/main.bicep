@@ -354,6 +354,8 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     apimName: apim.outputs.apimName
     apimGatewayUrl: apim.outputs.gatewayUrl
     foundryAccountNames: [for (region, i) in foundryRegions: foundry[i].outputs.accountName]
+    // Same object the gateway module turns into policy — one source, two consumers (#153).
+    productModelAliases: productModelAliases
     sqlAdminGroupObjectId: sqlAdminGroupObjectId
     sqlAdminGroupName: sqlAdminGroupName
     sqlDatabaseSku: sqlDatabaseSku
@@ -423,3 +425,5 @@ output apiIdentityPrincipalId string = controlPlane.?outputs.apiIdentityPrincipa
 output functionsIdentityName string = controlPlane.?outputs.functionsIdentityName ?? ''
 output functionsIdentityClientId string = controlPlane.?outputs.functionsIdentityClientId ?? ''
 output functionsIdentityPrincipalId string = controlPlane.?outputs.functionsIdentityPrincipalId ?? ''
+@description('The alias map as the control plane receives it — one row per (tier, alias), mirroring the Gateway__ModelAliases__{i}__* settings on both hosts (#153). Empty when the control plane is not deployed.')
+output modelAliasRows array = controlPlane.?outputs.modelAliasRows ?? []

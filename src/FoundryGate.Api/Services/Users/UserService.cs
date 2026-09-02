@@ -120,7 +120,7 @@ public sealed class UserService(
             user.IsUnlimited,
             quota,
             keys.GetMasked(user),
-            BuildCliConfig());
+            BuildCliConfig(quota.TierProductId));
     }
 
     /// <inheritdoc />
@@ -387,10 +387,16 @@ public sealed class UserService(
     /// control plane, and until then the docs' CLI setup page is the source developers use for model
     /// names.
     /// </summary>
-    private GatewayConnectionInfo BuildCliConfig() =>
+    /// <summary>
+    /// The "Configure your CLI" payload for a developer on <paramref name="tierProductId"/>. The alias
+    /// list is filtered to that tier's product because the gateway's alias map <em>is</em> its
+    /// allowlist (#86/#153): handing every developer the union would tell a Standard developer they
+    /// can use <c>opus</c> and let them discover the 403 at their first request.
+    /// </summary>
+    private GatewayConnectionInfo BuildCliConfig(string tierProductId) =>
         new(
             GatewayBaseUrl: string.IsNullOrWhiteSpace(gateway.ApimGatewayUrl) ? string.Empty : gateway.ApimGatewayUrl.TrimEnd('/'),
             AnthropicBasePath: GatewayOptions.AnthropicBasePath,
             OpenAiBasePath: GatewayOptions.OpenAiBasePath,
-            ModelAliases: []);
+            ModelAliases: [.. gateway.AliasesForTier(tierProductId).Select(alias => new ModelAliasInfo(alias.Alias, alias.DeploymentName, alias.Provider))]);
 }

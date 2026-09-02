@@ -188,6 +188,21 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             // the tests calls it; it only has to be a well-formed https origin.
             ["Gateway:ApimGatewayUrl"] = GatewayUrl,
             ["KeyProtection:Provider"] = "DataProtection",
+            // The alias map exactly as infra/modules/control-plane.bicep flattens it (#153), including
+            // bicep's lower-case provider values. `opus` is Unlimited-only on purpose: it is what makes
+            // "GET /users/me filters to the caller's tier" a claim a test can fail.
+            ["Gateway:ModelAliases:0:Tier"] = GatewayTiers.Standard,
+            ["Gateway:ModelAliases:0:Alias"] = "sonnet",
+            ["Gateway:ModelAliases:0:DeploymentName"] = "claude-sonnet-4-5",
+            ["Gateway:ModelAliases:0:Provider"] = "anthropic",
+            ["Gateway:ModelAliases:1:Tier"] = GatewayTiers.Standard,
+            ["Gateway:ModelAliases:1:Alias"] = "gpt",
+            ["Gateway:ModelAliases:1:DeploymentName"] = "gpt-4-1-mini",
+            ["Gateway:ModelAliases:1:Provider"] = "openai",
+            ["Gateway:ModelAliases:2:Tier"] = GatewayTiers.Unlimited,
+            ["Gateway:ModelAliases:2:Alias"] = "opus",
+            ["Gateway:ModelAliases:2:DeploymentName"] = "claude-opus-4-5",
+            ["Gateway:ModelAliases:2:Provider"] = "anthropic",
         };
         foreach (var (key, value) in settings)
         {

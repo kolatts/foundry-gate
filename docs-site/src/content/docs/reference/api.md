@@ -41,10 +41,17 @@ return.
 The response carries `quota` (the same shape as `/quota/allocations/me`), `apiKey` (masked to the
 last four characters — the plaintext only ever comes from `/keys/*`), and `cliConfig`:
 `gatewayBaseUrl` (the gateway origin, empty on a host with no gateway configured),
-`anthropicBasePath` (`/anthropic`), `openAiBasePath` (`/openai/v1`), and `modelAliases` — currently
-always empty, because the alias map lives only in the gateway's Bicep
-([#153](https://github.com/kolatts/foundry-gate/issues/153)); use
-[CLI setup](/foundry-gate/getting-started/cli-setup/) for model names until it lands.
+`anthropicBasePath` (`/anthropic`), `openAiBasePath` (`/openai/v1`), and `modelAliases`.
+
+`modelAliases` is **filtered to the caller's own tier product** — the aliases their subscription is
+actually allowed to name, each with the deployment it currently resolves to and its provider
+(`Anthropic` / `OpenAi`), ordered by alias. The gateway's alias map is also its allowlist, so a model
+another tier can use would answer `403 model_not_permitted` for this developer; listing it would be
+worse than saying nothing. Infra feeds the map to the control plane as `Gateway__ModelAliases__*`
+from the same `productModelAliases` object that becomes gateway policy, so the two cannot drift
+([#153](https://github.com/kolatts/foundry-gate/issues/153)). On a host where that is not set — a
+fork on an older deploy, or local development — the list is empty and
+[CLI setup](/foundry-gate/getting-started/cli-setup/) is where the model names are.
 
 **Two tabs are not an error.** When two first logins for the same identity arrive together, both find
 no row and both provision; `Users.EntraObjectId` is unique, so the loser's insert fails, its whole
