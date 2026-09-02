@@ -389,6 +389,76 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         Assert.Empty(results);
     }
 
+    // -- Pending changes: levels 3-4 read group state through the change tracker --
+
+    [Fact]
+    public async Task A_group_quota_edited_but_not_yet_saved_is_what_resolution_uses()
+    {
+        // The sequence GroupService.UpdateAsync performs: edit the tracked Group, then re-resolve, then
+        // one SaveChangesAsync. A projection query straight to the database would still see PowerCap.
+        await SeedReferenceDataAsync();
+        var user = await SeedUserAsync();
+        var group = await AddToGroupAsync(user, quota: TestGatewayTiers.PowerCap);
+
+        group.MonthlyTokenQuota = TestGatewayTiers.StandardCap;
+
+        var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
+
+        Assert.Equal(QuotaLevelType.GroupMax, result.Allocation.ResolvedLevelType);
+        Assert.Equal(TestGatewayTiers.StandardCap, result.Allocation.AllocatedTokens);
+    }
+
+    [Fact]
+    public async Task A_membership_added_but_not_yet_saved_already_counts()
+    {
+        await SeedReferenceDataAsync();
+        var user = await SeedUserAsync();
+        var group = new Group { Name = $"g-{Guid.NewGuid():N}", MonthlyTokenQuota = TestGatewayTiers.PowerCap };
+        Context.Groups.Add(group);
+        await Context.SaveChangesAsync();
+
+        Context.GroupMembers.Add(new GroupMember { GroupId = group.GroupId, UserId = user.UserId });
+
+        var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
+
+        Assert.Equal(QuotaLevelType.GroupMax, result.Allocation.ResolvedLevelType);
+        Assert.Equal(TestGatewayTiers.PowerCap, result.Allocation.AllocatedTokens);
+    }
+
+    [Fact]
+    public async Task A_membership_removed_but_not_yet_saved_no_longer_counts()
+    {
+        await SeedReferenceDataAsync(); // system default = the Standard cap
+        var user = await SeedUserAsync();
+        _ = await AddToGroupAsync(user, quota: TestGatewayTiers.PowerCap);
+
+        var membership = await Context.GroupMembers.SingleAsync(gm => gm.UserId == user.UserId);
+        Context.GroupMembers.Remove(membership);
+
+        var result = await CreateService().ResolveAsync(user.UserId, Period, CancellationToken.None);
+
+        Assert.Equal(QuotaLevelType.SystemDefault, result.Allocation.ResolvedLevelType);
+        Assert.Equal(TestGatewayTiers.StandardCap, result.Allocation.AllocatedTokens);
+    }
+
+    [Fact]
+    public async Task A_group_removed_but_not_yet_saved_takes_its_memberships_with_it()
+    {
+        // GroupService.DeleteAsync removes the GroupMember rows explicitly, but the relationship also
+        // cascades — a caller that only removes the Group must not resolve against its policy either.
+        await SeedReferenceDataAsync();
+        var user = await SeedUserAsync();
+        var group = await AddToGroupAsync(user, quota: TestGatewayTiers.PowerCap);
+
+        Context.Groups.Remove(group);
+
+        var result = await CreateService().ResolveManyAsync([user.UserId], Period, CancellationToken.None);
+
+        var allocation = Assert.Single(result).Allocation;
+        Assert.Equal(QuotaLevelType.SystemDefault, allocation.ResolvedLevelType);
+        Assert.Equal(TestGatewayTiers.StandardCap, allocation.AllocatedTokens);
+    }
+
     // -- Helpers --
 
     private QuotaResolutionService CreateService() =>
@@ -408,13 +478,14 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         return user;
     }
 
-    private async Task AddToGroupAsync(User user, long? quota = null, bool isUnlimited = false)
+    private async Task<Group> AddToGroupAsync(User user, long? quota = null, bool isUnlimited = false)
     {
         var group = new Group { Name = $"g-{Guid.NewGuid():N}", MonthlyTokenQuota = quota, IsUnlimited = isUnlimited };
         Context.Groups.Add(group);
         await Context.SaveChangesAsync();
         Context.GroupMembers.Add(new GroupMember { GroupId = group.GroupId, UserId = user.UserId });
         await Context.SaveChangesAsync();
+        return group;
     }
 
     private async Task<QuotaAllocation> SeedAllocationAsync(User user, BillingPeriod period, long? allocated, long tokensUsed, bool isHardStopped, string tier, DateTimeOffset? resetDate = null)
