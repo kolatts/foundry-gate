@@ -1,4 +1,5 @@
 using FoundryGate.Api.Services.Foundry;
+using FoundryGate.Api.Services.Keys;
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Interceptors;
@@ -6,6 +7,7 @@ using FoundryGate.Data.Seeding;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Tests.Predeployment.Support;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -62,6 +64,12 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     /// shared by the class's tests, so use unique deployment names.
     /// </summary>
     public FakeFoundryManagementClient FoundryClient { get; } = CreateFoundryClient();
+
+    /// <summary>
+    /// The in-memory APIM standing in for the management plane (<see cref="IApimManagementClient"/>):
+    /// seed orphan subscriptions, read back keys, or assert on calls. One per factory, like the database.
+    /// </summary>
+    public FakeApimManagementClient Apim => Services.GetRequiredService<FakeApimManagementClient>();
 
     /// <summary>
     /// A client authenticated as <paramref name="oid"/> (with the <c>FoundryGate.Admin</c> role when
@@ -170,6 +178,10 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             ["Gateway:ResourceGroup"] = "rg-foundrygate-test",
             ["Gateway:FoundryAccountNames:0"] = PrimaryFoundryAccount,
             ["Gateway:FoundryAccountNames:1"] = SecondaryFoundryAccount,
+            // APIM addressing (#36/#37) — served by the fake IApimManagementClient below, never by ARM;
+            // the local-only key protector (#95) keeps Key Vault out of the tests.
+            ["Gateway:ApimName"] = "apim-foundrygate-test",
+            ["KeyProtection:Provider"] = "DataProtection",
         };
         foreach (var (key, value) in settings)
         {
@@ -196,6 +208,15 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             services.RemoveAll<IFoundryManagementClient>();
             services.AddSingleton<IFoundryManagementClient>(FoundryClient);
 
+            // APIM management plane → in-memory fake (no Azure); exposed as its concrete type too so
+            // tests can seed/inspect it. Data Protection → ephemeral keys, so the local key protector
+            // never writes a key ring to the machine running the tests.
+            services.RemoveAll<IApimManagementClient>();
+            services.AddSingleton<FakeApimManagementClient>();
+            services.AddSingleton<IApimManagementClient>(serviceProvider => serviceProvider.GetRequiredService<FakeApimManagementClient>());
+            services.RemoveAll<IDataProtectionProvider>();
+            services.AddSingleton<IDataProtectionProvider>(new EphemeralDataProtectionProvider());
+
             // Registered after Program.cs's AddMicrosoftIdentityWebApiAuthentication, so this
             // Configure<AuthenticationOptions> runs last and wins the default-scheme selection. The
             // JwtBearer scheme still exists; it just isn't consulted unless asked for by name.
@@ -205,6 +226,11 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 options.DefaultAuthenticateScheme = TestAuthHandler.SchemeName;
                 options.DefaultChallengeScheme = TestAuthHandler.SchemeName;
             }).AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
+
+            // Test-only controllers (Support/RequestDtoBindingController): this assembly is not in
+            // Api's application-part graph, so add it explicitly. AddControllers() is idempotent —
+            // Program.cs's options (the global AuthorizeFilter) are untouched.
+            services.AddControllers().AddApplicationPart(typeof(ApiTestFactory).Assembly);
         });
     }
 

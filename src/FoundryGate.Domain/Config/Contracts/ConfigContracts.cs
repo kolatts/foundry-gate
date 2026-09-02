@@ -17,10 +17,14 @@ public record SystemConfigEntryResponse(
     DateTimeOffset UpdatedDate,
     int? UpdatedByUserId);
 
-/// <summary>PUT /config/{key} body.</summary>
-public record UpdateSystemConfigRequest(
-    [property: Required, StringLength(ValidationConstants.ConfigValueMaxLength)]
-    string Value);
+/// <summary>PUT /config/{key} body. Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).</summary>
+public record UpdateSystemConfigRequest
+{
+    /// <summary>The new value for the key. Required: a missing JSON field binds to <c>""</c> and fails as a field-level 400.</summary>
+    [Required]
+    [StringLength(ValidationConstants.ConfigValueMaxLength)]
+    public string Value { get; init; } = string.Empty;
+}
 
 /// <summary>
 /// Gateway connection details a developer needs to point Claude Code, Codex CLI, or

@@ -120,6 +120,22 @@ When a developer's allocation is created or updated, `IQuotaResolutionService` w
 
 The resolved value is written to `QuotaAllocation` for the current period, and the subscription is created under (or moved to) the matching tier product. Admins can see which level resolved each developer's quota in the user detail view. Tiers exist because APIM's `token-quota` attribute accepts only literals — one policy cannot read a per-user number — so each tier is a product with its own rendered policy.
 
+**A budget is a tier.** Resolution picks a tier, not just a number: every quota the
+control plane accepts must equal a configured tier's cap (5M → *Standard*, 20M →
+*Power*, with the shipped caps) or be unlimited, so the number written to the allocation
+and the tier the gateway enforces are the same thing. Admins pick from `GET /quota/tiers`
+rather than typing a figure. A legacy or hand-edited value that matches no tier is never
+rejected on read — it is enforced at the next tier up and flagged **gateway-capped** so an
+admin can correct it. The allocation records the level, the tier, and the flag, and
+moving the developer's subscription onto the tier product is what actually changes
+their budget.
+
+**Resets never zero usage.** The gateway's monthly window resets itself at the UTC month
+boundary, so the monthly job and the admin's manual `POST /quota/reset` only (re)resolve
+every active developer's allocation for the current UTC month: new rows start at zero,
+existing rows are re-resolved but keep their reconciled usage, and the hard-stop mirror is
+cleared. Running it twice in a month is safe and audited once per run.
+
 ---
 
 ## APIM enforcement — how limits actually block traffic
@@ -200,9 +216,13 @@ people-lifecycle events change its state — there is no suspended state:
 <KeyLifecycle />
 
 **Rotate** — `POST /keys/me/rotate` (or an admin's `POST /keys/{userId}/rotate`) calls
-`regeneratePrimaryKey` on the subscription. The primary key the developer holds is
-replaced instantly, the new one is shown once, and the subscription stays `active` with
-its counters intact.
+`regeneratePrimaryKey` *and* `regenerateSecondaryKey` on the subscription: the primary key
+the developer holds is replaced instantly and shown once, and the secondary — which
+FoundryGate never issues or stores — is replaced too, so no credential outlives a rotation.
+The subscription stays `active` with its counters intact. Stored keys are wrapped with a
+Key Vault RSA key before they reach SQL; `GET /keys/me` shows only the last four characters,
+and `POST /keys/me/reveal` decrypts on demand (audited) rather than caching anything in the
+browser.
 
 **Change quota** — the control plane re-scopes the subscription to the new tier's
 product. The new product's `llm-token-limit` applies from the next request, and because

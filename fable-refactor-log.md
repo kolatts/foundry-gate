@@ -282,6 +282,37 @@ the fork audience and imagile conventions, #48 already merged-quality). Owner ch
 **Why:** For an internal admin portal in a .NET-everything forkable product, contract
 safety and stack coherence outweigh the WASM payload tax.
 
+### D-013: A developer's monthly budget IS a gateway tier — quotas must equal a tier cap
+**Date:** 2026-09-01 (PR #127 review, issues #32/#33)
+**Problem:** APIM's `token-quota` is a per-product literal (#82), so the gateway can only
+enforce the configured tier caps. The first #127 draft kept free-form numeric quotas and
+rounded each one *up* to the smallest covering tier — which made every quota below a cap
+under-enforced (a 1M developer was stopped at Standard's 5M) and made the landing page's
+"requests stop the second the budget is spent" untrue for the common case.
+**Options considered:**
+1. *Free-form numbers, round up to a tier* (the draft) — simple, but the number on the
+   dashboard and the number the gateway enforces disagree for anyone not exactly on a cap;
+   the docs would have to explain a two-directional gap at every level.
+2. *Many more tiers* to make rounding negligible — every tier is an APIM product with its
+   own rendered policy; a dozen products for a per-user knob is operational noise, and the
+   gap never actually closes.
+3. *Soft enforcement by suspension* — let the control plane suspend a subscription when
+   reconciliation sees `TokensUsed >= AllocatedTokens` — reintroduces the sync-lag
+   enforcement the gateway-centric shift (#7/#81) removed, and suspension is reserved for
+   offboarding.
+4. *Quota must equal a tier cap or be unlimited* — the number and the tier are the same
+   thing; numeric columns stay (no schema refactor, dashboards still show tokens), the
+   write paths reject anything else with the allowed values listed, and admins pick from
+   `GET /quota/tiers`.
+**Decision:** Option 4. `GatewayTierMapper.Map` is an exact match; `EnsureValidQuota` is the
+write-path guard every quota-accepting endpoint calls (CONVENTIONS "Quota values are tiers");
+legacy rows that match no tier are enforced at the next tier up and flagged
+`IsGatewayCapped` so reads never break. `DefaultMonthlyTokenQuota` seeds to the Standard cap;
+demo data and docs use 5M / 20M / unlimited only.
+**Why:** It is the only option under which "when the budget runs out, requests stop" is
+literally true for every developer, and it costs nothing structurally — a budget picker
+instead of a number box.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the

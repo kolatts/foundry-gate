@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using FoundryGate.Domain.Common;
 
@@ -85,4 +86,47 @@ public class DomainArchitectureTests
             foundryGateReferences.Count == 0,
             $"FoundryGate.Domain references other FoundryGate projects: {string.Join(", ", foundryGateReferences)}");
     }
+
+    [Fact]
+    public void Domain_records_never_carry_validation_attributes_on_positional_parameters_or_their_properties()
+    {
+        // #128: ASP.NET Core MVC throws at bind time — a 500 on every POST/PUT — for a positional
+        // record whose validation attributes sit on the generated properties ([property: ...]);
+        // moving them onto the constructor parameters satisfies MVC but hides them from
+        // DataAnnotations.Validator and Blazor's DataAnnotationsValidator, which read properties.
+        // Request DTOs are therefore init-property records with the attributes on plain properties
+        // (CONVENTIONS.md "API service/controller conventions"); either broken placement fails here.
+        List<Type> records = DomainAssembly.GetTypes().Where(IsRecord).ToList();
+        Assert.Contains(records, record => record.Name.EndsWith("Request", StringComparison.Ordinal)); // the scan is not vacuous
+
+        List<string> violations = [];
+        foreach (var record in records)
+        {
+            List<ParameterInfo> positionalParameters = record
+                .GetConstructors(BindingFlags.Public | BindingFlags.Instance)
+                .SelectMany(constructor => constructor.GetParameters())
+                .ToList();
+
+            violations.AddRange(positionalParameters
+                .Where(parameter => parameter.GetCustomAttributes<ValidationAttribute>(inherit: true).Any())
+                .Select(parameter => $"{record.Name}({parameter.Name}): validation attribute on a constructor parameter — invisible to Validator and Blazor forms"));
+
+            var parameterNames = positionalParameters.Select(parameter => parameter.Name).ToHashSet(StringComparer.Ordinal);
+            violations.AddRange(record
+                .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(property => parameterNames.Contains(property.Name)
+                    && property.GetCustomAttributes<ValidationAttribute>(inherit: true).Any())
+                .Select(property => $"{record.Name}.{property.Name}: validation attribute on a positional record's property — MVC returns 500 for every body of this type"));
+        }
+
+        Assert.True(
+            violations.Count == 0,
+            "Domain records mix a primary constructor with validation attributes (#128). Make the "
+                + "record non-positional (`public string Name { get; init; } = string.Empty;`) with the "
+                + "attributes on the properties:\n - " + string.Join("\n - ", violations));
+    }
+
+    /// <summary>A C# record: the compiler emits a public <c>&lt;Clone&gt;$</c> method on every record class (record structs are not used in Domain).</summary>
+    private static bool IsRecord(Type type) =>
+        type.IsClass && type.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) is not null;
 }

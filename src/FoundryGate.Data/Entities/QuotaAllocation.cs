@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+using FoundryGate.Domain.Quota;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -9,7 +11,13 @@ namespace FoundryGate.Data.Entities;
 /// this row is what the monthly-reset Function writes after resolving quota tiers, and what
 /// reconciliation compares consumption against; it is not read on the request hot path.
 /// </summary>
+/// <remarks>
+/// The <c>(PeriodYear, PeriodMonth)</c> index backs <c>GET /quota/allocations</c>, whose every page
+/// filters on the current period; the unique index leads with <c>UserId</c> so it cannot serve that
+/// seek.
+/// </remarks>
 [Index(nameof(UserId), nameof(PeriodYear), nameof(PeriodMonth), IsUnique = true)]
+[Index(nameof(PeriodYear), nameof(PeriodMonth))]
 public class QuotaAllocation
 {
     public int QuotaAllocationId { get; set; }
@@ -38,7 +46,28 @@ public class QuotaAllocation
     /// </summary>
     public bool IsHardStopped { get; set; }
 
-    /// <summary><see langword="null"/> until the monthly-reset Function first (re)creates this period's row.</summary>
+    /// <summary>Which level of the five-level precedence chain produced <see cref="AllocatedTokens"/> (issue #32).</summary>
+    public QuotaLevelType ResolvedLevelType { get; set; }
+
+    /// <summary>
+    /// The APIM tier product (<c>FoundryGate.Domain.Constants.GatewayTiers</c>) this budget is. A
+    /// monthly budget <em>is</em> a tier (D-013): every quota the control plane accepts equals a
+    /// configured tier cap or is unlimited, so <see cref="AllocatedTokens"/> and this tier's cap normally
+    /// agree. The tier, not the number, is what the gateway enforces — <c>token-quota</c> is a
+    /// per-product literal (#82) — so the developer's subscription is issued against this product.
+    /// </summary>
+    [Required]
+    [StringLength(64)]
+    public string TierProductId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// True when <see cref="AllocatedTokens"/> did not match any configured tier cap (a legacy or
+    /// hand-edited value) and is therefore enforced at the next tier up — or the largest finite tier —
+    /// rather than at the number stored. Surfaced so admins can correct the value to a tier.
+    /// </summary>
+    public bool IsGatewayCapped { get; set; }
+
+    /// <summary><see langword="null"/> until a monthly/manual reset first (re)resolves this period's row; a row created on demand (first <c>/me</c> of the month) has none.</summary>
     public DateTimeOffset? ResetDate { get; set; }
 
     // Navigation

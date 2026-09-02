@@ -35,13 +35,49 @@ public class AppSettings
     /// with docker SQL and no Azure connectivity at all.</summary>
     public AzureOptions Azure { get; set; } = new();
 
-    /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108). Optional
-    /// as a whole — absent locally; <c>/foundry/*</c> needs it (see <see cref="GatewayOptions"/>).</summary>
+    /// <summary>Gateway data-plane addressing set by infra (<c>Gateway__*</c>, issue #108 — optional as
+    /// a whole; absent locally; <c>/foundry/*</c> and <c>/keys/*</c> need it) plus the always-required
+    /// quota <see cref="GatewayOptions.Tiers"/> (<c>Gateway:Tiers</c>, shipped in <c>appsettings.json</c>;
+    /// issue #32 / D-013). See <see cref="GatewayOptions"/>.</summary>
+    [Required]
     public GatewayOptions Gateway { get; set; } = new();
 
     /// <summary>Microsoft Graph directory sync (#40/#41). Off by default so local dev and the test
     /// host never need Graph connectivity or Graph application roles.</summary>
     public EntraOptions Entra { get; set; } = new();
+
+    /// <summary>How <c>User.ApimSubscriptionKey</c> is encrypted at rest (#95).</summary>
+    public KeyProtectionOptions KeyProtection { get; set; } = new();
+}
+
+/// <summary>Which <c>IKeyProtector</c> encrypts <c>User.ApimSubscriptionKey</c> at rest (#95).</summary>
+public enum KeyProtectionProviderType
+{
+    /// <summary>
+    /// Azure Key Vault RSA-OAEP-256 key wrapping with <see cref="GatewayOptions.KeyEncryptionKeyUri"/>
+    /// through the app's managed identity (Key Vault Crypto User). The only provider allowed outside
+    /// <c>local</c>.
+    /// </summary>
+    KeyVault,
+
+    /// <summary>
+    /// ASP.NET Core Data Protection with the machine-local key ring — no Azure needed, so local dev
+    /// and the integration tests run hermetically. Refused at startup in <c>qa</c>/<c>prod</c>.
+    /// </summary>
+    DataProtection,
+}
+
+/// <summary>Bound from the <c>KeyProtection</c> section.</summary>
+public class KeyProtectionOptions
+{
+    /// <summary>
+    /// Defaults to <see cref="KeyProtectionProviderType.KeyVault"/> so a cloud environment that
+    /// forgets the section fails closed (missing key URI → startup error) rather than silently
+    /// falling back to a machine-local key ring; <c>appsettings.local.json</c> opts into
+    /// <see cref="KeyProtectionProviderType.DataProtection"/>. (No <c>[Required]</c>: it is a no-op
+    /// on a non-nullable enum; the binder rejects unknown names and the default is the safe one.)
+    /// </summary>
+    public KeyProtectionProviderType Provider { get; set; } = KeyProtectionProviderType.KeyVault;
 }
 
 /// <summary>

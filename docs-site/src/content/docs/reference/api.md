@@ -40,10 +40,43 @@ Errors: `400` when `Entra:Enabled` is false on the host, `403` when the calling 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/quota/allocations` | Admin | All current-period allocations, paged |
-| `GET` | `/quota/allocations/me` | Any | Own current allocation |
-| `GET` | `/quota/allocations/{userId}` | Admin | Specific user's current allocation |
-| `POST` | `/quota/reset` | Admin | Manually trigger monthly reset (idempotent) |
+| `GET` | `/quota/tiers` | Any | The configured budget tiers `{ productId, displayName, monthlyTokenQuota, isUnlimited }` — the only values a quota may take |
+| `GET` | `/quota/allocations` | Admin | All current-period allocations, paged (`?page=&pageSize=`), ordered by user display name; includes `userDisplayName`/`userEmail` |
+| `GET` | `/quota/allocations/me` | Any | Own current allocation. Resolved and created on the first call of the month (`tokensUsed = 0`, no `resetDate`). `403` until `GET /users/me` has provisioned the caller. |
+| `GET` | `/quota/allocations/{userId}` | Admin | Specific user's current allocation. Read-only: `404` if the user has none for this period yet. |
+| `POST` | `/quota/reset` | Admin | Manually trigger monthly reset (idempotent) — see below |
+
+"Current period" is always the UTC calendar month, matching the gateway's `token-quota` window.
+
+`QuotaAllocationResponse` carries, besides the numeric fields (`allocatedTokens` — null when
+unlimited — `tokensUsed`, `percentUsed`, `isHardStopped`):
+
+- `resolvedLevelType` — which level of the five-level precedence chain produced the quota:
+  `0` UserUnlimited, `1` UserOverride, `2` GroupUnlimited, `3` GroupMax, `4` SystemDefault.
+  User-level settings (0, 1) always beat group-level ones (2, 3).
+- `tierProductId` — the APIM tier product (`standard` / `power` / `unlimited`) this budget
+  *is*. **The rule: a finite monthly token quota must equal a configured tier's cap
+  (`Gateway:Tiers`, see [Configuration](/foundry-gate/reference/configuration/)), or be
+  unlimited.** Every write path that accepts a quota (`PUT /users/{id}/quota`, group
+  create/update, request approval) rejects anything else with `400` listing the allowed
+  values; `GET /quota/tiers` is the list to offer. The tier is what the gateway enforces,
+  so under this rule `allocatedTokens` and the enforced cap are the same number.
+- `isGatewayCapped` — `true` only for a legacy or hand-edited value that matches no tier
+  cap. Reads never fail on such a row: it is enforced at the next tier up (or the largest
+  finite tier) and flagged so an admin can correct it to a tier. To offer a new budget size,
+  add a tier in both places: `quotaTiers` in `infra/main.bicep` (creates the APIM product and
+  its policy) and `Gateway:Tiers` in the Api configuration (a predeployment test keeps them in
+  step).
+
+`POST /quota/reset` re-resolves every **active** user's allocation for the current UTC month
+in one transaction: rows that do not exist are created with `tokensUsed = 0`; rows that do
+exist are re-resolved (`allocatedTokens`, level, tier, capped flag) but **keep their reconciled
+`tokensUsed`** — the gateway's monthly window resets itself, so zeroing the mirror mid-month
+would only make dashboards lie. Every touched row gets `isHardStopped = false` and
+`resetDate = now`. Exactly one audit row (`quota.reset`, attributed to the calling admin, details
+`{ usersResetCount, periodYear, periodMonth, createdCount, tierSyncCount }`) per run. Returns
+`{ usersResetCount, periodYear, periodMonth, resetDate }`. Running it twice in a month produces
+the same row count.
 
 ## Quota Increase Requests
 
@@ -59,11 +92,14 @@ Errors: `400` when `Entra:Enabled` is false on the host, `403` when the calling 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/keys/me` | Any | Own key info (masked, last 4 visible) |
-| `POST` | `/keys/me/rotate` | Any | Rotate own key — returns new key value once |
-| `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key |
-| `POST` | `/keys/{userId}/provision` | Admin | Provision a new key for a user with no active key |
-| `DELETE` | `/keys/{userId}` | Admin | Revoke key (user stays active) |
+| `GET` | `/keys/me` | Any | Own key info (masked, last 4 visible; `isProvisioned: false` when none). Served from a stored hint — no decryption |
+| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. `404` when no key |
+| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. `404` no key; `409` if the APIM subscription vanished |
+| `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key (same semantics) |
+| `POST` | `/keys/{userId}/provision` | Admin | Provision a key for a user with none, under `?tier=standard\|power\|unlimited` (default `standard`). Returns plaintext once. `409` key exists or user deactivated; `400` unknown tier; reuses an orphaned APIM subscription with fresh keys |
+| `DELETE` | `/keys/{userId}` | Admin | Revoke key only: APIM subscription deleted, stored key cleared, `key.revoked` audited. **User stays active** and can be re-provisioned; `204` even when no key existed. Deactivation is `POST /users/{id}/deactivate` |
+
+Callers of every `/keys/me` route must already have a FoundryGate user row (`GET /users/me` provisions one) — otherwise `403`. The plaintext key is stored encrypted (Key Vault RSA key wrapping; see [Configuration](/reference/configuration/)) and appears in exactly one response per mint or reveal. Reveal is not yet rate-limited (tracked in #136). Provisioning is race-safe: two concurrent `provision` calls for one user cannot both mint — the second gets `409`.
 
 ## Foundry
 
