@@ -3,12 +3,13 @@ using FoundryGate.Domain.Config.Contracts;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
+using Microsoft.AspNetCore.Components;
 
 namespace FoundryGate.Tests.Predeployment.Web;
 
 /// <summary>
 /// <c>/config</c> (#55): dirty tracking, the diff dialog that stands between an edit and a write,
-/// per-row outcomes, and the read-only keys that are disabled rather than offered.
+/// and the per-row outcomes — including the API's own refusal of a retired key.
 /// </summary>
 public class ConfigPageTests : WebTestContext
 {
@@ -147,18 +148,44 @@ public class ConfigPageTests : WebTestContext
         Assert.Contains(Snackbars, s => s.Severity == MudBlazor.Severity.Warning);
     }
 
-    [Theory]
-    [InlineData(SystemConfigurationKeys.ApimProductId)]
-    [InlineData(SystemConfigurationKeys.EntraTenantId)]
-    [InlineData(SystemConfigurationKeys.ApimGatewayUrl)]
-    public void A_retired_key_is_disabled_with_the_reason_rather_than_offered(string key)
+    [Fact]
+    public void A_retired_key_reports_the_apis_own_reason_rather_than_a_reason_of_our_own()
     {
-        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>([WebTestData.ConfigEntry(key, "something")]);
+        // The editor keeps no client-side list of retired keys: SystemConfigValidator.EnsureEditable
+        // is the authority, and a second copy here drifted the moment a key was un-retired. The
+        // admin reads the 409's message, which names the replacement.
+        const string Retired = SystemConfigurationKeys.ApimProductId;
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>([WebTestData.ConfigEntry(Retired, "legacy-product")]);
+        Api.UpdateConfigResults[Retired] = ApiCallResult<bool>.Fail(
+            ApiCallStatus.Error,
+            "System configuration key 'ApimProductId' is read-only: quota tiers are APIM products now.");
 
         var page = RenderPage<Config>();
+        Assert.False(page.Find($"[data-testid='config-value-{Retired}']").HasAttribute("disabled"));
 
-        Assert.True(page.Find($"[data-testid='config-value-{key}']").HasAttribute("disabled"));
-        Assert.Contains("Read-only", page.Find($"[data-testid='config-readonly-{key}']").TextContent, StringComparison.Ordinal);
+        Edit(page, Retired, "something-else");
+        page.Find("[data-testid='config-save']").Click();
+        page.Find("[data-testid='config-diff-confirm']").Click();
+
+        Assert.Contains(
+            "read-only: quota tiers are APIM products now.",
+            page.Find($"[data-testid='config-result-{Retired}']").TextContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_rejected_edit_stays_in_the_box_to_be_fixed_rather_than_being_retyped()
+    {
+        Api.UpdateConfigResult = ApiCallResult<bool>.Fail(ApiCallStatus.Error, "DefaultMonthlyTokenQuota must equal a configured tier cap.");
+
+        var page = RenderPage<Config>();
+        Edit(page, SystemConfigurationKeys.DefaultMonthlyTokenQuota, "7000000");
+        page.Find("[data-testid='config-save']").Click();
+        page.Find("[data-testid='config-diff-confirm']").Click();
+
+        Assert.Equal(
+            "7000000",
+            page.Find($"[data-testid='config-value-{SystemConfigurationKeys.DefaultMonthlyTokenQuota}']").GetAttribute("value"));
     }
 
     [Fact]
@@ -185,7 +212,7 @@ public class ConfigPageTests : WebTestContext
         Assert.Contains("permission", page.Find("[data-testid='config-error']").TextContent, StringComparison.Ordinal);
     }
 
-    private static void Edit(IRenderedComponent<Bunit.Rendering.ContainerFragment> page, string key, string value) =>
+    private static void Edit(IRenderedComponent<IComponent> page, string key, string value) =>
         page.Find($"[data-testid='config-value-{key}']").Input(value);
 
     private static ApiCallResult<T> Ok<T>(T value) => ApiCallResult<T>.Ok(value);

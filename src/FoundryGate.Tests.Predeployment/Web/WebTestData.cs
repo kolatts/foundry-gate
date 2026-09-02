@@ -4,7 +4,9 @@ using FoundryGate.Domain.Config;
 using FoundryGate.Domain.Config.Contracts;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Dashboard.Contracts;
+using FoundryGate.Domain.Foundry;
 using FoundryGate.Domain.Foundry.Contracts;
+using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Keys.Contracts;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Domain.Quota.Contracts;
@@ -15,14 +17,65 @@ using FoundryGate.Domain.Users.Contracts;
 namespace FoundryGate.Tests.Predeployment.Web;
 
 /// <summary>
-/// Canned Domain contracts for the Blazor component tests. Every factory has sane defaults and
-/// named optional parameters, so a test names only the field it is actually asserting on — a test
-/// that says <c>Allocation(percentUsed: 82)</c> reads as the threshold it is checking rather than
-/// as a wall of DTO construction.
+/// Response shapes for the Blazor component tests, with every field a page reads already filled in.
+/// Each factory takes only what a test varies and everything else is a plausible default, so a test
+/// body says what it is actually about — <c>Allocation(percentUsed: 82)</c> reads as the threshold
+/// it is checking rather than as a wall of DTO construction.
 /// </summary>
 public static class WebTestData
 {
+    /// <summary>
+    /// The tier catalogue the pages render budgets against. Mirrors <c>infra/main.bicep</c>'s
+    /// <c>quotaTiers</c> so a test's expected numbers can be checked against what the fork actually
+    /// ships: Standard 5M, Power 20M, Unlimited uncapped.
+    /// </summary>
+    public static IReadOnlyList<QuotaTierResponse> Tiers { get; } =
+    [
+        new(GatewayTiers.Standard, "Standard", 5_000_000, false),
+        new(GatewayTiers.Power, "Power", 20_000_000, false),
+        new(GatewayTiers.Unlimited, "Unlimited", null, true),
+    ];
+
+    public static UserResponse User(
+        int userId = 7,
+        string displayName = "Dev Eloper",
+        string email = "dev@example.test",
+        bool isActive = true,
+        bool isUnlimited = false,
+        long? monthlyTokenQuota = 5_000_000,
+        bool isApiKeyProvisioned = true) =>
+        new(
+            userId,
+            UserUnique,
+            displayName,
+            email,
+            EmployeeId: "E-1",
+            isActive,
+            isUnlimited,
+            monthlyTokenQuota,
+            isApiKeyProvisioned,
+            CreatedDate: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            LastSyncedDate: new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero));
+
+    public static UserDetailResponse UserDetail(
+        UserResponse? user = null,
+        QuotaAllocationResponse? allocation = null,
+        ApiKeyResponse? apiKey = null,
+        IReadOnlyList<UserGroupMembershipResponse>? groups = null)
+    {
+        var row = user ?? User();
+        return new UserDetailResponse(
+            row,
+            allocation ?? Allocation(userId: row.UserId),
+            apiKey ?? Key(row.IsApiKeyProvisioned),
+            groups ?? []);
+    }
+
+    public static UserGroupMembershipResponse Membership(int groupId = 7, string name = "Platform") =>
+        new(groupId, GroupUnique, name, new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero));
+
     public static QuotaAllocationResponse Allocation(
+        int userId = 7,
         long? allocatedTokens = 5_000_000,
         long tokensUsed = 1_000_000,
         double? percentUsed = 20,
@@ -30,11 +83,11 @@ public static class WebTestData
         string tierProductId = GatewayTiers.Standard,
         bool isGatewayCapped = false,
         bool isHardStopped = false,
-        QuotaLevelType resolvedLevelType = QuotaLevelType.SystemDefault) =>
+        QuotaLevelType level = QuotaLevelType.SystemDefault) =>
         new(
             QuotaAllocationId: 1,
-            UserId: 7,
-            UserUnique: Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            userId,
+            UserUnique,
             UserDisplayName: "Dev Eloper",
             UserEmail: "dev@example.test",
             PeriodYear: 2026,
@@ -44,7 +97,7 @@ public static class WebTestData
             TokensUsed: tokensUsed,
             PercentUsed: isUnlimited ? null : percentUsed,
             IsHardStopped: isHardStopped,
-            ResolvedLevelType: resolvedLevelType,
+            ResolvedLevelType: level,
             TierProductId: tierProductId,
             IsGatewayCapped: isGatewayCapped,
             ResetDate: null);
@@ -58,61 +111,103 @@ public static class WebTestData
     public static GatewayConnectionInfo CliConfig(
         string gatewayBaseUrl = "https://ai.example.test",
         IReadOnlyList<ModelAliasInfo>? aliases = null) =>
-        new(gatewayBaseUrl, "/anthropic", "/openai/v1", aliases ?? []);
+        new(gatewayBaseUrl, "/anthropic", "/openai/v1", aliases ?? [Alias(), Alias("gpt", "gpt-4-1-mini", ModelProviderType.OpenAi)]);
+
+    public static ModelAliasInfo Alias(
+        string alias = "sonnet",
+        string deploymentName = "claude-sonnet-4-5",
+        ModelProviderType provider = ModelProviderType.Anthropic) =>
+        new(alias, deploymentName, provider);
 
     public static UserProfileResponse Profile(
         QuotaAllocationResponse? quota = null,
         ApiKeyResponse? key = null,
         GatewayConnectionInfo? cliConfig = null,
         bool isActive = true,
-        string displayName = "Dev Eloper") =>
+        string displayName = "Dev Eloper",
+        int userId = 7) =>
         new(
-            UserId: 7,
-            UserUnique: Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            DisplayName: displayName,
+            userId,
+            UserUnique,
+            displayName,
             Email: "dev@example.test",
-            IsActive: isActive,
+            isActive,
             IsUnlimited: quota?.IsUnlimited ?? false,
-            Quota: quota ?? Allocation(),
+            Quota: quota ?? Allocation(userId: userId),
             ApiKey: key ?? Key(),
             CliConfig: cliConfig ?? CliConfig());
 
     public static FoundryModelResponse Model(
-        string deploymentName = "claude-sonnet-5",
+        string deploymentName = "claude-sonnet-4-5",
         string modelName = "claude-sonnet-4-5",
         string modelFormat = "Anthropic",
         string provisioningState = "Succeeded") =>
         new(deploymentName, modelName, "1", modelFormat, provisioningState);
 
-    public static IReadOnlyList<QuotaTierResponse> Tiers() =>
-    [
-        new(GatewayTiers.Standard, "Standard", 5_000_000, false),
-        new(GatewayTiers.Power, "Power", 20_000_000, false),
-        new(GatewayTiers.Unlimited, "Unlimited", null, true),
-    ];
+    public static FoundryDeploymentResponse Deployment(
+        string accountName = "fg-eastus",
+        string deploymentName = "gpt-4-1-mini",
+        FoundryModelFormatType format = FoundryModelFormatType.OpenAI,
+        string provisioningState = "Succeeded",
+        int? capacity = 25) =>
+        new(
+            accountName,
+            deploymentName,
+            format.ToString(),
+            ModelName: deploymentName,
+            ModelVersion: "2026-01-01",
+            SkuName: "GlobalStandard",
+            capacity,
+            provisioningState,
+            CreatedDate: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            ModifiedDate: null);
+
+    public static GroupResponse Group(
+        int groupId = 7,
+        string name = "Platform",
+        string? entraGroupId = null,
+        bool isUnlimited = false,
+        long? monthlyTokenQuota = 20_000_000,
+        int memberCount = 2) =>
+        new(
+            groupId,
+            GroupUnique,
+            name,
+            Description: "The platform team.",
+            entraGroupId,
+            IsEntraSynced: entraGroupId is not null,
+            isUnlimited,
+            monthlyTokenQuota,
+            memberCount,
+            CreatedDate: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
+    public static GroupMemberResponse Member(int userId = 7, string displayName = "Dev Eloper", string email = "dev@example.test") =>
+        new(userId, UserUnique, displayName, email, new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero), AddedByUserId: 99);
 
     public static QuotaIncreaseRequestResponse Request(
-        int id = 1,
+        int requestId = 1,
+        int userId = 7,
+        string userDisplayName = "Dev Eloper",
         QuotaRequestStatusType status = QuotaRequestStatusType.Pending,
         long? requestedQuota = 20_000_000,
         string justification = "Running a large migration this month.",
         string? reviewNotes = null) =>
         new(
-            QuotaIncreaseRequestId: id,
-            QuotaIncreaseRequestUnique: Guid.Parse("22222222-2222-2222-2222-222222222222"),
-            UserId: 7,
-            UserUnique: Guid.Parse("11111111-1111-1111-1111-111111111111"),
-            UserDisplayName: "Dev Eloper",
-            RequestedByUserId: 7,
+            requestId,
+            RequestUnique,
+            userId,
+            UserUnique,
+            userDisplayName,
+            RequestedByUserId: userId,
             PeriodYear: 2026,
             PeriodMonth: 9,
             CurrentQuota: 5_000_000,
-            RequestedQuota: requestedQuota,
-            Justification: justification,
-            StatusType: status,
-            ReviewedByUserId: status == QuotaRequestStatusType.Pending ? null : 1,
+            requestedQuota,
+            justification,
+            status,
+            ReviewedByUserId: status == QuotaRequestStatusType.Pending ? null : 99,
             ReviewedDate: status == QuotaRequestStatusType.Pending ? null : DateTimeOffset.UnixEpoch,
-            ReviewNotes: reviewNotes,
+            reviewNotes,
             CreatedDate: DateTimeOffset.UnixEpoch);
 
     public static DashboardSummaryResponse Dashboard(
@@ -152,12 +247,14 @@ public static class WebTestData
         string? details = """{"before":null,"after":20000000}""") =>
         new(id, actorDisplayName is null ? null : 1, actorDisplayName, action, targetType, "5", details, DateTimeOffset.UnixEpoch);
 
+    /// <summary>Wraps items as the single full page a paged endpoint would return.</summary>
     public static PagedResult<T> Page<T>(params T[] items)
     {
         ArgumentNullException.ThrowIfNull(items);
         return new PagedResult<T>(items, items.Length, 1, 25);
     }
 
-    public static ModelAliasInfo Alias(string alias = "sonnet", string deploymentName = "claude-sonnet-5") =>
-        new(alias, deploymentName, ModelProviderType.Anthropic);
+    private static readonly Guid UserUnique = Guid.Parse("11111111-1111-1111-1111-111111111111");
+    private static readonly Guid GroupUnique = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    private static readonly Guid RequestUnique = Guid.Parse("33333333-3333-3333-3333-333333333333");
 }

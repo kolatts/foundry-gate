@@ -13,7 +13,7 @@
 <PageTitle>Dashboard — Foundry Gate</PageTitle>
 
 <div class="d-flex align-center justify-space-between mb-4">
-    <MudText Typo="Typo.h4">Dashboard</MudText>
+    <MudText Typo="Typo.h4" HtmlTag="h1">Dashboard</MudText>
     <MudButton Variant="Variant.Text"
                Color="Color.Primary"
                StartIcon="@Icons.Material.Filled.Refresh"
@@ -154,7 +154,14 @@ else
     private bool _refreshing;
     private string _errorMessage = string.Empty;
     private PeriodicTimer? _timer;
-    private CancellationTokenSource? _refreshCts;
+
+    // Created in the field initializer rather than in the refresh loop's setup: the first load is
+    // awaited before the loop starts, and a dispose during that window used to find nulls, cancel
+    // nothing, and then let the loop be created anyway — leaving a timer polling an admin-only
+    // endpoint for the life of the tab. This token also cancels the in-flight GET so a reply that
+    // lands after disposal cannot write into DashboardState.
+    private readonly CancellationTokenSource _pageLifetime = new();
+    private bool _disposed;
 
     /// <summary>
     /// How often the page re-reads <c>GET /dashboard</c>. A parameter rather than a constant purely
@@ -164,17 +171,23 @@ else
     [Parameter]
     public TimeSpan RefreshInterval { get; set; } = TimeSpan.FromSeconds(60);
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
     {
-        await LoadAsync(showErrors: false);
+        // The loop is armed before the first load is awaited, so a dispose during that first
+        // request still cancels everything there is to cancel.
         StartRefreshLoop();
+        return LoadAsync(showErrors: false);
     }
 
     private void StartRefreshLoop()
     {
-        _refreshCts = new CancellationTokenSource();
+        if (_disposed)
+        {
+            return;
+        }
+
         _timer = new PeriodicTimer(RefreshInterval);
-        _ = RefreshLoopAsync(_timer, _refreshCts.Token);
+        _ = RefreshLoopAsync(_timer, _pageLifetime.Token);
     }
 
     private async Task RefreshLoopAsync(PeriodicTimer timer, CancellationToken ct)
@@ -205,9 +218,16 @@ else
     private async Task LoadAsync(bool showErrors)
     {
         _refreshing = true;
-        var result = await ApiClient.GetDashboardAsync();
+        var result = await ApiClient.GetDashboardAsync(_pageLifetime.Token);
         _refreshing = false;
         _loading = false;
+
+        if (_pageLifetime.IsCancellationRequested)
+        {
+            // The page went away mid-request. Publishing a pending count from here would push a
+            // number into DashboardState — and so into the nav badge — for a page nobody is on.
+            return;
+        }
 
         if (result.IsSuccess && result.Value is not null)
         {
@@ -225,8 +245,9 @@ else
 
     public void Dispose()
     {
-        _refreshCts?.Cancel();
+        _disposed = true;
+        _pageLifetime.Cancel();
         _timer?.Dispose();
-        _refreshCts?.Dispose();
+        _pageLifetime.Dispose();
     }
 }

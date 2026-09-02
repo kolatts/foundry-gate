@@ -4,6 +4,7 @@
 @using FoundryGate.Domain.Foundry.Contracts
 @using FoundryGate.Domain.Requests.Contracts
 @using FoundryGate.Domain.Users.Contracts
+@implements IDisposable
 @inject IFoundryGateApiClient ApiClient
 @inject ISnackbar Snackbar
 
@@ -13,7 +14,7 @@
 
 <PageTitle>My Account — Foundry Gate</PageTitle>
 
-<MudText Typo="Typo.h4" GutterBottom="true">@(_profile?.DisplayName ?? "My account")</MudText>
+<MudText Typo="Typo.h4" HtmlTag="h1" GutterBottom="true">@(_profile?.DisplayName ?? "My account")</MudText>
 
 @if (_loading)
 {
@@ -139,18 +140,24 @@ else
     private ApiCallStatus _profileStatus = ApiCallStatus.Success;
     private string _profileMessage = string.Empty;
 
+    // Cancelled on dispose, so a reply that arrives after the developer has navigated away is
+    // abandoned rather than written into a component that is no longer on screen.
+    private readonly CancellationTokenSource _pageLifetime = new();
+
     protected override async Task OnInitializedAsync()
     {
-        // Three independent reads; nothing here depends on another's result, so pay for one round
-        // trip rather than three. Each failure is reported on its own terms below: the profile is
-        // the page, the model list and the history are extras.
-        var profileTask = ApiClient.GetMeAsync();
-        var modelsTask = ApiClient.GetFoundryModelsAsync();
-        var requestsTask = ApiClient.GetRequestsAsync(new PagedRequest(1, RequestHistoryPageSize));
+        var ct = _pageLifetime.Token;
+
+        // The profile and the model list are independent, so pay for one round trip rather than
+        // two. The history is not: GET /requests returns EVERY user's requests to an admin, so it
+        // has to name the caller's own UserId — which only the profile carries. #49 says "own
+        // only", and an admin reading a stranger's request under "Your quota increase requests" is
+        // the version of this bug that costs the most trust.
+        var profileTask = ApiClient.GetMeAsync(ct);
+        var modelsTask = ApiClient.GetFoundryModelsAsync(ct);
 
         var profile = await profileTask;
         var models = await modelsTask;
-        var requests = await requestsTask;
 
         if (profile.IsSuccess)
         {
@@ -172,16 +179,30 @@ else
             Snackbar.Add(models.Message ?? "Couldn't load the model list.", Severity.Warning);
         }
 
-        if (requests.IsSuccess && requests.Value is not null)
+        if (_profile is not null)
         {
-            _requests = requests.Value.Items;
-        }
-        else if (_profile is not null)
-        {
-            Snackbar.Add(requests.Message ?? "Couldn't load your request history.", Severity.Warning);
+            var requests = await ApiClient.GetRequestsAsync(
+                new QuotaRequestQuery(Status: null, UserId: _profile.UserId),
+                new PagedRequest(1, RequestHistoryPageSize),
+                ct);
+
+            if (requests.IsSuccess && requests.Value is not null)
+            {
+                _requests = requests.Value.Items;
+            }
+            else
+            {
+                Snackbar.Add(requests.Message ?? "Couldn't load your request history.", Severity.Warning);
+            }
         }
 
         _loading = false;
+    }
+
+    public void Dispose()
+    {
+        _pageLifetime.Cancel();
+        _pageLifetime.Dispose();
     }
 
     private void OnKeyChanged(FoundryGate.Domain.Keys.Contracts.ApiKeyResponse key)

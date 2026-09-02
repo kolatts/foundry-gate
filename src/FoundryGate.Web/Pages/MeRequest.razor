@@ -5,6 +5,7 @@
 @using FoundryGate.Domain.Quota.Contracts
 @using FoundryGate.Domain.Requests.Contracts
 @using FoundryGate.Domain.Users.Contracts
+@implements IDisposable
 @inject IFoundryGateApiClient ApiClient
 @inject ISnackbar Snackbar
 @inject NavigationManager Navigation
@@ -16,7 +17,7 @@
 
 <PageTitle>Request Quota Increase — Foundry Gate</PageTitle>
 
-<MudText Typo="Typo.h4" GutterBottom="true">Request a bigger budget</MudText>
+<MudText Typo="Typo.h4" HtmlTag="h1" GutterBottom="true">Request a bigger budget</MudText>
 
 @if (_loading)
 {
@@ -30,12 +31,13 @@ else
 {
     <MudCard Elevation="2" Style="max-width: 720px;">
         <MudCardContent>
-            @if (_pendingRequest is not null)
+            @if (HasPendingRequest)
             {
                 <MudAlert Severity="Severity.Warning" Class="mb-4" Icon="@Icons.Material.Filled.HourglassTop" data-testid="request-pending">
-                    You already have a request waiting for review, submitted
-                    @_pendingRequest.CreatedDate.ToLocalTime().ToString("d MMM yyyy"). An admin has to
-                    approve or reject it before you can send another.
+                    You already have a request waiting for review@(_pendingRequest is null
+                        ? string.Empty
+                        : $", submitted {_pendingRequest.CreatedDate.ToLocalTime():d MMM yyyy}").
+                    An admin has to approve or reject it before you can send another.
                 </MudAlert>
             }
             else if (_availableTiers.Count == 0)
@@ -120,21 +122,25 @@ else
     private bool _currentIsUnlimited;
     private bool _loading = true;
     private bool _submitting;
+    private bool _lockedByConflict;
     private string? _loadError;
 
-    private bool IsFormDisabled => _pendingRequest is not null || _availableTiers.Count == 0;
+    // Cancelled on dispose, so a reply that lands after the developer navigates away is dropped.
+    private readonly CancellationTokenSource _pageLifetime = new();
+
+    private bool HasPendingRequest => _pendingRequest is not null || _lockedByConflict;
+
+    private bool IsFormDisabled => HasPendingRequest || _availableTiers.Count == 0;
 
     protected override async Task OnInitializedAsync()
     {
-        var profileTask = ApiClient.GetMeAsync();
-        var tiersTask = ApiClient.GetQuotaTiersAsync();
-        var pendingTask = ApiClient.GetRequestsAsync(
-            new QuotaRequestQuery(QuotaRequestStatusType.Pending, UserId: null),
-            new PagedRequest(1, 1));
+        var ct = _pageLifetime.Token;
+
+        var profileTask = ApiClient.GetMeAsync(ct);
+        var tiersTask = ApiClient.GetQuotaTiersAsync(ct);
 
         var profile = await profileTask;
         var tiers = await tiersTask;
-        var pending = await pendingTask;
 
         if (!profile.IsSuccess || profile.Value is null)
         {
@@ -154,7 +160,24 @@ else
         _currentQuota = profile.Value.Quota.AllocatedTokens;
         _currentIsUnlimited = profile.Value.Quota.IsUnlimited;
         _availableTiers = TiersAbove(tiers.Value, _currentQuota, _currentIsUnlimited);
-        _selectedTierProductId = _availableTiers.Count == 1 ? _availableTiers[0].ProductId : null;
+
+        // Route the single-option shortcut through the same handler as a click. Setting the id
+        // alone would leave RequestedQuota null, which SubmitQuotaIncreaseRequest documents as
+        // "requesting unlimited" — so a fork with no Unlimited product would show "Power" and
+        // submit unlimited. The number and the tier are the same thing (D-013); there is exactly
+        // one place that keeps them so.
+        if (_availableTiers.Count == 1)
+        {
+            OnTierChanged(_availableTiers[0].ProductId);
+        }
+
+        // GET /requests hands an admin EVERY user's requests, so the pending check has to name the
+        // caller: without it, any admin opening this page is told a stranger's request is theirs
+        // and the form locks for as long as anyone in the fork has something pending.
+        var pending = await ApiClient.GetRequestsAsync(
+            new QuotaRequestQuery(QuotaRequestStatusType.Pending, UserId: profile.Value.UserId),
+            new PagedRequest(1, 1),
+            ct);
 
         if (pending.IsSuccess && pending.Value is not null)
         {
@@ -242,7 +265,7 @@ else
         }
 
         _submitting = true;
-        var result = await ApiClient.SubmitRequestAsync(_model);
+        var result = await ApiClient.SubmitRequestAsync(_model, _pageLifetime.Token);
         _submitting = false;
 
         if (result.IsSuccess)
@@ -255,28 +278,21 @@ else
         if (result.Status == ApiCallStatus.Error && result.Error?.Status == 409)
         {
             // The API is the authority on "one pending request at a time"; reflect its refusal
-            // without navigating away, and lock the form the way the pre-check would have.
+            // without navigating away, and lock the form the way the pre-check would have. A flag,
+            // not a fabricated QuotaIncreaseRequestResponse: the page does not know when the
+            // request it is being told about was submitted, and inventing a date to render is how
+            // a UI ends up asserting something the API never said.
             Snackbar.Add(result.Message ?? "You already have a request waiting for review.", Severity.Warning);
-            _pendingRequest ??= new QuotaIncreaseRequestResponse(
-                QuotaIncreaseRequestId: 0,
-                QuotaIncreaseRequestUnique: Guid.Empty,
-                UserId: 0,
-                UserUnique: Guid.Empty,
-                UserDisplayName: string.Empty,
-                RequestedByUserId: 0,
-                PeriodYear: DateTimeOffset.UtcNow.Year,
-                PeriodMonth: DateTimeOffset.UtcNow.Month,
-                CurrentQuota: _currentQuota,
-                RequestedQuota: _model.RequestedQuota,
-                Justification: _model.Justification,
-                StatusType: QuotaRequestStatusType.Pending,
-                ReviewedByUserId: null,
-                ReviewedDate: null,
-                ReviewNotes: null,
-                CreatedDate: DateTimeOffset.UtcNow);
+            _lockedByConflict = true;
             return;
         }
 
         Snackbar.Add(result.Message ?? "Couldn't submit your request.", Severity.Error);
+    }
+
+    public void Dispose()
+    {
+        _pageLifetime.Cancel();
+        _pageLifetime.Dispose();
     }
 }

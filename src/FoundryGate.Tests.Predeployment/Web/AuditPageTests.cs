@@ -5,6 +5,7 @@ using FoundryGate.Domain.Constants;
 using FoundryGate.Web.Components;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
+using Microsoft.AspNetCore.Components;
 using MudBlazor;
 
 namespace FoundryGate.Tests.Predeployment.Web;
@@ -108,6 +109,11 @@ public class AuditPageTests : WebTestContext
     [Fact]
     public async Task A_date_range_covers_the_whole_of_its_last_day_including_across_a_month_boundary()
     {
+        // Pinned to a non-UTC zone: the picker hands back wall-clock dates and the grid renders
+        // OccurredDate.ToLocalTime(), so reading those dates as UTC would slide the filter window
+        // away from the timestamps on screen by the reader's own offset.
+        Time = new FixedZoneTimeProvider(TimeSpan.FromHours(-5));
+
         var page = RenderPage<Audit>();
         var picker = page.FindComponent<MudDateRangePicker>();
 
@@ -115,12 +121,38 @@ public class AuditPageTests : WebTestContext
             new DateRange(new DateTime(2026, 8, 30, 0, 0, 0, DateTimeKind.Unspecified), new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Unspecified))));
 
         var query = Api.AuditQueries[^1].Query;
-        Assert.Equal(new DateTimeOffset(2026, 8, 30, 0, 0, 0, TimeSpan.Zero), query.FromDate);
 
-        // An admin who picks "2 Sep" means everything that happened on the 2nd.
+        // Midnight on 30 Aug where the admin is sitting — 05:00 UTC, not 00:00 UTC.
+        Assert.Equal(new DateTimeOffset(2026, 8, 30, 0, 0, 0, TimeSpan.FromHours(-5)), query.FromDate);
+        Assert.Equal(new DateTimeOffset(2026, 8, 30, 5, 0, 0, TimeSpan.Zero), query.FromDate!.Value.ToUniversalTime());
+
+        // An admin who picks "2 Sep" means everything that happened on the 2nd, local time.
         Assert.NotNull(query.ToDate);
-        Assert.Equal(new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Unspecified), query.ToDate!.Value.Date);
+        Assert.Equal(TimeSpan.FromHours(-5), query.ToDate!.Value.Offset);
+        Assert.Equal(new DateTime(2026, 9, 2), query.ToDate.Value.Date);
         Assert.True(query.ToDate.Value.TimeOfDay > TimeSpan.FromHours(23));
+    }
+
+    [Fact]
+    public async Task Changing_a_filter_goes_back_to_the_first_page()
+    {
+        // Narrowing a filter while deep in the log used to ask for the same page number of the
+        // narrowed set — and render "no entries match" for a filter with plenty of matches.
+        Api.AuditResult = Ok(new PagedResult<AuditLogEntryResponse>(
+            [WebTestData.AuditEntry()],
+            TotalCount: 500,
+            Page: 1,
+            PageSize: 25));
+
+        var page = RenderPage<Audit>();
+        var grid = page.FindComponent<MudDataGrid<AuditLogEntryResponse>>();
+        await page.InvokeAsync(() => grid.Instance.NavigateTo(Page.Last));
+        Assert.True(Api.AuditQueries[^1].Paging.Page > 1, "the grid should have asked for a later page");
+
+        SetSelect(page, index: 0, value: AuditActions.KeyRotated);
+
+        Assert.Equal(1, Api.AuditQueries[^1].Paging.Page);
+        Assert.Equal(AuditActions.KeyRotated, Api.AuditQueries[^1].Query.Action);
     }
 
     [Fact]
@@ -160,7 +192,7 @@ public class AuditPageTests : WebTestContext
         Assert.Equal(string.IsNullOrWhiteSpace(details) ? string.Empty : details, formatted);
     }
 
-    private static void SetSelect(IRenderedComponent<Bunit.Rendering.ContainerFragment> page, int index, string value)
+    private static void SetSelect(IRenderedComponent<IComponent> page, int index, string value)
     {
         // MudSelect's dropdown needs a popover the headless renderer never opens; drive the bound
         // value the way the component would, on the renderer's dispatcher.

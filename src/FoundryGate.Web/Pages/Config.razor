@@ -1,6 +1,7 @@
 @page "/config"
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @using FoundryGate.Domain.Config.Contracts
+@implements IDisposable
 @inject IFoundryGateApiClient ApiClient
 @inject ISnackbar Snackbar
 
@@ -11,7 +12,7 @@
 <PageTitle>Configuration — Foundry Gate</PageTitle>
 
 <div class="d-flex align-center justify-space-between mb-4">
-    <MudText Typo="Typo.h4">System configuration</MudText>
+    <MudText Typo="Typo.h4" HtmlTag="h1">System configuration</MudText>
     <MudStack Row="true" Spacing="2">
         <MudButton Variant="Variant.Text"
                    Disabled="@(_saving || DirtyEntries.Count == 0)"
@@ -53,13 +54,7 @@ else
         <RowTemplate Context="entry">
             <MudTd DataLabel="Key" Style="vertical-align: top; width: 22rem;">
                 <MudText Typo="Typo.body2" Class="fg-mono-raw">@entry.Key</MudText>
-                @if (ReadOnlyReason(entry.Key) is { } reason)
-                {
-                    <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-1" data-testid="@($"config-readonly-{entry.Key}")">
-                        Read-only — @reason
-                    </MudText>
-                }
-                else if (IsDirty(entry))
+                @if (IsDirty(entry))
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text" data-testid="@($"config-dirty-{entry.Key}")">
                         Unsaved
@@ -75,7 +70,7 @@ else
                               Margin="Margin.Dense"
                               Class="fg-mono-raw"
                               MaxLength="@ValidationConstants.ConfigValueMaxLength"
-                              Disabled="@(_saving || ReadOnlyReason(entry.Key) is not null)"
+                              Disabled="@_saving"
                               data-testid="@($"config-value-{entry.Key}")" />
                 @if (_rowResults.TryGetValue(entry.Key, out var result))
                 {
@@ -148,6 +143,10 @@ else
     private readonly Dictionary<string, string> _drafts = [];
     private readonly Dictionary<string, RowResult> _rowResults = [];
 
+    // Cancelled on dispose, so a save or a reload that lands after the admin navigates away is
+    // dropped rather than written into a component that is gone.
+    private readonly CancellationTokenSource _pageLifetime = new();
+
     private IReadOnlyList<SystemConfigEntryResponse> _entries = [];
     private bool _loading = true;
     private bool _saving;
@@ -161,7 +160,7 @@ else
     private async Task LoadAsync()
     {
         _loading = true;
-        var result = await ApiClient.GetConfigAsync();
+        var result = await ApiClient.GetConfigAsync(_pageLifetime.Token);
         _loading = false;
 
         if (!result.IsSuccess || result.Value is null)
@@ -188,8 +187,15 @@ else
         _ = _rowResults.Remove(key);
     }
 
+    /// <summary>
+    /// A row is dirty when its draft differs from what the API returned. There is deliberately no
+    /// client-side list of keys the API refuses: <c>SystemConfigValidator.EnsureEditable</c> is the
+    /// one authority on that (a retired key answers <c>409</c> with the replacement named in the
+    /// message), and a second copy here would drift the moment a key is retired or un-retired —
+    /// which it already had, blocking a key the API would happily write. The refusal is reported
+    /// next to the field it belongs to, so the admin reads the API's own reason rather than ours.
+    /// </summary>
     private bool IsDirty(SystemConfigEntryResponse entry) =>
-        ReadOnlyReason(entry.Key) is null &&
         !string.Equals(Draft(entry.Key), entry.Value, StringComparison.Ordinal);
 
     private void DiscardChanges()
@@ -218,7 +224,7 @@ else
         foreach (var entry in dirty)
         {
             var request = new UpdateSystemConfigRequest { Value = Draft(entry.Key) };
-            var result = await ApiClient.UpdateConfigAsync(entry.Key, request);
+            var result = await ApiClient.UpdateConfigAsync(entry.Key, request, _pageLifetime.Token);
 
             if (result.IsSuccess)
             {
@@ -266,26 +272,13 @@ else
         _ => "seeded — never edited",
     };
 
-    /// <summary>
-    /// Keys the API refuses to update with a <c>409</c> (or whose row nothing reads any more), so
-    /// the field is disabled with the reason rather than offering an edit that can only fail. The
-    /// API is the authority — <c>SystemConfigValidator.EnsureEditable</c> and
-    /// <c>reference/api.md</c>'s <c>PUT /config/{key}</c> table — and a key added there later still
-    /// surfaces correctly here as a per-row save failure. #172 tracks moving the one list into
-    /// Domain so the two cannot drift.
-    /// </summary>
-    private static string? ReadOnlyReason(string key) => key switch
-    {
-        SystemConfigurationKeys.ApimProductId =>
-            "quota tiers are APIM products now, so a developer's subscription is issued against their tier's product, not this one id.",
-        SystemConfigurationKeys.EntraTenantId =>
-            "Graph access is configured by the API's Entra options over the host's AzureAd:TenantId.",
-        SystemConfigurationKeys.ApimGatewayUrl =>
-            "the gateway address comes from the APIM deployment's own output (Gateway:ApimGatewayUrl), so it can never drift from what was deployed.",
-        _ => null,
-    };
-
     private static string Display(string value) => string.IsNullOrEmpty(value) ? "(empty)" : value;
+
+    public void Dispose()
+    {
+        _pageLifetime.Cancel();
+        _pageLifetime.Dispose();
+    }
 
     private readonly record struct RowResult(bool Succeeded, string Message);
 }

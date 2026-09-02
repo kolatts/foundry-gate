@@ -46,7 +46,7 @@
 
     <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-2">
         Period @Allocation.PeriodYear-@Allocation.PeriodMonth.ToString("00", System.Globalization.CultureInfo.InvariantCulture),
-        resolved from @ResolvedFrom(Allocation.ResolvedLevelType). Usage is reconciled from gateway
+        resolved from @QuotaDisplay.LevelSentence(Allocation.ResolvedLevelType). Usage is reconciled from gateway
         logs, so it can trail your last few requests; the gateway itself enforces in real time.
     </MudText>
 
@@ -76,14 +76,4 @@
     /// <summary>Heading above the bar. Defaults to the <c>/me</c> wording; the admin views pass their own.</summary>
     [Parameter]
     public string Title { get; set; } = "This month's usage";
-
-    private static string ResolvedFrom(QuotaLevelType level) => level switch
-    {
-        QuotaLevelType.UserUnlimited => "your unlimited flag",
-        QuotaLevelType.UserOverride => "your personal quota",
-        QuotaLevelType.GroupUnlimited => "an unlimited group you belong to",
-        QuotaLevelType.GroupMax => "the most generous group you belong to",
-        QuotaLevelType.SystemDefault => "the fork-wide default",
-        _ => "quota resolution",
-    };
 }

@@ -138,6 +138,26 @@ public class DashboardPageTests : WebTestContext
     }
 
     [Fact]
+    public async Task A_reply_that_lands_after_disposal_is_not_published_to_the_nav_badge()
+    {
+        // Dispose cancels the timer, but the GET that was already in flight still completes. Its
+        // result must not reach DashboardState: that feeds the nav badge, which outlives the page.
+        // (A long interval keeps the refresh loop out of this test — the loop's own shutdown is
+        // covered by Stops_refreshing_once_the_page_is_gone.)
+        Api.Gate = new TaskCompletionSource();
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(pendingRequestCount: 9));
+
+        var page = RenderPage<Dashboard>(("RefreshInterval", TimeSpan.FromMinutes(5)));
+        var dashboard = page.FindComponent<Dashboard>();
+
+        await page.InvokeAsync(dashboard.Instance.Dispose);
+        Api.Gate.SetResult();
+        await Task.Delay(50);
+
+        Assert.Equal(0, Services.GetRequiredService<DashboardStateService>().PendingRequestCount);
+    }
+
+    [Fact]
     public void A_background_refresh_failure_keeps_the_last_good_numbers_on_screen()
     {
         var page = RenderPage<Dashboard>(("RefreshInterval", TimeSpan.FromMilliseconds(20)));

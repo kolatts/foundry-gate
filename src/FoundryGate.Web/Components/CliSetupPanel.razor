@@ -37,12 +37,11 @@
             </tbody>
         </MudSimpleTable>
 
-        <MudText Typo="Typo.subtitle2" Class="fg-label mb-1">Models you can pin</MudText>
+        <MudText Typo="Typo.subtitle2" Class="fg-label mb-1">Deployments behind the gateway</MudText>
         @if (Models.Count == 0)
         {
             <MudAlert Severity="Severity.Info" Dense="true" data-testid="cli-no-models">
-                No model deployments are visible yet. Ask an admin which deployment names this
-                gateway serves.
+                No model deployments are visible yet. Ask an admin which models this gateway serves.
             </MudAlert>
         }
         else
@@ -79,10 +78,12 @@
 
         @if (CliConfig.ModelAliases.Count > 0)
         {
-            <MudText Typo="Typo.subtitle2" Class="fg-label mt-4 mb-1">Aliases (prefer these)</MudText>
+            <MudText Typo="Typo.subtitle2" Class="fg-label mt-4 mb-1">Models you can use</MudText>
             <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
-                Pin your CLI to the alias, not the deployment name, so deployments can rotate
-                underneath without you editing env vars.
+                Put the <strong>alias</strong> in <code>model</code>. The alias map is also the
+                allowlist for your tier — a deployment name comes back
+                <code>403 model_not_permitted</code> — and it lets an admin rotate the deployment
+                underneath without you editing an env var. "Resolves to" is for reference only.
             </MudText>
             <MudSimpleTable Dense="true" Hover="true" data-testid="cli-aliases">
                 <thead>
@@ -178,7 +179,9 @@
         export ANTHROPIC_FOUNDRY_BASE_URL={{AnthropicBaseUrl}}
         export ANTHROPIC_FOUNDRY_API_KEY={{KeyValue}}
 
-        # Pin models to your gateway's deployment names (listed above).
+        # Pin models to your gateway's aliases (listed above).
+        # Pinning matters: unpinned names resolve to Anthropic's defaults, which
+        # are not in your tier's alias map and come back 403 model_not_permitted.
         export ANTHROPIC_DEFAULT_SONNET_MODEL={{ModelFor("sonnet")}}
         export ANTHROPIC_DEFAULT_OPUS_MODEL={{ModelFor("opus")}}
         export ANTHROPIC_DEFAULT_HAIKU_MODEL={{ModelFor("haiku")}}
@@ -186,7 +189,7 @@
 
     private string CodexConfigSnippet =>
         $$"""
-        model = "{{ModelFor("codex")}}"     # the DEPLOYMENT name
+        model = "{{ModelFor("gpt")}}"     # the gateway ALIAS, not the deployment name
         model_provider = "azure"
 
         [model_providers.azure]
@@ -214,30 +217,26 @@
         curl {{OpenAiBaseUrl}}/responses \
           -H "api-key: {{KeyValue}}" \
           -H "content-type: application/json" \
-          -d '{"model":"{{ModelFor("codex")}}","input":"ping"}'
+          -d '{"model":"{{ModelFor("gpt")}}","input":"ping"}'
         """;
 
     private string Combine(string basePath) =>
         $"{GatewayOrigin}/{basePath.Trim('/')}";
 
     /// <summary>
-    /// The best deployment name to show in a snippet for a model family: an alias whose name
-    /// contains the hint wins (aliases are the stable handle), then a deployment whose name does,
-    /// then the first deployment, then a documented placeholder.
+    /// What to put in <c>model</c> for a model family. An alias always wins: the gateway's per-tier
+    /// alias map is also its allowlist, so a deployment name in <c>model</c> is refused with
+    /// <c>403 model_not_permitted</c> (infra/main.bicep <c>productModelAliases</c>, and the caution
+    /// in getting-started/cli-setup.mdx). When this developer's tier has no alias for the family,
+    /// the snippet keeps the doc's own placeholder rather than substituting a deployment name that
+    /// would be rejected.
     /// </summary>
     private string ModelFor(string hint)
     {
         var alias = CliConfig.ModelAliases
             .FirstOrDefault(a => a.Alias.Contains(hint, StringComparison.OrdinalIgnoreCase));
-        if (alias is not null)
-        {
-            return alias.Alias;
-        }
 
-        var deployment = Models.FirstOrDefault(m => m.DeploymentName.Contains(hint, StringComparison.OrdinalIgnoreCase))
-            ?? Models.FirstOrDefault(m => m.ModelName.Contains(hint, StringComparison.OrdinalIgnoreCase));
-
-        return deployment?.DeploymentName ?? $"<{hint}-deployment-name>";
+        return alias?.Alias ?? $"<{hint}-alias>";
     }
 
     private static bool IsServing(FoundryModelResponse model) =>

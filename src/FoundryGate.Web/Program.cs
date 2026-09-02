@@ -27,6 +27,11 @@ builder.Services.AddCascadingAuthenticationState();
 // rather than singleton — see DashboardStateService's remarks.
 builder.Services.AddScoped<DashboardStateService>();
 
+// The sanctioned clock and time zone for components. CONVENTIONS.md bans naked DateTimeOffset.UtcNow
+// outside the Data layer's interceptor, and a component that reads TimeZoneInfo.Local directly can't
+// be tested against another zone — /audit converts the date picker's wall-clock dates through this.
+builder.Services.AddSingleton(TimeProvider.System);
+
 builder.Services.AddMudServices(config =>
 {
     config.SnackbarConfiguration.PositionClass = MudBlazor.Defaults.Classes.Position.BottomRight;

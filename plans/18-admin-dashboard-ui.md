@@ -33,10 +33,19 @@ Files expected to be created or modified:
 - `src/FoundryGate.Web/Services/DashboardStateService.cs`
 
 ## Verification
-- [ ] `dotnet build` passes
-- [ ] Dashboard stat cards show correct counts from the API
-- [ ] Pending request MudBadge on the nav item reflects the live count
-- [ ] Config editor shows only dirty rows in the diff preview dialog
-- [ ] Saving config calls PUT for each changed key and shows a success snackbar
-- [ ] Audit log MudDateRangePicker filter works across a month boundary
-- [ ] Audit log details popover renders JSON without crashing on malformed input
+- [x] `dotnet build` passes
+- [x] Dashboard stat cards show correct counts from the API
+- [x] Pending request MudBadge on the nav item reflects the live count
+- [x] Config editor shows only dirty rows in the diff preview dialog
+- [x] Saving config calls PUT for each changed key and shows a success snackbar
+- [x] Audit log MudDateRangePicker filter works across a month boundary
+- [x] Audit log details popover renders JSON without crashing on malformed input
+
+Substituted, with an issue rather than a silent gap:
+
+- Dashboard's fourth card is "tokens used this period", not hard-stopped users —
+  `DashboardSummaryResponse` carries no hard-stopped count
+  ([#190](https://github.com/kolatts/foundry-gate/issues/190)).
+- The audit actor filter is a user id, not a name type-ahead — `AuditLogQuery` takes only
+  `actorUserId`, and the search-capable `GET /users` client overload lands with #176
+  ([#191](https://github.com/kolatts/foundry-gate/issues/191)).

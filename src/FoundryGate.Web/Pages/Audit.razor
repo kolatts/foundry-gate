@@ -4,6 +4,7 @@
 @using FoundryGate.Domain.Common
 @inject IFoundryGateApiClient ApiClient
 @inject ISnackbar Snackbar
+@inject TimeProvider TimeProvider
 
 @* The audit trail (#55). Server-paged and server-filtered: the log is append-only and unbounded,
    so nothing here ever holds more than one page. The action and target-type choices come from the
@@ -11,7 +12,7 @@
 
 <PageTitle>Audit Log — Foundry Gate</PageTitle>
 
-<MudText Typo="Typo.h4" GutterBottom="true">Audit log</MudText>
+<MudText Typo="Typo.h4" HtmlTag="h1" GutterBottom="true">Audit log</MudText>
 
 <MudCard Elevation="2" Class="mb-4">
     <MudCardContent>
@@ -168,10 +169,10 @@
             Action: _action,
             TargetType: _targetType,
             TargetId: null,
-            FromDate: _dateRange?.Start is { } start ? new DateTimeOffset(start.Date, TimeSpan.Zero) : null,
+            FromDate: _dateRange?.Start is { } start ? ToInstant(start.Date) : null,
             // Inclusive of the whole end day: an admin who picks "3 Sep" means everything that
             // happened on the 3rd, not everything before midnight that morning.
-            ToDate: _dateRange?.End is { } end ? new DateTimeOffset(end.Date.AddDays(1).AddTicks(-1), TimeSpan.Zero) : null);
+            ToDate: _dateRange?.End is { } end ? ToInstant(end.Date.AddDays(1).AddTicks(-1)) : null);
 
         var paging = new PagedRequest(state.Page + 1, state.PageSize);
         var result = await ApiClient.GetAuditLogAsync(query, paging, cancellationToken);
@@ -192,6 +193,17 @@
         return new GridData<AuditLogEntryResponse> { Items = [], TotalItems = 0 };
     }
 
+    /// <summary>
+    /// A date the picker produced, as the instant it names in the admin's own time zone. The
+    /// picker hands back wall-clock dates and the grid renders <c>OccurredDate.ToLocalTime()</c>,
+    /// so reading those dates as UTC would offset the filter window from the timestamps on screen
+    /// by the reader's UTC offset — every admin outside UTC would see the wrong day's entries.
+    /// The zone comes from the injected <see cref="TimeProvider"/> rather than
+    /// <see cref="TimeZoneInfo.Local"/> so a test can pin it.
+    /// </summary>
+    private DateTimeOffset ToInstant(DateTime localWallClock) =>
+        new(DateTime.SpecifyKind(localWallClock, DateTimeKind.Unspecified), TimeProvider.LocalTimeZone.GetUtcOffset(localWallClock));
+
     private async Task ApplyFilterAsync(Action mutate)
     {
         mutate();
@@ -209,9 +221,19 @@
 
     private async Task ReloadAsync()
     {
-        if (_grid is not null)
+        if (_grid is null)
         {
-            await _grid.ReloadServerData();
+            return;
         }
+
+        // Back to the first page before reloading. ReloadServerData() keeps the current page, so
+        // narrowing a filter while on page 20 asks the API for page 20 of the narrowed set and
+        // renders "no entries match" for a filter that has plenty.
+        if (_grid.CurrentPage != 0)
+        {
+            _grid.NavigateTo(Page.First);
+        }
+
+        await _grid.ReloadServerData();
     }
 }

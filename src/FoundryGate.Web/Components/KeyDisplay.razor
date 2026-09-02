@@ -12,7 +12,7 @@
     <MudCardContent>
         <MudText Typo="Typo.subtitle2" Class="fg-label mb-2">Your gateway key</MudText>
 
-        @if (!Key.IsProvisioned)
+        @if (!CurrentKey.IsProvisioned)
         {
             <MudAlert Severity="Severity.Info" Dense="true" Icon="@Icons.Material.Filled.HourglassEmpty" data-testid="key-not-provisioned">
                 Your key is being set up. It's created automatically the first time your account is
@@ -56,7 +56,7 @@
                     <MudButton Variant="Variant.Outlined"
                                Color="Color.Primary"
                                StartIcon="@Icons.Material.Filled.VisibilityOff"
-                               OnClick="Hide"
+                               OnClick="HideAsync"
                                data-testid="key-hide">
                         Hide
                     </MudButton>
@@ -130,10 +130,27 @@
 
     // The plaintext key. Component state only — see the file header comment.
     private string? _revealedKey;
+
+    // The masked value a rotation just produced, held locally rather than written back onto the
+    // Key parameter (which the framework owns). Cleared once the parent's Key catches up.
+    private ApiKeyResponse? _rotatedKey;
+
     private bool _busy;
     private bool _confirmRotateOpen;
 
-    private string DisplayedKey => _revealedKey ?? Key.MaskedKey ?? string.Empty;
+    private ApiKeyResponse CurrentKey => _rotatedKey ?? Key;
+
+    private string DisplayedKey => _revealedKey ?? CurrentKey.MaskedKey ?? string.Empty;
+
+    protected override void OnParametersSet()
+    {
+        // The parent handled KeyChanged and the parameter now agrees with what we rotated to;
+        // drop the local copy so there is one source of truth again.
+        if (_rotatedKey is not null && Key.MaskedKey == _rotatedKey.MaskedKey)
+        {
+            _rotatedKey = null;
+        }
+    }
 
     private async Task RevealAsync()
     {
@@ -163,8 +180,11 @@
             return;
         }
 
-        Key = new ApiKeyResponse(IsProvisioned: true, result.Value.MaskedKey, result.Value.ApimSubscriptionId);
-        await KeyChanged.InvokeAsync(Key);
+        // Never assign to the [Parameter] itself: the framework overwrites it on the parent's next
+        // render, so the panel would flip back to the stale mask the moment anything else changed.
+        // The rotated value lives here until the parent's KeyChanged handler makes it the parameter.
+        _rotatedKey = new ApiKeyResponse(IsProvisioned: true, result.Value.MaskedKey, result.Value.ApimSubscriptionId);
+        await KeyChanged.InvokeAsync(_rotatedKey);
         await SetRevealedAsync(result.Value.PlaintextKey);
         Snackbar.Add("Your key was rotated. Copy the new value below — it's shown once.", Severity.Success);
     }
@@ -189,7 +209,9 @@
         }
     }
 
-    private void Hide() => _ = SetRevealedAsync(null);
+    // Awaited, not discarded: this is what clears the plaintext out of the CLI snippets, and a
+    // dropped task is a plaintext key still on screen after the developer asked for it to be gone.
+    private Task HideAsync() => SetRevealedAsync(null);
 
     private async Task SetRevealedAsync(string? value)
     {
