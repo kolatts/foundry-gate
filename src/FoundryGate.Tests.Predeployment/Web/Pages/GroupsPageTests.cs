@@ -47,7 +47,17 @@ public class GroupsPageTests : WebTestContext
         var page = RenderPage<Groups>();
         page.WaitForAssertion(() => Assert.NotEmpty(Api.GroupListCalls));
 
+        // The search box debounces for 300 ms before it re-queries, so the second ServerData call
+        // is what this test is actually waiting for — assert on the count first and only then on
+        // its contents, so a timeout says "the page never re-queried" rather than "no call
+        // matched", and so the assertion never reads a half-appended list (#203).
+        var before = Api.GroupListCalls.Count;
+
         page.Find("input[data-testid=groups-search]").Input("platform");
+
+        page.WaitForAssertion(() => Assert.True(
+            Api.GroupListCalls.Count > before,
+            $"the grid should have re-queried after the search input; it has made {Api.GroupListCalls.Count} call(s) in total."));
 
         page.WaitForAssertion(() =>
         {

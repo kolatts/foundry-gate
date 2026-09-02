@@ -20,14 +20,19 @@ public sealed class QuotaController(IQuotaAllocationService quotaAllocations) : 
     public IReadOnlyList<QuotaTierResponse> ListTiers() =>
         quotaAllocations.ListTiers();
 
-    /// <summary>Admin: every allocation for the current UTC calendar month, paged, ordered by user display name.</summary>
+    /// <summary>
+    /// Admin: allocations for the current UTC calendar month, paged, ordered by user display name.
+    /// Optionally filtered by <c>isHardStopped</c>, <c>isOverBudget</c>, <c>tier</c>, <c>search</c>
+    /// and <c>isActive</c> — the filters the dashboard's cards link to (#208).
+    /// </summary>
     [HttpGet("allocations")]
     [Authorize(Policy = PolicyNames.AdminOnly)]
     [ProducesResponseType<PagedResult<QuotaAllocationResponse>>(StatusCodes.Status200OK)]
     public Task<PagedResult<QuotaAllocationResponse>> ListAsync(
+        [FromQuery] QuotaAllocationQuery filter,
         [FromQuery] PagedRequest paging,
         CancellationToken cancellationToken) =>
-        quotaAllocations.ListCurrentPeriodAsync(paging, cancellationToken);
+        quotaAllocations.ListCurrentPeriodAsync(filter, paging, cancellationToken);
 
     /// <summary>The caller's own current-period allocation; resolved and created on first call of the month.</summary>
     [HttpGet("allocations/me")]

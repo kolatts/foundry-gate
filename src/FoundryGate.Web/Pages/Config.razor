@@ -76,6 +76,7 @@ else
                               Margin="Margin.Dense"
                               Class="fg-mono-raw"
                               MaxLength="@ValidationConstants.ConfigValueMaxLength"
+                              Lines="@Lines(entry.Key)"
                               Disabled="@(_saving || entry.IsReadOnly)"
                               HelperText="@(entry.IsReadOnly ? "Written by Foundry Gate itself — the API refuses an edit." : null)"
                               data-testid="@($"config-value-{entry.Key}")" />
@@ -187,6 +188,13 @@ else
     }
 
     private string Draft(string key) => _drafts.TryGetValue(key, out var value) ? value : string.Empty;
+
+    /// <summary>
+    /// How tall a key's editor is. Almost everything here is a number, a flag or an id and belongs on
+    /// one line; the rate card (#177) is a JSON array, and a JSON array in a one-line box is a value
+    /// you cannot read while you edit it.
+    /// </summary>
+    private static int Lines(string key) => key == SystemConfigurationKeys.RateCard ? 4 : 1;
 
     private void SetDraft(string key, string? value)
     {

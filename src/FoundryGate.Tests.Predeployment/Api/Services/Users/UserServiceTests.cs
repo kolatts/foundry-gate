@@ -182,6 +182,7 @@ public class UserServiceTests : InMemoryDatabaseTest
             quotaResolution,
             new QuotaResetService(Context, quotaResolution, tierSync, new QuotaRequestExpiry(Context, writer, _timeProvider, NullLogger<QuotaRequestExpiry>.Instance), writer, _timeProvider, NullLogger<QuotaResetService>.Instance),
             tierMapper,
+            new FixedCostEstimator(),
             accessor,
             _timeProvider,
             NullLogger<QuotaAllocationService>.Instance);

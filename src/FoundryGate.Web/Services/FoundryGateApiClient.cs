@@ -105,10 +105,22 @@ public sealed partial class FoundryGateApiClient(HttpClient httpClient) : IFound
         SendAsync<IReadOnlyList<GroupSyncResult>>(HttpMethod.Post, "groups/sync-entra", body: null, ct);
 
     // Quota — spec §4.3
-    public Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(PagedRequest paging, CancellationToken ct = default)
+    public Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(
+        QuotaAllocationQuery query,
+        PagedRequest paging,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(paging);
-        return GetAsync<PagedResult<QuotaAllocationResponse>>(WithPaging("quota/allocations", paging), ct);
+
+        var parts = PagingParts(paging);
+        AddIfPresent(parts, "isHardStopped", query.IsHardStopped);
+        AddIfPresent(parts, "isOverBudget", query.IsOverBudget);
+        AddIfPresent(parts, "tier", query.Tier);
+        AddIfPresent(parts, "search", query.Search);
+        AddIfPresent(parts, "isActive", query.IsActive);
+
+        return GetAsync<PagedResult<QuotaAllocationResponse>>($"quota/allocations?{string.Join('&', parts)}", ct);
     }
 
     public Task<ApiCallResult<QuotaAllocationResponse>> GetMyQuotaAllocationAsync(CancellationToken ct = default) =>

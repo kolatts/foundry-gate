@@ -27,6 +27,15 @@ namespace FoundryGate.Tests.Predeployment.Web;
 /// neither see a confirmation dialog nor click its buttons.
 /// <c>root.FindComponent&lt;TPage&gt;()</c> reaches the page itself when a test needs it.
 /// </para>
+/// <para>
+/// <b>Nothing here is shared between test classes</b> (audited for #203, which suspected it):
+/// <see cref="Api"/>, <see cref="Time"/>, <see cref="Authorization"/>, bUnit's JS interop and
+/// the whole service collection are per-instance, and xUnit gives each test class its own
+/// collection — so classes running in parallel cannot see each other's arrangements. The one
+/// static is <c>WebTestData.Tiers</c>, an immutable list of records. What the flakes actually were:
+/// a one-second wait budget (raised below) and a fake that counted calls from the renderer's
+/// thread while assertions read them from the test's (fixed in <see cref="RecordedCalls{T}"/>).
+/// </para>
 /// </remarks>
 public abstract class WebTestContext : BunitContext, IAsyncLifetime
 {
@@ -47,8 +56,26 @@ public abstract class WebTestContext : BunitContext, IAsyncLifetime
         // of it with defaults instead of failing the test for something the component isn't about.
         JSInterop.Mode = JSRuntimeMode.Loose;
 
+        // bUnit waits one second by default, which is a budget, not a contract: several of these
+        // pages debounce input for 300 ms before they even start the request the assertion is
+        // waiting on, and a loaded CI runner has spent that on thread-pool scheduling alone.
+        // Three seconds is ten times the debounce and still leaves a red run readable: at ~200
+        // WaitFor* call sites, the 10 s this briefly carried would have turned a broken shared
+        // component into a half-hour wait for an answer you want immediately (#203 review).
+        DefaultWaitTimeout = WaitTimeout;
+
         Authorization = AddAuthorization();
     }
+
+    /// <summary>
+    /// The ceiling every <c>WaitFor*</c> in the Web suite waits up to: ten times the longest debounce
+    /// any of these pages uses, and no more. The number only decides how long a <em>failing</em>
+    /// assertion takes to give up, so it is chosen to keep a red run fast to read (#203).
+    /// </summary>
+    public static readonly TimeSpan WaitTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>Pages rendered through <see cref="RenderPage{TPage}"/>, so teardown can dispose them (bUnit does not — see <see cref="DisposeRenderedPagesAsync"/>).</summary>
+    private readonly List<IComponent> _renderedPages = [];
 
     /// <summary>The in-memory API the components under test talk to. Arrange on it before rendering.</summary>
     public FakeFoundryGateApiClient Api { get; } = new();
@@ -61,6 +88,33 @@ public abstract class WebTestContext : BunitContext, IAsyncLifetime
 
     /// <summary>bUnit's authentication/authorization double, behind <c>AuthorizeView</c> and <c>[Authorize]</c>.</summary>
     protected BunitAuthorizationContext Authorization { get; }
+
+    /// <summary>
+    /// Waits for something that happens <em>off</em> the render loop — a gated API call returning,
+    /// a background timer stopping. bUnit's <c>WaitForAssertion</c> re-checks on renders, so it is
+    /// the wrong tool for a condition that produces none (a reply that lands after the page was
+    /// disposed renders nothing at all); this polls instead, which is the difference between a
+    /// deterministic wait and a <c>Task.Delay</c> that happens to be long enough (#203).
+    /// </summary>
+    /// <param name="condition">Checked until it is true or <see cref="WaitTimeout"/> elapses.</param>
+    /// <param name="because">What was expected — the failure message when it never became true.</param>
+    protected static async Task WaitUntilAsync(Func<bool> condition, string because)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+
+        var deadline = DateTime.UtcNow + WaitTimeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(10);
+        }
+
+        Assert.Fail($"Timed out after {WaitTimeout.TotalSeconds:0.#}s waiting for {because}.");
+    }
 
     /// <summary>Snackbar messages raised during the test, in the order they were added.</summary>
     protected IEnumerable<Snackbar> Snackbars => Services.GetRequiredService<ISnackbar>().ShownSnackbars;
@@ -90,7 +144,7 @@ public abstract class WebTestContext : BunitContext, IAsyncLifetime
 
         var attributes = parameters.ToDictionary(p => p.Name, p => p.Value);
 
-        return Render(builder =>
+        var root = Render(builder =>
         {
             builder.OpenComponent<MudPopoverProvider>(0);
             builder.CloseComponent();
@@ -100,6 +154,54 @@ public abstract class WebTestContext : BunitContext, IAsyncLifetime
             builder.AddMultipleAttributes(3, attributes!);
             builder.CloseComponent();
         });
+
+        _renderedPages.Add(root.FindComponent<TPage>().Instance);
+        return root;
+    }
+
+    /// <summary>
+    /// Disposes every page this test has rendered, on the renderer's dispatcher, and waits for it.
+    /// What a test uses when the point is "the page is gone" rather than "the test is over".
+    /// </summary>
+    /// <remarks>
+    /// <b>bUnit's own teardown does not reach these pages</b> — measured, not assumed (#203). A
+    /// component rendered as the root type (<c>Render&lt;Dashboard&gt;()</c>) is disposed by
+    /// <c>DisposeComponentsAsync()</c>; the same component rendered <em>inside</em> a
+    /// <see cref="RenderFragment"/>, which is what <see cref="RenderPage{TPage}"/> has to do to put
+    /// the dialog and popover providers beside it, is not. That is why
+    /// <c>DashboardPageTests.Stops_refreshing_once_the_page_is_gone</c> was failing on a real signal:
+    /// its 20 ms refresh timer was never asked to stop, so the loop it asserts about had never been
+    /// told the page was gone. Every <see cref="IDisposable"/> page had the same hole — Dashboard is
+    /// simply the only one with a clock loud enough to hear.
+    /// </remarks>
+    protected async Task DisposeRenderedPagesAsync()
+    {
+        foreach (var component in _renderedPages)
+        {
+            await DisposeComponentAsync(component);
+        }
+
+        _renderedPages.Clear();
+    }
+
+    /// <summary>
+    /// Disposes one component the way its host would: <see cref="IAsyncDisposable"/> in preference to
+    /// <see cref="IDisposable"/> (which is Blazor's own order), on the renderer's dispatcher, because
+    /// a component's teardown may touch state the renderer owns.
+    /// </summary>
+    private async Task DisposeComponentAsync(IComponent component)
+    {
+        switch (component)
+        {
+            case IAsyncDisposable asyncDisposable:
+                await Renderer.Dispatcher.InvokeAsync(async () => await asyncDisposable.DisposeAsync());
+                break;
+            case IDisposable disposable:
+                await Renderer.Dispatcher.InvokeAsync(disposable.Dispose);
+                break;
+            default:
+                break;
+        }
     }
 
     Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
@@ -110,7 +212,21 @@ public abstract class WebTestContext : BunitContext, IAsyncLifetime
     /// those. xUnit disposes an <see cref="IAsyncLifetime"/> test class asynchronously first, so the
     /// real teardown happens here and <see cref="Dispose(bool)"/> is left with nothing to do.
     /// </summary>
-    async Task IAsyncLifetime.DisposeAsync() => await DisposeAsync();
+    async Task IAsyncLifetime.DisposeAsync()
+    {
+        // Pages first, and by hand — see DisposeRenderedPagesAsync for why bUnit's teardown misses
+        // them. A page left undisposed keeps whatever it started running: a 20 ms PeriodicTimer that
+        // outlives its test class burns thread-pool time for the rest of the suite, which is the kind
+        // of load that makes *other* tests flaky under CI.
+        foreach (var component in _renderedPages)
+        {
+            await DisposeComponentAsync(component);
+        }
+
+        _renderedPages.Clear();
+
+        await DisposeAsync();
+    }
 
     /// <inheritdoc />
     protected override void Dispose(bool disposing)

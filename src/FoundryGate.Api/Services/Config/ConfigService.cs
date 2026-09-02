@@ -1,4 +1,5 @@
 using FoundryGate.Api.Services.Audit;
+using FoundryGate.Api.Services.Cost;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
@@ -44,6 +45,7 @@ public sealed class ConfigService(
     AppDbContext dbContext,
     SystemConfigValidator validator,
     IQuotaResolutionService quotaResolution,
+    ICostEstimator costEstimator,
     ICurrentUserAccessor currentUser,
     IAuditService audit,
     TimeProvider timeProvider) : IConfigService
@@ -169,6 +171,17 @@ public sealed class ConfigService(
         if (transaction is not null)
         {
             await transaction.CommitAsync(commitToken);
+        }
+
+        // After the commit, never before: an eviction that ran on a write which then rolled back
+        // would re-cache the old value anyway, but it would also mean the window where the cache and
+        // the database disagree is one an aborted request can open. The rate card holds its parsed
+        // value for 30 s and the dashboard summary holds its own for another 30, so without this a
+        // corrected price could take a minute to appear — and `?fresh=true`, the documented escape
+        // hatch, would re-run eight queries and still serve the stale rate (#177 review).
+        if (string.Equals(entry.Key, SystemConfigurationKeys.RateCard, StringComparison.OrdinalIgnoreCase))
+        {
+            costEstimator.Invalidate();
         }
 
         // Built from what the claim actually wrote rather than re-read: those are the values the

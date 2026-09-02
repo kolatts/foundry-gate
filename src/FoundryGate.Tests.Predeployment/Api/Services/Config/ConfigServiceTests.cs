@@ -34,6 +34,9 @@ public class ConfigServiceTests : InMemoryDatabaseTest
     private static readonly DateTimeOffset Now = new(2026, 9, 15, 12, 0, 0, TimeSpan.Zero);
     private static readonly BillingPeriod Period = new(2026, 9);
 
+    /// <summary>Records the rate-card cache eviction a <c>RateCard</c> write is supposed to trigger (#177 review).</summary>
+    private readonly FixedCostEstimator _costEstimator = new();
+
     private readonly MutableTimeProvider _clock = new(Now);
     private readonly RecordingGatewayTierSync _tierSync = new();
 
@@ -189,6 +192,38 @@ public class ConfigServiceTests : InMemoryDatabaseTest
         var audit = Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.ConfigUpdated).ToListAsync());
         using var details = JsonDocument.Parse(audit.Details);
         Assert.Equal(0, details.RootElement.GetProperty("reresolvedUserCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task Writing_the_rate_card_evicts_the_cached_one()
+    {
+        // The rate card is parsed once and cached for 30 s, and the dashboard summary computed from
+        // it is cached for another 30. Without this eviction a corrected price could take a minute to
+        // appear, and ?fresh=true — the documented escape hatch — would re-run eight queries and
+        // still serve the stale rate (#177 review).
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+
+        _ = await CreateService(admin.EntraObjectId).UpdateAsync(
+            SystemConfigurationKeys.RateCard,
+            new UpdateSystemConfigRequest { Value = """[{"modelPrefix":"*","inputPerMillion":3,"outputPerMillion":15}]""" },
+            CancellationToken.None);
+
+        Assert.Equal(1, _costEstimator.InvalidateCount);
+    }
+
+    [Fact]
+    public async Task Writing_any_other_key_leaves_the_cached_rate_card_alone()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+
+        _ = await CreateService(admin.EntraObjectId).UpdateAsync(
+            SystemConfigurationKeys.ResetDayOfMonth,
+            new UpdateSystemConfigRequest { Value = "7" },
+            CancellationToken.None);
+
+        Assert.Equal(0, _costEstimator.InvalidateCount);
     }
 
     [Fact]
@@ -356,6 +391,7 @@ public class ConfigServiceTests : InMemoryDatabaseTest
             Context,
             new SystemConfigValidator(TestGatewayTiers.Mapper()),
             new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance),
+            _costEstimator,
             accessor,
             new AuditService(Context, auditWriter, accessor),
             _clock);

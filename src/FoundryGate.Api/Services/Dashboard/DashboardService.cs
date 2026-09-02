@@ -1,3 +1,4 @@
+using FoundryGate.Api.Services.Cost;
 using FoundryGate.Data;
 using FoundryGate.Domain.Dashboard.Contracts;
 using FoundryGate.Domain.Quota;
@@ -26,6 +27,7 @@ namespace FoundryGate.Api.Services.Dashboard;
 public sealed class DashboardService(
     AppDbContext dbContext,
     IMemoryCache cache,
+    ICostEstimator costEstimator,
     TimeProvider timeProvider) : IDashboardService
 {
     /// <summary>Prefix of the <see cref="IMemoryCache"/> key; the current <see cref="BillingPeriod"/> is appended.</summary>
@@ -51,7 +53,7 @@ public sealed class DashboardService(
             return cached;
         }
 
-        var summary = await QueryAsync(period, cancellationToken);
+        var summary = await QueryAsync(period, fresh, cancellationToken);
         _ = cache.Set(cacheKey, summary, CacheDuration);
         return summary;
     }
@@ -61,7 +63,7 @@ public sealed class DashboardService(
     /// at a time, so "concurrently" is not on the table; each is a single aggregate the indexes
     /// already cover (<c>QuotaAllocation</c> has a <c>(PeriodYear, PeriodMonth)</c> index).
     /// </summary>
-    private async Task<DashboardSummaryResponse> QueryAsync(BillingPeriod period, CancellationToken cancellationToken)
+    private async Task<DashboardSummaryResponse> QueryAsync(BillingPeriod period, bool fresh, CancellationToken cancellationToken)
     {
         var totalUserCount = await dbContext.Users.AsNoTracking()
             .CountAsync(cancellationToken);
@@ -110,6 +112,12 @@ public sealed class DashboardService(
                 a.AllocatedTokens))
             .ToListAsync(cancellationToken);
 
+        // The fork's own prices, read once for the whole summary (#177). Null everywhere when no
+        // rate card is configured, which is how a fork ships — a truer answer than a zero.
+        // `fresh` carried through: the rate card has a cache of its own, and an admin who corrects a
+        // price and hits Refresh would otherwise be served the price they came to replace.
+        var rateCard = await costEstimator.GetRateCardAsync(fresh, cancellationToken);
+
         return new DashboardSummaryResponse(
             totalUserCount,
             activeUserCount,
@@ -122,9 +130,11 @@ public sealed class DashboardService(
                 c.DisplayName,
                 c.TokensUsed,
                 c.AllocatedTokens,
-                PercentUsed(c.AllocatedTokens, c.TokensUsed)))],
+                PercentUsed(c.AllocatedTokens, c.TokensUsed),
+                rateCard.Estimate(c.TokensUsed)))],
             hardStoppedUserCount,
-            overBudgetUserCount);
+            overBudgetUserCount,
+            rateCard.Estimate(totalTokensUsedThisPeriod));
     }
 
     private IQueryable<Data.Entities.QuotaAllocation> CurrentPeriod(BillingPeriod period) =>
