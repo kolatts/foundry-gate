@@ -13,15 +13,33 @@ These are stored in the `SystemConfiguration` database table and editable by adm
 |---|---|---|
 | `DefaultMonthlyTokenQuota` | `"5000000"` | Per-user monthly token budget when no user or group override applies. Must equal a configured tier cap (`5000000` = the Standard tier as shipped) — see [Gateway quota tiers](#gateway-quota-tiers-gatewaytiers). A value that matches no tier is enforced at the next tier up and flagged `isGatewayCapped` on every allocation it produces. |
 | `ApimResourceId` | `""` | ARM resource ID of the APIM instance (`/subscriptions/.../Microsoft.ApiManagement/service/...`). Informational — the key service addresses APIM through the `Gateway__*` environment variables below, not this value. |
-| `ApimGatewayUrl` | `""` | APIM gateway base URL shown to developers on `/me` for CLI configuration (e.g., `https://my-apim.azure-api.net`). |
-| `ApimProductId` | `"foundrygate"` | Legacy single-product name. **Superseded**: a developer's subscription is created under their **quota-tier product** (`standard`, `power`, `unlimited`), not this one. Kept as seeded reference data. |
 | `FoundryResourceId` | `""` | ARM resource ID of the Azure AI Foundry account. **Superseded** for deployment management by the `Gateway__*` environment variables below (the gateway runs one account per region, and infra sets them, so nothing has to be typed here); kept as seeded reference data. |
-| `EntraTenantId` | `""` | Azure AD tenant ID used by the Microsoft Graph SDK for bulk user sync. |
 | `EntraGroupSyncEnabled` | `"false"` | Set to `"true"` to enable automatic Entra group member sync. When `false`, group sync must be triggered manually from the admin UI. |
 | `ResetDayOfMonth` | `"1"` | Day of month the monthly quota reset acts on, `1`–`28` (no month is short of a 28th). The reset Function wakes daily at 00:01 UTC and runs on the first tick **on or after** this day that finds the month not yet reset — so a tick lost to an outage is picked up the next day instead of costing the month its reset, and a change here takes effect the next day with no redeploy. A value outside the range falls back to `1` with a warning rather than never resetting. Note this moves *FoundryGate's* allocation rows only — the gateway's own `token-quota` window is a UTC calendar month and always resets on the 1st, whatever this says. |
 
+Blank values (`""`) are deliberate placeholders. Nothing breaks while they are blank: everything the
+gateway is actually addressed by comes from the `Gateway__*` environment variables below, which infra
+sets automatically.
+
+### Retired keys
+
+Three keys were seeded by earlier versions and are **gone** as of
+[#164](https://github.com/kolatts/foundry-gate/issues/164) /
+[#123](https://github.com/kolatts/foundry-gate/issues/123). Nothing read them, and an "edit" was a
+silent no-op — a configuration editor that accepts a value the system never consults is worse than
+no row at all. The next `db seed-reference` after upgrading **deletes** them (the CLI reports the
+deletions in its `-N` count); `GET /config` no longer lists them and `PUT /config/{key}` answers
+`404`. No fork-authored key is ever deleted — the seeder only removes keys FoundryGate itself names.
+
+| Retired key | Read instead |
+|---|---|
+| `ApimGatewayUrl` | `Gateway__ApimGatewayUrl`, set on the container by infra from the APIM module's own output, so the address shown on `/me` can never drift from the gateway that was deployed |
+| `ApimProductId` | The per-tier APIM products (`Gateway__Tiers__*` / `quotaTiers` in `infra/main.bicep`; `GET /quota/tiers` lists them) — a subscription is issued against the product for the user's tier |
+| `EntraTenantId` | `AzureAd__TenantId`. Graph is called as the API's own identity, so the tenant is implied by the credential |
+
 <Aside type="caution">
-Blank values (`""`) are deliberate placeholders. The system will not function correctly until `ApimResourceId`, `ApimGatewayUrl` and `ApimProductId` are set to real values. Foundry deployment management reads the `Gateway__*` variables instead, which infra sets automatically.
+If your fork had edited one of these rows, its value is lost on the next seed. That is deliberate —
+nothing consumed it — but copy anything you want to keep before upgrading.
 </Aside>
 
 ---

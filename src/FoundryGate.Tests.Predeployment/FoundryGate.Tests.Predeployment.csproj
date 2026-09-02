@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="bunit" />
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="Imagile.Framework.EntityFrameworkCore.Testing" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />

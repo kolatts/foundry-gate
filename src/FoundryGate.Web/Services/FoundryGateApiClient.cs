@@ -22,7 +22,7 @@ namespace FoundryGate.Web.Services;
 /// token is attached automatically — every method here only needs to know its own
 /// relative route.
 /// </remarks>
-public sealed class FoundryGateApiClient(HttpClient httpClient) : IFoundryGateApiClient
+public sealed partial class FoundryGateApiClient(HttpClient httpClient) : IFoundryGateApiClient
 {
     // Users — spec §4.1
     public Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(PagedRequest paging, CancellationToken ct = default)

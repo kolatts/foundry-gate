@@ -1,7 +1,6 @@
 using System.Globalization;
 using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Constants;
-using FoundryGate.Domain.Exceptions;
 
 namespace FoundryGate.Api.Services.Config;
 
@@ -13,14 +12,8 @@ namespace FoundryGate.Api.Services.Config;
 /// tier table behind <see cref="GatewayTierMapper"/>.
 /// </summary>
 /// <remarks>
-/// Three outcomes:
+/// Two outcomes:
 /// <list type="bullet">
-/// <item><b>Read-only key</b> → <see cref="ConflictException"/> (409). Two seeded keys are no longer
-/// wired to anything (<see cref="SystemConfigurationKeys.ApimProductId"/>, superseded by the per-tier
-/// APIM products; <see cref="SystemConfigurationKeys.EntraTenantId"/>, unused since #123). They stay in
-/// the table because the seed data references them, but editing one would be a silent no-op — so the
-/// refusal names what to change instead. #164 removes the rows themselves, which is a data change
-/// rather than an API one.</item>
 /// <item><b>Known key, bad value</b> → <see cref="ArgumentException"/> (400) whose message states the
 /// rule.</item>
 /// <item><b>Known key, good value</b> → the <em>normalized</em> string to store (trimmed; booleans
@@ -29,41 +22,17 @@ namespace FoundryGate.Api.Services.Config;
 /// A key that is present in the table but not in <see cref="SystemConfigurationKeys.All"/> — a fork
 /// operator's own row, which the reference-data seeder deliberately preserves — has no rule and is
 /// accepted as free text (length is <c>UpdateSystemConfigRequest</c>'s <c>[StringLength]</c> job).
+/// <para>
+/// There is no read-only branch any more: the three keys that had one
+/// (<c>ApimProductId</c>, <c>EntraTenantId</c>, <c>ApimGatewayUrl</c>) are retired outright — unseeded
+/// and deleted from deployed databases by the reference-data sync (#164/#123) — so an attempt to edit
+/// one is an unknown key, which <c>PUT /config/{key}</c> already answers with <c>404</c>.
+/// </para>
 /// </remarks>
 public sealed class SystemConfigValidator(GatewayTierMapper tierMapper)
 {
     /// <summary>Highest day-of-month a monthly reset may be scheduled on: 28 is the last day every month has.</summary>
     public const int MaxResetDayOfMonth = 28;
-
-    /// <summary>
-    /// Throws when <paramref name="key"/> is one of the retired keys, with a message naming its
-    /// replacement. Called before any value validation so a read-only key answers <c>409</c>
-    /// regardless of what was posted.
-    /// </summary>
-    /// <exception cref="ConflictException">The key is retired and cannot be edited.</exception>
-    public static void EnsureEditable(string key)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
-
-        var replacement = key switch
-        {
-            SystemConfigurationKeys.ApimProductId =>
-                "quota tiers are APIM products now: a developer's subscription is issued against the product for "
-                + "their tier (`Gateway:Tiers` in the API configuration, `quotaTiers` in infra/main.bicep; "
-                + "`GET /quota/tiers` lists them), so this single product id is no longer read",
-            SystemConfigurationKeys.EntraTenantId =>
-                "Microsoft Graph access is configured by the `Entra` options section (`Entra:Enabled`, "
-                + "`Entra:GraphBaseUrl`, `Entra:ServicePrincipalObjectId`) over the host's `AzureAd:TenantId`, "
-                + "so this key is no longer read",
-            _ => null,
-        };
-
-        if (replacement is not null)
-        {
-            throw new ConflictException(
-                $"System configuration key '{key}' is read-only: {replacement}. The row is kept so re-seeding stays idempotent.");
-        }
-    }
 
     /// <summary>
     /// Validates <paramref name="value"/> against <paramref name="key"/>'s rule and returns the
@@ -82,7 +51,6 @@ public sealed class SystemConfigValidator(GatewayTierMapper tierMapper)
             SystemConfigurationKeys.DefaultMonthlyTokenQuota => NormalizeDefaultQuota(trimmed),
             SystemConfigurationKeys.ResetDayOfMonth => NormalizeResetDayOfMonth(trimmed),
             SystemConfigurationKeys.EntraGroupSyncEnabled => NormalizeBoolean(key, trimmed),
-            SystemConfigurationKeys.ApimGatewayUrl => NormalizeHttpsUrl(key, trimmed),
             SystemConfigurationKeys.ApimResourceId or SystemConfigurationKeys.FoundryResourceId =>
                 NormalizeArmResourceId(key, trimmed),
             _ => trimmed,
@@ -142,24 +110,6 @@ public sealed class SystemConfigValidator(GatewayTierMapper tierMapper)
         }
 
         return parsed ? "true" : "false";
-    }
-
-    /// <summary>Empty (feature not addressed yet) or an absolute https origin — the gateway is never plain http.</summary>
-    private static string NormalizeHttpsUrl(string key, string value)
-    {
-        if (value.Length == 0)
-        {
-            return value;
-        }
-
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
-        {
-            throw new ArgumentException(
-                $"System configuration key '{key}' must be an absolute https URL (e.g. https://ai.contoso.com) or empty, not '{value}'.",
-                nameof(value));
-        }
-
-        return uri.ToString().TrimEnd('/');
     }
 
     /// <summary>

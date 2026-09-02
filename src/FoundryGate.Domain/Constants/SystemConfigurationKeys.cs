@@ -1,7 +1,7 @@
 namespace FoundryGate.Domain.Constants;
 
 /// <summary>
-/// The eight <c>SystemConfiguration</c> keys seeded on first deploy (plans/02-data-layer.md
+/// The <c>SystemConfiguration</c> keys seeded on first deploy (plans/02-data-layer.md
 /// #23). Shared between the Data-layer seeder, the Api's config endpoints, and any
 /// service that reads a configuration value by key, so the key string is never
 /// duplicated as a magic literal.
@@ -14,30 +14,8 @@ public static class SystemConfigurationKeys
     /// <summary>ARM resource ID of the APIM instance.</summary>
     public const string ApimResourceId = nameof(ApimResourceId);
 
-    /// <summary>
-    /// <b>Legacy (superseded by configuration).</b> The gateway base URL shown to developers on
-    /// <c>/me</c> now comes from <c>Gateway:ApimGatewayUrl</c>, which infra sets on the container from
-    /// the APIM module's own output (<c>Gateway__ApimGatewayUrl</c>) — so the address can never drift
-    /// from the gateway that was actually deployed. Nothing reads this row; it is kept because the
-    /// reference-data seed references it, and the admin config editor treats it as read-only (#161).
-    /// Do not remove without a migration.
-    /// </summary>
-    public const string ApimGatewayUrl = nameof(ApimGatewayUrl);
-
-    /// <summary>
-    /// <b>Legacy (single-product model).</b> APIM product name covering the Foundry routes (spec
-    /// &#167;5.1), from before quota tiers became per-tier APIM products. Superseded by
-    /// <see cref="GatewayTiers"/>: a developer's subscription is issued against the product for
-    /// their tier (<see cref="GatewayTiers.Default"/> for new users), not against this one value.
-    /// Kept because the seeded reference data references it; do not remove without a migration.
-    /// </summary>
-    public const string ApimProductId = nameof(ApimProductId);
-
     /// <summary>ARM resource ID of the Azure AI Foundry account.</summary>
     public const string FoundryResourceId = nameof(FoundryResourceId);
-
-    /// <summary>Azure AD tenant ID used for Microsoft Graph sync (spec &#167;7).</summary>
-    public const string EntraTenantId = nameof(EntraTenantId);
 
     /// <summary>"true" | "false" — whether Entra group sync (spec &#167;7.3) is active.</summary>
     public const string EntraGroupSyncEnabled = nameof(EntraGroupSyncEnabled);
@@ -50,11 +28,32 @@ public static class SystemConfigurationKeys
     [
         DefaultMonthlyTokenQuota,
         ApimResourceId,
-        ApimGatewayUrl,
-        ApimProductId,
         FoundryResourceId,
-        EntraTenantId,
         EntraGroupSyncEnabled,
         ResetDayOfMonth,
+    ];
+
+    /// <summary>
+    /// Keys that were once seeded and are now <b>retired</b> (#164/#123): nothing reads them, nothing
+    /// seeds them, and an existing row is deleted by the next reference-data seed. They stay named
+    /// here — not deleted outright — because the seeder's delete filter only touches keys it knows
+    /// about, so this list is what tells a deployed fork's database that these rows may go. A fork
+    /// operator's own rows are still never deleted.
+    /// <list type="bullet">
+    /// <item><c>ApimGatewayUrl</c> — the gateway origin shown on <c>/me</c> comes from
+    /// <c>Gateway:ApimGatewayUrl</c>, which infra sets on the container from the APIM module's own
+    /// output, so it can never drift from the gateway that was deployed (#156).</item>
+    /// <item><c>ApimProductId</c> — quota tiers are per-tier APIM products now
+    /// (<see cref="GatewayTiers"/>): a subscription is issued against the product for the user's
+    /// tier, not one fork-wide id.</item>
+    /// <item><c>EntraTenantId</c> — Graph is called as the API's own identity, so the tenant is
+    /// implied by the credential; the only tenant setting read is <c>AzureAd:TenantId</c> (#123).</item>
+    /// </list>
+    /// </summary>
+    public static readonly IReadOnlyList<string> Retired =
+    [
+        "ApimGatewayUrl",
+        "ApimProductId",
+        "EntraTenantId",
     ];
 }

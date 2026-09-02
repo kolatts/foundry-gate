@@ -18,7 +18,9 @@ namespace FoundryGate.Api.Services.Entra;
 /// <b>Graph application roles the API identity needs</b>: <c>Application.Read.All</c> (resolve the
 /// service principal and read its <c>appRoleAssignedTo</c>), <c>User.Read.All</c> (user fields),
 /// <c>GroupMember.ReadBasic.All</c> (group member ids — the least-privileged role for
-/// <c>/members</c> and <c>/transitiveMembers</c>; only <c>id</c> is selected). Least privilege per the
+/// <c>/members</c> and <c>/transitiveMembers</c> per the Graph reference, for group sync <em>and</em>
+/// for expanding group-principal app-role assignments (#121); only <c>id</c> is selected, so
+/// <c>GroupMember.Read.All</c> stays unnecessary). Least privilege per the
 /// Graph reference for each call; <c>Directory.Read.All</c> is deliberately <em>not</em> required —
 /// which is why user details are fetched with <c>GET /users?$filter=id in (...)</c> in chunks of
 /// <see cref="InFilterMaxValues"/> rather than <c>directoryObjects/getByIds</c> (that action needs
@@ -90,7 +92,8 @@ public sealed class GraphEntraDirectoryClient(
         var servicePrincipalObjectId = await GetServicePrincipalObjectIdAsync(cancellationToken);
 
         // Pass 1: principals. appRoleAssignedTo carries no user fields (only principalId /
-        // principalType / principalDisplayName), so user ids are collected here and hydrated in pass 2.
+        // principalType / principalDisplayName), so ids are collected here — direct user assignees now,
+        // group members in pass 2 — and the whole set is hydrated in pass 3.
         var userIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var groups = new List<EntraGroupAssignment>();
         var seenGroupIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -145,7 +148,45 @@ public sealed class GraphEntraDirectoryClient(
                 servicePrincipalObjectId);
         }
 
-        // Pass 2: hydrate in chunks of ≤15 ids per request (the `in` operator's default cap).
+        // Pass 2: expand every group assignee to its user members (#121). Entra evaluates a security
+        // group's app-role assignment transitively, so /transitiveMembers is what matches the access
+        // the tenant actually granted. Ids merge into the same set as the direct assignees, so a person
+        // assigned both ways is hydrated once.
+        var unexpandedGroups = new List<EntraGroupAssignment>();
+        foreach (var group in groups)
+        {
+            try
+            {
+                await foreach (var memberId in ListGroupMemberIdsAsync(group.GroupObjectId, transitive: true, cancellationToken))
+                {
+                    _ = userIds.Add(memberId);
+                }
+            }
+            catch (Exception error) when (IsRecoverableGroupReadFault(error, cancellationToken))
+            {
+                // A group this run could not read leaves a partial view of the population, which is
+                // exactly the case departure detection must not act on — so it is reported rather than
+                // swallowed, and EntraUserSyncService suspends deactivation for the run. Whatever the
+                // other groups yielded still counts: adds and updates stay correct.
+                unexpandedGroups.Add(group);
+                logger.LogWarning(
+                    error,
+                    "Could not expand app-role assignment group {GroupObjectId} ('{GroupDisplayName}') to its members; departure detection will be suspended for this run.",
+                    group.GroupObjectId,
+                    group.DisplayName);
+            }
+        }
+
+        if (groups.Count > 0)
+        {
+            logger.LogInformation(
+                "Expanded {ExpandedCount} of {GroupCount} group app-role assignment(s) on service principal {ServicePrincipalObjectId} to their members.",
+                groups.Count - unexpandedGroups.Count,
+                groups.Count,
+                servicePrincipalObjectId);
+        }
+
+        // Pass 3: hydrate in chunks of ≤15 ids per request (the `in` operator's default cap).
         var users = new List<EntraUser>(userIds.Count);
         foreach (var chunk in userIds.Chunk(InFilterMaxValues))
         {
@@ -161,7 +202,7 @@ public sealed class GraphEntraDirectoryClient(
             users.AddRange((response?.Value ?? []).Select(Map));
         }
 
-        return new EntraAssignedUsers(users, groups);
+        return new EntraAssignedUsers(users, unexpandedGroups);
     }
 
     /// <inheritdoc />
@@ -213,6 +254,30 @@ public sealed class GraphEntraDirectoryClient(
                 : await group.Members.WithUrl(page.OdataNextLink).GetAsync(cancellationToken: cancellationToken);
         }
     }
+
+    /// <summary>
+    /// Whether a failure expanding one group assignee should degrade that <em>group</em> to
+    /// "unexpanded" rather than fail the whole <see cref="ListAssignedUsersAsync"/> run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="ODataError"/> is Graph's structured error body — a refused permission, a group that
+    /// no longer exists. But a fault that never reaches an API error body looks nothing like one:
+    /// once Kiota's retry handler gives up on DNS, a reset connection or a timeout, the caller sees
+    /// <see cref="HttpRequestException"/> or a <see cref="TaskCanceledException"/> whose token was
+    /// never cancelled. Letting those propagate would turn "Graph was briefly unreachable while
+    /// reading one group" into a <c>500</c> for the entire <c>POST /users/sync</c> — the opposite of
+    /// what per-group degradation exists for, and worse than the suspension it replaces.
+    /// </para>
+    /// <para>
+    /// The caller's own cancellation is never swallowed: with
+    /// <paramref name="cancellationToken"/> signalled, every exception propagates, because a client
+    /// that walked away is not a directory fault.
+    /// </para>
+    /// </remarks>
+    private static bool IsRecoverableGroupReadFault(Exception exception, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested
+        && exception is ODataError or HttpRequestException or TaskCanceledException;
 
     /// <summary>
     /// The service principal whose assignments define FoundryGate's user population:

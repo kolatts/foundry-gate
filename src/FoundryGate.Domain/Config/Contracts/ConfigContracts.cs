@@ -31,7 +31,7 @@ public record UpdateSystemConfigRequest
     /// </summary>
     /// <remarks>
     /// <c>AllowEmptyStrings</c> deliberately: <b>empty is a legitimate value for several keys</b> —
-    /// clearing <c>ApimGatewayUrl</c>, <c>ApimResourceId</c> or <c>FoundryResourceId</c> back to
+    /// clearing <c>ApimResourceId</c> or <c>FoundryResourceId</c> back to
     /// "not addressed yet" is exactly how a fork operator unwires a resource. The default
     /// <c>[Required]</c> (which rejects <c>""</c>) would have MVC answer 400 before the action ran,
     /// so the per-key rule could never be consulted and the documented "or empty" capability was
@@ -51,8 +51,9 @@ public record UpdateSystemConfigRequest
 /// "Configure your CLI" panel on <c>/me</c> (docs-site's getting-started/cli-setup.mdx).
 /// </summary>
 /// <param name="GatewayBaseUrl">
-/// The APIM gateway origin, e.g. <c>https://ai.yourcompany.com</c>
-/// (<see cref="SystemConfigurationKeys.ApimGatewayUrl"/>).
+/// The APIM gateway origin, e.g. <c>https://ai.yourcompany.com</c>. Comes from
+/// <c>Gateway:ApimGatewayUrl</c>, which infra sets from the APIM module's own output — never from a
+/// configuration row, so it cannot drift from the gateway that was deployed (#156).
 /// </param>
 /// <param name="AnthropicBasePath">Path segment for the Anthropic Messages front door, e.g. <c>/anthropic</c>.</param>
 /// <param name="OpenAiBasePath">Path segment for the OpenAI Responses front door, e.g. <c>/openai/v1</c>.</param>

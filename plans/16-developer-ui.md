@@ -34,13 +34,17 @@ Files expected to be created or modified:
 - `src/FoundryGate.Web/Pages/Me/Request.razor.cs`
 
 ## Verification
-- [ ] `dotnet build` passes
-- [ ] Quota gauge renders at correct colour thresholds (0%, 80%, 95%, 100%)
-- [ ] "Unlimited" chip shows when allocation has no token cap
-- [ ] Rotating a key opens confirmation dialog, then shows the new key revealed once
-- [ ] CLI setup section shows the correct APIM gateway URL from `SystemConfiguration`
-- [ ] CLI setup section lists available model deployment names
-- [ ] Copy-paste snippets render the user's actual key (revealed) and correct gateway URL
-- [ ] Request form disables submit while in-flight and re-enables on response
-- [ ] Duplicate pending request attempt shows MudSnackbar warning without navigating away
-- [ ] Successful submission navigates back to `/me`
+- [x] `dotnet build` passes
+- [x] Quota gauge renders at correct colour thresholds (0%, 80%, 95%, 100%)
+- [x] "Unlimited" chip shows when allocation has no token cap
+- [x] Rotating a key opens confirmation dialog, then shows the new key revealed once
+- [x] CLI setup section shows the correct APIM gateway URL from `SystemConfiguration`
+- [x] CLI setup section lists the model deployments behind the gateway — and, above them, the
+      **aliases** that go in `model`. The alias map is the per-tier allowlist
+      (`infra/main.bicep` `productModelAliases`), so pinning a deployment name is
+      `403 model_not_permitted`; `getting-started/cli-setup.mdx` was corrected to match, and
+      `CliSetupDocFidelityTests` reads that doc so the two cannot drift again
+- [x] Copy-paste snippets render the user's actual key (revealed) and correct gateway URL
+- [x] Request form disables submit while in-flight and re-enables on response
+- [x] Duplicate pending request attempt shows MudSnackbar warning without navigating away
+- [x] Successful submission navigates back to `/me`

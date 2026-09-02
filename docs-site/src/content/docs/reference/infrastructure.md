@@ -206,7 +206,7 @@ reference for each call the API makes:
 |---|---|
 | `Application.Read.All` | `GET /servicePrincipals(appId='{clientId}')` and `GET /servicePrincipals/{id}/appRoleAssignedTo` — who is assigned to FoundryGate |
 | `User.Read.All` | `GET /users?$filter=id in (...)&$select=id,displayName,mail,userPrincipalName,employeeId` and `GET /users/{id}` |
-| `GroupMember.ReadBasic.All` | `GET /groups/{id}/members` / `transitiveMembers` with `$select=id` (group sync, #41) |
+| `GroupMember.ReadBasic.All` | `GET /groups/{id}/members` / `transitiveMembers` with `$select=id` — group sync (#41) and expanding group-principal app-role assignments to their members during user sync (#121). Only `id` is selected, so this stays the least-privileged role the Graph reference lists for both calls; `GroupMember.Read.All` is not needed |
 
 Verification runbook and a PowerShell grant snippet:
 [#120](https://github.com/kolatts/foundry-gate/issues/120). Locally the Azure CLI login is

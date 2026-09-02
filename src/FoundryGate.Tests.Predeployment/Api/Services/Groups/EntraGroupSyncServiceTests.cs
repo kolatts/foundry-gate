@@ -9,6 +9,8 @@ using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
+using FoundryGate.Domain.Groups;
+using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Quota;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
@@ -33,6 +35,10 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
     private readonly MutableTimeProvider _clock = new(Now);
     private readonly RecordingGatewayTierSync _tierSync = new();
     private readonly FakeEntraDirectoryClient _directory = new();
+
+    /// <summary>Every log line the service writes, so the commit-point tests can prove the Error is there.</summary>
+    private readonly CapturingLoggerProvider _logs = new();
+
 
     [Fact]
     public async Task SyncAsync_adds_the_directorys_members_as_system_memberships_and_reresolves_them()
@@ -241,27 +247,243 @@ public class EntraGroupSyncServiceTests : InMemoryDatabaseTest
         Assert.Equal(2, await Context.AuditLogs.AsNoTracking().CountAsync(a => a.Action == AuditActions.GroupEntraSynced));
         Assert.False(await Context.AuditLogs.AsNoTracking()
             .AnyAsync(a => a.Action == AuditActions.GroupEntraSynced && a.TargetId == native.GroupId.ToString()));
+        Assert.All(results, result => Assert.True(result.Succeeded));
+        Assert.All(results, result => Assert.Null(result.Error));
+    }
+
+    [Fact]
+    public async Task SyncAllAsync_reads_the_user_table_once_for_the_run_not_once_per_group()
+    {
+        // #149: the whole-table snapshot is the expensive part of a per-group reconciliation, and
+        // nothing in this path inserts a user, so one read per run is both cheaper and correct.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var member = await SeedUserAsync("Member");
+        var linkedA = await SeedLinkedGroupAsync("Linked A", quota: TestGatewayTiers.PowerCap);
+        var linkedB = await SeedLinkedGroupAsync("Linked B", quota: null);
+        var linkedC = await SeedLinkedGroupAsync("Linked C", quota: null);
+        _directory.GroupMembers[linkedA.EntraGroupId] = [member.EntraObjectId];
+        _directory.GroupMembers[linkedB.EntraGroupId] = [];
+        _directory.GroupMembers[linkedC.EntraGroupId] = [];
+
+        var before = CountWholeTableReads("Users");
+        var results = await CreateService(admin).SyncAllAsync(CancellationToken.None);
+
+        Assert.Equal(3, results.Count);
+        Assert.Equal(1, CountWholeTableReads("Users") - before);
+    }
+
+    [Fact]
+    public async Task SyncAsync_for_one_group_still_reads_its_own_user_snapshot()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var group = await SeedLinkedGroupAsync("Linked", quota: null);
+        _directory.GroupMembers[group.EntraGroupId] = [];
+
+        var before = CountWholeTableReads("Users");
+        _ = await CreateService(admin).SyncAsync(group.GroupId, CancellationToken.None);
+
+        Assert.Equal(1, CountWholeTableReads("Users") - before);
+    }
+
+    [Fact]
+    public async Task SyncAllAsync_records_a_failing_group_and_still_reconciles_the_rest()
+    {
+        // A Graph fault on the middle group must not deny the caller the summaries for the others,
+        // and must not leave its half-applied membership changes to ride along on the next group's
+        // save (#149). Group ids order the run, so "Broken" really is between the two good ones.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var first = await SeedUserAsync("First");
+        var last = await SeedUserAsync("Last");
+        var good = await SeedLinkedGroupAsync("Good", quota: null);
+        var broken = await SeedLinkedGroupAsync("Broken", quota: null);
+        var alsoGood = await SeedLinkedGroupAsync("Also good", quota: null);
+        var strandedMember = await SeedUserAsync("Stranded");
+        await SeedMembershipAsync(broken, strandedMember);
+        _directory.GroupMembers[good.EntraGroupId] = [first.EntraObjectId];
+        _directory.GroupMembers[alsoGood.EntraGroupId] = [last.EntraObjectId];
+        _directory.GroupMemberFailures[broken.EntraGroupId] = "Graph said Authorization_RequestDenied.";
+
+        var results = await CreateService(admin).SyncAllAsync(CancellationToken.None);
+
+        Assert.Equal([good.GroupId, broken.GroupId, alsoGood.GroupId], results.Select(r => r.GroupId));
+        Assert.Equal(new GroupSyncResult(good.GroupId, AddedCount: 1, RemovedCount: 0, SkippedUnknownUserCount: 0), results[0]);
+        Assert.Equal(
+            new GroupSyncResult(broken.GroupId, 0, 0, 0, Succeeded: false, Error: "Graph said Authorization_RequestDenied.", ErrorType: GroupSyncErrorType.GraphRead),
+            results[1]);
+        Assert.Equal(new GroupSyncResult(alsoGood.GroupId, AddedCount: 1, RemovedCount: 0, SkippedUnknownUserCount: 0), results[2]);
+
+        await using var verification = CreateVerificationContext();
+        // The two good groups committed; the failing one is untouched — its existing membership is
+        // still there and no audit row claims it was reconciled.
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == good.GroupId && m.UserId == first.UserId));
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == alsoGood.GroupId && m.UserId == last.UserId));
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == broken.GroupId && m.UserId == strandedMember.UserId));
+        Assert.Equal(2, await verification.AuditLogs.CountAsync(a => a.Action == AuditActions.GroupEntraSynced));
+        Assert.False(await verification.AuditLogs.AnyAsync(a => a.Action == AuditActions.GroupEntraSynced && a.TargetId == broken.GroupId.ToString()));
+    }
+
+    [Fact]
+    public async Task SyncAllAsync_does_not_let_a_failing_group_leak_its_pending_changes_into_the_next_one()
+    {
+        // The failure lands after the memberships are staged (the quota re-resolution throws), which is
+        // the only way pending rows can exist when the unit of work is abandoned. They must be
+        // discarded, not committed by whichever group saves next.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var joining = await SeedUserAsync("Joining", u => u.ApimSubscriptionId = "sub-joining"); // a tier move only reaches the gateway for a user who has a subscription
+        var later = await SeedUserAsync("Later");
+        var broken = await SeedLinkedGroupAsync("Broken", quota: TestGatewayTiers.PowerCap);
+        var good = await SeedLinkedGroupAsync("Good", quota: null);
+        _directory.GroupMembers[broken.EntraGroupId] = [joining.EntraObjectId];
+        _directory.GroupMembers[good.EntraGroupId] = [later.EntraObjectId];
+        _tierSync.ThrowFor = joining.UserId;
+
+        var results = await CreateService(admin).SyncAllAsync(CancellationToken.None);
+
+        Assert.False(results[0].Succeeded);
+        Assert.True(results[1].Succeeded);
+
+        await using var verification = CreateVerificationContext();
+        Assert.False(await verification.GroupMembers.AnyAsync(m => m.GroupId == broken.GroupId));
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == good.GroupId && m.UserId == later.UserId));
+        Assert.Equal(1, await verification.AuditLogs.CountAsync(a => a.Action == AuditActions.GroupEntraSynced));
+    }
+
+    [Fact]
+    public async Task A_write_that_fails_after_the_gateway_moved_a_tier_is_logged_at_Error_and_the_save_is_retried()
+    {
+        // CONVENTIONS.md's commit point: past `tierSync.SyncAsync` the gateway has accepted the move,
+        // so the pending rows are the only record of it. The retry therefore runs with them still
+        // tracked — discarding first would guarantee the divergence this is trying to close.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var joining = await SeedUserAsync("Joining", u => u.ApimSubscriptionId = "sub-joining");
+        var group = await SeedLinkedGroupAsync("Power", quota: TestGatewayTiers.PowerCap);
+        _directory.GroupMembers[group.EntraGroupId] = [joining.EntraObjectId];
+
+        var results = await CreateService(admin, failTheAuditWrite: true).SyncAllAsync(CancellationToken.None);
+
+        // The retry succeeded, so this is not a failure at all — just a loud one in the log.
+        var result = Assert.Single(results);
+        Assert.True(result.Succeeded);
+        Assert.Equal(GroupSyncErrorType.None, result.ErrorType);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("reconcile manually", StringComparison.Ordinal));
+        Assert.Contains(_logs.Entries, entry => entry.Contains("the retried database write succeeded", StringComparison.Ordinal));
+
+        // What the gateway was told is now in the database: the membership and the allocation landed on
+        // the retry. The audit row is the casualty (its writer is what failed), which is exactly why the
+        // Error log has to name the group.
+        await using var verification = CreateVerificationContext();
+        Assert.True(await verification.GroupMembers.AnyAsync(m => m.GroupId == group.GroupId && m.UserId == joining.UserId));
+        Assert.Equal(TestGatewayTiers.PowerCap, (await verification.QuotaAllocations.SingleAsync(a => a.UserId == joining.UserId)).AllocatedTokens);
+        Assert.Equal((joining.UserId, GatewayTiers.Power), Assert.Single(_tierSync.Calls));
+    }
+
+    [Fact]
+    public async Task A_write_that_fails_twice_after_the_gateway_moved_a_tier_is_marked_PostCommit_not_an_ordinary_failure()
+    {
+        // The unrecoverable half: the gateway moved and the database will not record it, even on the
+        // retry. A UI must be able to say "the gateway changed and the database did not" rather than
+        // "this group failed, try again", so the marker is a distinct error category — not just a
+        // string in the same `Error` field a Graph fault uses.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var joining = await SeedUserAsync("Joining", u => u.ApimSubscriptionId = "sub-joining");
+        var group = await SeedLinkedGroupAsync("Power", quota: TestGatewayTiers.PowerCap);
+        _directory.GroupMembers[group.EntraGroupId] = [joining.EntraObjectId];
+        var service = CreateService(admin);
+
+        // Every attempt to write the membership fails, including the retry on CancellationToken.None.
+        CommandInterceptor.FailWhen = sql =>
+            sql.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("GroupMembers", StringComparison.Ordinal);
+
+        var results = await service.SyncAllAsync(CancellationToken.None);
+
+        var result = Assert.Single(results);
+        Assert.False(result.Succeeded);
+        Assert.Equal(GroupSyncErrorType.PostCommit, result.ErrorType);
+        Assert.Contains("the gateway accepted a tier move", result.Error!, StringComparison.Ordinal);
+
+        // The gateway really was told, twice-failed writes notwithstanding — which is the whole point.
+        Assert.Equal((joining.UserId, GatewayTiers.Power), Assert.Single(_tierSync.Calls));
+        Assert.Contains(_logs.Entries, entry => entry.Contains("reconcile manually", StringComparison.Ordinal));
+        Assert.Contains(
+            _logs.Entries,
+            entry => entry.Contains("accepted but not recorded in the database", StringComparison.Ordinal));
+
+        CommandInterceptor.FailWhen = _ => false;
+        await using var verification = CreateVerificationContext();
+        Assert.False(await verification.GroupMembers.AnyAsync(m => m.GroupId == group.GroupId));
+    }
+
+    [Fact]
+    public async Task A_Graph_failure_is_marked_GraphRead_so_it_is_never_confused_with_a_post_commit_one()
+    {
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var group = await SeedLinkedGroupAsync("Broken", quota: null);
+        _directory.GroupMemberFailures[group.EntraGroupId] = "Graph said Authorization_RequestDenied.";
+
+        var results = await CreateService(admin).SyncAllAsync(CancellationToken.None);
+
+        var result = Assert.Single(results);
+        Assert.False(result.Succeeded);
+        Assert.Equal(GroupSyncErrorType.GraphRead, result.ErrorType);
+        Assert.Empty(_tierSync.Calls); // nothing outside the database was touched
+        Assert.DoesNotContain(_logs.Entries, entry => entry.Contains("reconcile manually", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SyncAsync_for_one_group_still_fails_loudly_when_the_write_fails_after_the_gateway_moved()
+    {
+        // A single-group sync has no summary array to hide a divergence in, so it stays a thrown
+        // failure — the FoundryDeploymentService.AuditAfterCommitAsync precedent.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var joining = await SeedUserAsync("Joining", u => u.ApimSubscriptionId = "sub-joining");
+        var group = await SeedLinkedGroupAsync("Power", quota: TestGatewayTiers.PowerCap);
+        _directory.GroupMembers[group.EntraGroupId] = [joining.EntraObjectId];
+        var service = CreateService(admin);
+        CommandInterceptor.FailWhen = sql =>
+            sql.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("GroupMembers", StringComparison.Ordinal);
+
+        var exception = await Assert.ThrowsAnyAsync<Exception>(() => service.SyncAsync(group.GroupId, CancellationToken.None));
+
+        Assert.Contains("the gateway accepted a tier move", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(_logs.Entries, entry => entry.Contains("reconcile manually", StringComparison.Ordinal));
+        CommandInterceptor.FailWhen = _ => false;
     }
 
     // -- Helpers --
 
-    private EntraGroupSyncService CreateService(User actor, IEntraDirectoryClient? directory = null) =>
-        CreateServiceForOid(actor.EntraObjectId, directory);
+    private EntraGroupSyncService CreateService(User actor, IEntraDirectoryClient? directory = null, bool failTheAuditWrite = false) =>
+        CreateServiceForOid(actor.EntraObjectId, directory, failTheAuditWrite);
 
-    private EntraGroupSyncService CreateServiceForOid(string oid, IEntraDirectoryClient? directory = null)
+    private EntraGroupSyncService CreateServiceForOid(string oid, IEntraDirectoryClient? directory = null, bool failTheAuditWrite = false)
     {
         var identity = new ClaimsIdentity([new Claim(ClaimConstants.Oid, oid)], "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
+
+        IAuditService audit = new AuditService(Context, new AuditWriter(Context, _clock), accessor);
+        if (failTheAuditWrite)
+        {
+            audit = new FailingAuditService(audit) { FailOn = action => action == AuditActions.GroupEntraSynced };
+        }
 
         return new EntraGroupSyncService(
             Context,
             directory ?? _directory,
             new QuotaResolutionService(Context, TestGatewayTiers.Mapper(), _tierSync, NullLogger<QuotaResolutionService>.Instance),
             accessor,
-            new AuditService(Context, new AuditWriter(Context, _clock), accessor),
+            audit,
             _clock,
-            NullLogger<EntraGroupSyncService>.Instance);
+            _logs.CreateLogger<EntraGroupSyncService>());
     }
 
     private async Task<User> SeedUserAsync(string displayName, Action<User>? configure = null)

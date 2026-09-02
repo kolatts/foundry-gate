@@ -1,0 +1,38 @@
+@inject ISnackbar Snackbar
+@inject IJSRuntime JS
+
+@* A copy-to-clipboard code block. Kept separate from the CLI panel so every snippet on /me
+   behaves identically, and so the copy affordance is testable on its own. *@
+
+<div class="d-flex align-center justify-space-between mt-3">
+    <MudText Typo="Typo.caption" Class="fg-label">@Label</MudText>
+    <MudIconButton Icon="@Icons.Material.Filled.ContentCopy"
+                   Size="Size.Small"
+                   aria-label="@($"Copy {Label}")"
+                   OnClick="CopyAsync"
+                   data-testid="snippet-copy" />
+</div>
+<pre class="fg-mono-raw fg-snippet" data-testid="snippet-body">@Code</pre>
+
+@code {
+    /// <summary>Short caption above the block, e.g. "Shell profile".</summary>
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = string.Empty;
+
+    /// <summary>The snippet text, rendered verbatim.</summary>
+    [Parameter, EditorRequired]
+    public string Code { get; set; } = string.Empty;
+
+    private async Task CopyAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", Code);
+            Snackbar.Add("Copied to your clipboard.", Severity.Success);
+        }
+        catch (JSException)
+        {
+            Snackbar.Add("Your browser blocked clipboard access — select the text and copy it manually.", Severity.Warning);
+        }
+    }
+}
