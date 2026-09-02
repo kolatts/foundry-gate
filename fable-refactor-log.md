@@ -415,6 +415,30 @@ The predicate is a date bound rather than a substring match on the details JSON 
 same `TimeProvider`, `OccurredDate` is indexed, and matching `"periodYear":2026` as text would break
 the day the serializer's formatting changed); the details still carry the period for human readers.
 
+### D-019: Production keeps one Environment approval per stage
+**Date:** 2026-09-02 (#141)
+**Decision:** A full-stack production `deploy-all.yml` run asks for **five** approvals — infra,
+database prepare, database deploy, the three app tiers together, postdeployment tests — and that
+stays. What changes is legibility: an ungated `plan` job at the head of the chain prints the
+sequence and what each approval buys into the run summary before the first gate, and
+`reference/ci-cd` documents the same table.
+**Why not one gate:** #141's Option A was a single `approve-production` job followed by the real
+work against an unprotected `production-deploy` Environment carrying the same variables and its
+own federated credential. That does not collapse the gate, it *removes* it — any job in any
+workflow could then target `production-deploy` and mint a production-Owner token with no reviewer
+in the path. The variant that keeps the credential in the approved job and hands it downstream is
+worse: an Azure access token passed between jobs is a bearer credential living in a job output.
+**Why OIDC gives no third option:** the token is minted per job and the Environment name is baked
+into its `subject` (`repo:kolatts/foundry-gate:environment:production`). A job that does not
+declare `environment: production` cannot mint a token that federates to production — so "approve
+once, then run the deploys on plain runners with the identity from an output" is not a thing that
+can be built, only a thing that can be faked by leaking a token.
+**Why per-stage is the right shape anyway:** each stage is independently re-runnable, and stage 3
+(dacpac + seed + the SQL firewall window) is the irreversible one. Having a human read the infra
+result before approving the schema migration is the checkpoint that makes a separate
+`dev-then-production` chain unnecessary. Revisit if the approval count grows without the number of
+genuinely distinct checkpoints growing with it.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the

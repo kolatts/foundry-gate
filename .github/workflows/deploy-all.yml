@@ -6,8 +6,11 @@ name: Deploy All
 # `src/FoundryGate.Domain/**` or `Directory.Packages.props` cannot start three workflows that
 # then cancel each other out of the shared per-environment concurrency group.
 #
-#   infra ─► prepare-database ─► database ─► api ─┬─► functions ─┬─► postdeployment tests ─► summary
-#                                                 └─► ui ────────┘
+#   plan ─► infra ─► prepare-database ─► database ─► api ─┬─► functions ─┬─► tests ─► summary
+#                                                         └─► ui ────────┘
+#
+# `plan` is ungated and touches nothing — it prints the chain and, for production, the five
+# approvals it will ask for, so the reviewer sees the sequence before the first gate (#141).
 #
 # `functions` and `ui` wait for `api` rather than fanning out beside it: on a day-0 (bootstrap)
 # run the api stage re-runs the whole subscription deployment to swap the placeholder image, and
@@ -18,8 +21,12 @@ name: Deploy All
 #   push to main (deployable paths) -> the whole chain against dev
 #   workflow_dispatch               -> the whole chain against the chosen environment
 #
-# A production run stops at the `production` reviewer gate — once per stage (GitHub approves
-# pending jobs, not whole runs; see docs reference/ci-cd and #141).
+# A production run stops at the `production` reviewer gate once per stage — five approvals,
+# deliberately (GitHub approves pending jobs, not whole runs). Collapsing them would mean
+# running the real work against an ungated Environment carrying the same credential, i.e.
+# putting the production deploy identity behind no gate at all. Decision D-019 in
+# fable-refactor-log.md; the sequence is documented in docs reference/ci-cd and printed by the
+# `plan` job below.
 # Docs are not part of this chain: GitHub Pages deploys from docs-deploy.yml on push to main
 # and has no Azure dependency.
 
@@ -75,8 +82,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Ungated, no Azure access, no environment — its whole job is to print the approval sequence
+  # into the run summary BEFORE the first gate, so a production reviewer knows how many
+  # approvals are coming and what each one buys (#141 / D-019). Everything else needs it, so
+  # the summary is always the first thing in the run.
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Describe the deploy and its approvals
+        env:
+          TARGET_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
+          CREATE_MODEL_DEPLOYMENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.create-model-deployments || false }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          {
+            echo "# Deploy All — ${TARGET_ENVIRONMENT}"
+            echo ""
+            echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
+            echo ""
+            echo "\`\`\`text"
+            echo "infra -> prepare-database -> database -> api -+-> functions -+-> tests -> summary"
+            echo "                                              \`-> ui --------'"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${TARGET_ENVIRONMENT}" != "production" ]; then
+            echo "The \`${TARGET_ENVIRONMENT}\` Environment has no required reviewers — this run proceeds unattended." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # GitHub approves PENDING JOBS, not runs, so a production run stops five times. This
+          # is the recorded decision (#141 / fable-refactor-log.md D-019), not an oversight:
+          # collapsing it would mean putting the deploy identity behind an ungated Environment.
+          {
+            echo "## Production: five approvals, in this order"
+            echo ""
+            echo "| # | Waiting job(s) | Approving means |"
+            echo "|---|---|---|"
+            echo "| 1 | \`Infra\` | apply the Bicep change (the what-if preview runs *inside* this job) |"
+            echo "| 2 | \`Database\` (prepare) | build the dacpac + read deployment outputs — no writes |"
+            echo "| 3 | \`Database\` (deploy) | **the irreversible one**: dacpac deploy, reference seed, SQL firewall window |"
+            echo "| 4 | \`API\` + \`Functions\` + \`UI\` | roll the three app tiers (three jobs, one visit — they go pending together) |"
+            echo "| 5 | \`Postdeployment tests\` | read-only smoke tests |"
+            echo ""
+            echo "Each stage is independently re-runnable, which is why there is no separate"
+            echo "dev-then-production chain. See docs reference/ci-cd 'Production approvals'."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   infra:
     name: Infra
+    needs: plan
     uses: ./.github/workflows/_deploy-infra.yml
     permissions:
       id-token: write
@@ -158,7 +215,7 @@ jobs:
 
   summary:
     name: Summary
-    needs: [infra, prepare-database, database, api, functions, ui, postdeployment-tests]
+    needs: [plan, infra, prepare-database, database, api, functions, ui, postdeployment-tests]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -175,7 +232,7 @@ jobs:
           TESTS: ${{ needs.postdeployment-tests.outputs.summary }}
         run: |
           {
-            echo "# Deploy All — ${TARGET_ENVIRONMENT}"
+            echo "# Deploy All — ${TARGET_ENVIRONMENT} — result"
             echo ""
             echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
             echo ""
