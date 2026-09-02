@@ -67,6 +67,31 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<FoundryCatalogEntryResponse>> ListCatalogAsync(string accountName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+
+        var entries = new List<FoundryCatalogEntryResponse>();
+        try
+        {
+            // Account-scoped (CognitiveServicesAccountResource.GetModelsAsync), not the
+            // subscription/location listing: it is already filtered to what this account's kind and the
+            // subscription's entitlements allow, which is exactly the question the create form asks.
+            await foreach (var model in Account(accountName).GetModelsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                entries.Add(MapCatalogEntry(model));
+            }
+        }
+        catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
+        {
+            // Like the deployments collection, a 404 on the account's own model list is the account.
+            throw new FoundryAccountNotFoundException(accountName, ex);
+        }
+
+        return entries;
+    }
+
+    /// <inheritdoc />
     public async Task<FoundryDeploymentResponse?> GetDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
@@ -174,11 +199,29 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
         appSettings.Gateway.ResourceGroup
         ?? throw new InvalidOperationException("Gateway:ResourceGroup is not configured.");
 
+    private CognitiveServicesAccountResource Account(string accountName) =>
+        armClient.GetCognitiveServicesAccountResource(
+            CognitiveServicesAccountResource.CreateResourceIdentifier(RequiredSubscriptionId, RequiredResourceGroup, accountName));
+
     private CognitiveServicesAccountDeploymentCollection Deployments(string accountName) =>
-        armClient
-            .GetCognitiveServicesAccountResource(
-                CognitiveServicesAccountResource.CreateResourceIdentifier(RequiredSubscriptionId, RequiredResourceGroup, accountName))
-            .GetCognitiveServicesAccountDeployments();
+        Account(accountName).GetCognitiveServicesAccountDeployments();
+
+    /// <summary>
+    /// ARM's account model → the create form's vocabulary. <c>DefaultCapacity</c> is taken from the
+    /// first SKU that names one: the SKUs of a model normally share a default, and a form field wants
+    /// a starting number, not a per-SKU table.
+    /// </summary>
+    private static FoundryCatalogEntryResponse MapCatalogEntry(CognitiveServicesAccountModel model)
+    {
+        var skus = model.Skus ?? [];
+
+        return new FoundryCatalogEntryResponse(
+            model.Format ?? string.Empty,
+            model.Name ?? string.Empty,
+            model.Version ?? string.Empty,
+            [.. skus.Select(sku => sku.Name).Where(name => !string.IsNullOrWhiteSpace(name)).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            skus.Select(sku => sku.Capacity?.Default).FirstOrDefault(capacity => capacity is not null));
+    }
 
     private static FoundryDeploymentResponse Map(string accountName, CognitiveServicesAccountDeploymentData data) =>
         new(

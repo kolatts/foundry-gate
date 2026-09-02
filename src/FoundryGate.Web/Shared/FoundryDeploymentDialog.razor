@@ -1,6 +1,13 @@
+@inject IFoundryGateApiClient Api
+
 @* Create form for POST /foundry/deployments (#62). OpenAI format only — the API refuses an
    Anthropic-format create with a 400, so this dialog never offers one and says why instead of
-   letting the user find out from an error. *@
+   letting the user find out from an error.
+
+   Model, version and SKU are offered from GET /foundry/catalog (#173) — what the configured
+   accounts can actually serve — not from a list typed into this file, which went stale the week
+   after it shipped. Every field still coerces whatever is typed: the catalogue is a shortcut, and
+   ARM is the authority on whether a create is valid. *@
 
 <MudDialog>
     <DialogContent>
@@ -10,6 +17,15 @@
             so Foundry Gate's infra owns them end to end. This form creates OpenAI-format
             deployments only.
         </MudAlert>
+
+        @if (_catalogUnavailable)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-4" data-testid="deployment-catalog-unavailable">
+                The model catalogue couldn't be read, so there are no suggestions below. Type the
+                model, version and SKU exactly as Azure spells them and the create will still go
+                through — Azure decides either way.
+            </MudAlert>
+        }
 
         <MudForm @ref="_form">
             <MudAutocomplete T="string"
@@ -36,7 +52,8 @@
                           data-testid="deployment-name" />
 
             <MudAutocomplete T="string"
-                             @bind-Value="_modelName"
+                             Value="@_modelName"
+                             ValueChanged="@OnModelChangedAsync"
                              Label="Model"
                              Variant="Variant.Outlined"
                              Class="mt-4"
@@ -46,33 +63,40 @@
                              OpenOnFocus="true"
                              Required="true"
                              RequiredError="Name the model to deploy."
-                             HelperText="Suggestions are a shortcut, not a catalogue — any model your account can serve is accepted."
+                             HelperText="@ModelHelperText"
                              data-testid="deployment-model" />
 
-            <MudTextField @bind-Value="_modelVersion"
-                          Label="Model version"
-                          Variant="Variant.Outlined"
-                          Class="mt-4"
-                          Required="true"
-                          RequiredError="ARM needs an explicit version."
-                          MaxLength="@ValidationConstants.FoundryModelVersionMaxLength"
-                          data-testid="deployment-version" />
+            <MudAutocomplete T="string"
+                             @bind-Value="_modelVersion"
+                             Label="Model version"
+                             Variant="Variant.Outlined"
+                             Class="mt-4"
+                             SearchFunc="@SearchVersionsAsync"
+                             CoerceValue="true"
+                             CoerceText="true"
+                             OpenOnFocus="true"
+                             Required="true"
+                             RequiredError="ARM needs an explicit version."
+                             MaxLength="@ValidationConstants.FoundryModelVersionMaxLength"
+                             data-testid="deployment-version" />
 
-            <MudSelect T="string"
-                       @bind-Value="_skuName"
-                       Label="SKU"
-                       Variant="Variant.Outlined"
-                       Class="mt-4"
-                       Dense="true"
-                       data-testid="deployment-sku">
-                @foreach (var sku in KnownSkus)
-                {
-                    <MudSelectItem T="string" Value="@sku">@sku</MudSelectItem>
-                }
-            </MudSelect>
+            <MudAutocomplete T="string"
+                             @bind-Value="_skuName"
+                             Label="SKU"
+                             Variant="Variant.Outlined"
+                             Class="mt-4"
+                             SearchFunc="@SearchSkusAsync"
+                             CoerceValue="true"
+                             CoerceText="true"
+                             OpenOnFocus="true"
+                             Required="true"
+                             RequiredError="ARM needs a SKU."
+                             MaxLength="@ValidationConstants.FoundrySkuNameMaxLength"
+                             data-testid="deployment-sku" />
 
             <MudNumericField T="int"
-                             @bind-Value="_capacity"
+                             Value="@_capacity"
+                             ValueChanged="@OnCapacityChanged"
                              Label="Capacity"
                              Variant="Variant.Outlined"
                              Class="mt-4"
@@ -89,23 +113,8 @@
 </MudDialog>
 
 @code {
-    /// <summary>
-    /// A shortcut list, not a catalogue: both fields coerce whatever is typed, because a hardcoded
-    /// model list goes stale the week after it ships. Sourced from the #60 direction update; the
-    /// real fix is an endpoint that lists what an account can serve (#173).
-    /// </summary>
-    private static readonly string[] KnownModels =
-    [
-        "gpt-5.3-codex",
-        "gpt-5.1-codex-max",
-        "gpt-5.1-codex-mini",
-        "gpt-5-codex",
-        "gpt-4o",
-        "gpt-4o-mini",
-        "text-embedding-3-large",
-    ];
-
-    private static readonly string[] KnownSkus = ["GlobalStandard", "DataZoneStandard", "Standard", "ProvisionedManaged"];
+    /// <summary>Capacity a form starts at when the catalogue suggests nothing — the value #62 shipped.</summary>
+    private const int FallbackCapacity = 25;
 
     [CascadingParameter]
     private IMudDialogInstance Instance { get; set; } = default!;
@@ -115,26 +124,111 @@
     public IReadOnlyList<string> KnownAccounts { get; set; } = [];
 
     private MudForm? _form;
+    private IReadOnlyList<FoundryCatalogEntryResponse> _catalog = [];
+    private bool _catalogUnavailable;
     private string _accountName = string.Empty;
     private string _deploymentName = string.Empty;
     private string _modelName = string.Empty;
     private string _modelVersion = string.Empty;
-    private string _skuName = KnownSkus[0];
-    private int _capacity = 25;
+    private string _skuName = string.Empty;
+    private int _capacity = FallbackCapacity;
 
-    protected override void OnInitialized()
+    /// <summary>
+    /// Set the moment the admin types a capacity, so choosing a model afterwards never overwrites a
+    /// number they entered deliberately. Suggesting a default is help; replacing an answer is not.
+    /// </summary>
+    private bool _capacityEdited;
+
+    protected override async Task OnInitializedAsync()
     {
+        var result = await Api.GetFoundryCatalogAsync();
+        if (result is { IsSuccess: true, Value: not null })
+        {
+            _catalog = result.Value;
+        }
+
+        // "Couldn't read it" and "the accounts serve nothing" are the same thing for this form: no
+        // suggestions, free text, and a note saying so.
+        _catalogUnavailable = _catalog.Count == 0;
+
         if (KnownAccounts.Count == 1)
         {
             _accountName = KnownAccounts[0];
         }
     }
 
+    private string ModelHelperText => _catalogUnavailable
+        ? "Type the model exactly as Azure spells it."
+        : "Suggestions are what the configured accounts can serve. Anything typed is accepted — Azure decides.";
+
     private Task<IEnumerable<string>> SearchAccountsAsync(string value, CancellationToken cancellationToken) =>
         Task.FromResult(Filter(KnownAccounts, value));
 
     private Task<IEnumerable<string>> SearchModelsAsync(string value, CancellationToken cancellationToken) =>
-        Task.FromResult(Filter(KnownModels, value));
+        Task.FromResult(Filter(
+            [.. _catalog.Select(entry => entry.ModelName).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            value));
+
+    /// <summary>
+    /// Versions of the chosen model, newest first (the catalogue is already ordered that way). Before a
+    /// model is chosen there is nothing honest to offer — every version in the catalogue would be a
+    /// list of dates belonging to other models.
+    /// </summary>
+    private Task<IEnumerable<string>> SearchVersionsAsync(string value, CancellationToken cancellationToken) =>
+        Task.FromResult(Filter([.. EntriesForModel().Select(entry => entry.ModelVersion).Where(v => v.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase)], value));
+
+    /// <summary>The SKUs the chosen model can be deployed under; every SKU in the catalogue once no model is chosen.</summary>
+    private Task<IEnumerable<string>> SearchSkusAsync(string value, CancellationToken cancellationToken)
+    {
+        var source = _modelName.Length > 0 ? EntriesForModel() : _catalog;
+        return Task.FromResult(Filter(
+            [.. source.SelectMany(entry => entry.SkuNames).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            value));
+    }
+
+    /// <summary>
+    /// Choosing a model fills in what the catalogue knows about it — newest version, its first SKU,
+    /// and the capacity ARM suggests — so the common case is one pick rather than four. Each is only
+    /// filled when the field is still empty (or, for capacity, untouched): this is a head start, not
+    /// a form that overwrites what was typed.
+    /// </summary>
+    private Task OnModelChangedAsync(string? modelName)
+    {
+        _modelName = modelName ?? string.Empty;
+
+        var entry = EntriesForModel().FirstOrDefault();
+        if (entry is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (string.IsNullOrWhiteSpace(_modelVersion) && entry.ModelVersion.Length > 0)
+        {
+            _modelVersion = entry.ModelVersion;
+        }
+
+        if (string.IsNullOrWhiteSpace(_skuName) && entry.SkuNames.Count > 0)
+        {
+            _skuName = entry.SkuNames[0];
+        }
+
+        if (!_capacityEdited && entry.DefaultCapacity is { } defaultCapacity and > 0)
+        {
+            _capacity = defaultCapacity;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void OnCapacityChanged(int capacity)
+    {
+        _capacity = capacity;
+        _capacityEdited = true;
+    }
+
+    /// <summary>The catalogue entries for the currently named model, most recent version first.</summary>
+    private List<FoundryCatalogEntryResponse> EntriesForModel() =>
+        [.. _catalog.Where(entry => string.Equals(entry.ModelName, _modelName, StringComparison.OrdinalIgnoreCase))];
 
     private static IEnumerable<string> Filter(IReadOnlyList<string> source, string? value) =>
         string.IsNullOrWhiteSpace(value)
@@ -161,7 +255,7 @@
             ModelFormat = FoundryModelFormatType.OpenAI,
             ModelName = _modelName.Trim(),
             ModelVersion = _modelVersion.Trim(),
-            SkuName = _skuName,
+            SkuName = _skuName.Trim(),
             Capacity = _capacity,
         };
 

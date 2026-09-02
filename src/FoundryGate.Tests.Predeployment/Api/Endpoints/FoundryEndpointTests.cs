@@ -21,6 +21,7 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
 
     private const string DeploymentsPath = "/api/v1/foundry/deployments";
     private const string ModelsPath = "/api/v1/foundry/models";
+    private const string CatalogPath = "/api/v1/foundry/catalog";
 
     [Theory]
     [InlineData("GET", DeploymentsPath)]
@@ -283,6 +284,53 @@ public class FoundryEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.DoesNotContain(factory.FoundryClient.DeleteCalls, c => c.DeploymentName == name);
+    }
+
+    [Fact]
+    public async Task Anonymous_catalog_request_returns_401()
+    {
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri(CatalogPath, UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Non_admin_catalog_request_returns_403()
+    {
+        // Unlike /models, the catalogue is an admin question: it exists to fill the create form.
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: false);
+
+        var response = await client.GetAsync(new Uri(CatalogPath, UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Admin_reads_the_catalogue_with_the_skus_and_capacity_the_form_needs()
+    {
+        // #173. The catalogue is cached for five minutes, so this seeds before anything reads it and
+        // asserts only on the model it owns.
+        var model = $"model-{Guid.NewGuid():N}"[..20];
+        factory.FoundryClient.SeedCatalog(
+            ApiTestFactory.PrimaryFoundryAccount, model, "2026-01-01", defaultCapacity: 25, skuNames: ["GlobalStandard"]);
+        factory.FoundryClient.SeedCatalog(
+            ApiTestFactory.SecondaryFoundryAccount, model, "2026-01-01", defaultCapacity: 25, skuNames: ["DataZoneStandard"]);
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var response = await client.GetAsync(new Uri(CatalogPath, UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var catalog = await response.Content.ReadFromJsonAsync<List<FoundryCatalogEntryResponse>>(JsonOptions);
+        Assert.NotNull(catalog);
+
+        // One entry for a model both accounts serve, carrying both their SKUs.
+        var entry = Assert.Single(catalog, e => e.ModelName == model);
+        Assert.Equal("OpenAI", entry.ModelFormat);
+        Assert.Equal("2026-01-01", entry.ModelVersion);
+        Assert.Equal(["DataZoneStandard", "GlobalStandard"], entry.SkuNames);
+        Assert.Equal(25, entry.DefaultCapacity);
     }
 
     private static string Marker() => $"dep-{Guid.NewGuid():N}"[..20];

@@ -43,6 +43,9 @@ public sealed partial class FoundryGateApiClient
     public Task<ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>> GetFoundryDeploymentsAsync(CancellationToken ct = default) =>
         GetAsync<IReadOnlyList<FoundryDeploymentResponse>>("foundry/deployments", ct);
 
+    public Task<ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>> GetFoundryCatalogAsync(CancellationToken ct = default) =>
+        GetAsync<IReadOnlyList<FoundryCatalogEntryResponse>>("foundry/catalog", ct);
+
     public Task<ApiCallResult<FoundryDeploymentResponse>> CreateFoundryDeploymentAsync(CreateFoundryDeploymentRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);

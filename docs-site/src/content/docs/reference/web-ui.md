@@ -187,10 +187,17 @@ Creating is **OpenAI-format only**, and the dialog says why instead of letting t
 first mention of it: Claude deployments need an attestation block the ARM SDK cannot send, and Bicep
 can only recreate a whole account's deployments at once, so infra owns them end to end
 ([#126](https://github.com/kolatts/foundry-gate/issues/126) would lift that). For the same reason,
-delete is disabled outright on Anthropic rows. The model and SKU suggestions accept anything typed —
-they are a shortcut, not a catalogue
-([#173](https://github.com/kolatts/foundry-gate/issues/173) replaces them with what an account can
-actually serve).
+delete is disabled outright on Anthropic rows.
+
+The model, version and SKU pickers are filled from
+[`GET /foundry/catalog`](/foundry-gate/reference/api/#get-foundrycatalog) — what the configured
+accounts can actually serve — rather than from a list typed into the dialog, which went stale the
+week after it shipped. Picking a catalogued model fills in its newest version, its first SKU and the
+capacity ARM suggests, so the common case is one pick rather than four; nothing already filled in is
+overwritten, and a capacity you typed is never replaced. Every field still coerces whatever is typed,
+so a model Azure lists before this endpoint does is still deployable — ARM decides either way. If the
+catalogue can't be read, the dialog says so and the fields fall back to plain free text rather than
+to another hardcoded list.
 
 A new deployment reaches developers through the gateway only once it is in the right backend pool
 ([#83](https://github.com/kolatts/foundry-gate/issues/83)), which the page also says.

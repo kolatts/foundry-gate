@@ -3,6 +3,8 @@ using FoundryGate.Domain.Foundry;
 using FoundryGate.Domain.Foundry.Contracts;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
+using Microsoft.AspNetCore.Components;
+using MudBlazor;
 
 namespace FoundryGate.Tests.Predeployment.Web.Pages;
 
@@ -98,7 +100,8 @@ public class FoundryPageTests : WebTestContext
 
         page.Find("input[data-testid=deployment-name]").Change("gpt-5-1-codex-max");
         page.Find("input[data-testid=deployment-model]").Input("gpt-5.1-codex-max");
-        page.Find("input[data-testid=deployment-version]").Change("2026-01-01");
+        page.Find("input[data-testid=deployment-version]").Input("2026-01-01");
+        page.Find("input[data-testid=deployment-sku]").Input("GlobalStandard");
         page.Find("[data-testid=deployment-create]").Click();
 
         page.WaitForAssertion(() =>
@@ -110,6 +113,115 @@ public class FoundryPageTests : WebTestContext
             // The single known account is pre-selected, so the common case is not a guess.
             Assert.Equal("fg-eastus", created.AccountName);
         });
+    }
+
+    [Fact]
+    public void The_create_dialog_offers_what_the_accounts_can_actually_serve()
+    {
+        // #173: the model and SKU suggestions came from a hardcoded array in the dialog until
+        // GET /foundry/catalog existed. A hardcoded model list goes stale the week after it ships.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01", ["DataZoneStandard", "GlobalStandard"], defaultCapacity: 30));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.WaitForAssertion(() =>
+            Assert.Contains("gpt-5-codex", SearchOptions(page, "deployment-model", string.Empty), StringComparer.Ordinal));
+        Assert.Empty(page.FindAll("[data-testid=deployment-catalog-unavailable]"));
+    }
+
+    [Fact]
+    public void Choosing_a_catalogued_model_fills_in_its_version_sku_and_suggested_capacity()
+    {
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01", ["DataZoneStandard", "GlobalStandard"], defaultCapacity: 30));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(WebTestData.Deployment(deploymentName: "codex"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.Find("input[data-testid=deployment-name]").Change("codex");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-5-codex");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        // One pick, not four: the catalogue knows the version, the SKUs and the capacity ARM suggests.
+        page.WaitForAssertion(() =>
+        {
+            var created = Assert.Single(Api.CreatedDeployments);
+            Assert.Equal("gpt-5-codex", created.ModelName);
+            Assert.Equal("2026-01-01", created.ModelVersion);
+            Assert.Equal("DataZoneStandard", created.SkuName);
+            Assert.Equal(30, created.Capacity);
+        });
+    }
+
+    [Fact]
+    public void A_model_the_catalogue_never_listed_is_still_deployable()
+    {
+        // Coercion stays: Azure lists models before this endpoint does, and Azure decides the create.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.ArrangeCatalog(WebTestData.CatalogEntry("gpt-5-codex", "2026-01-01", ["GlobalStandard"]));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(WebTestData.Deployment(deploymentName: "brand-new"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.Find("input[data-testid=deployment-name]").Change("brand-new");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-6-not-yet-listed");
+        page.Find("input[data-testid=deployment-version]").Input("2026-09-01");
+        page.Find("input[data-testid=deployment-sku]").Input("GlobalStandard");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        page.WaitForAssertion(() => Assert.Equal("gpt-6-not-yet-listed", Assert.Single(Api.CreatedDeployments).ModelName));
+    }
+
+    [Fact]
+    public void An_unreadable_catalogue_says_so_and_leaves_every_field_free_text()
+    {
+        // The dialog's job is creating a deployment; losing the shortcut must not lose the form.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.FoundryCatalogResult = ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>.Fail(
+            ApiCallStatus.Error, "Couldn't reach the Foundry accounts.");
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(WebTestData.Deployment(deploymentName: "typed"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=deployment-catalog-unavailable]")));
+
+        page.Find("input[data-testid=deployment-name]").Change("typed");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-4.1-mini");
+        page.Find("input[data-testid=deployment-version]").Input("2025-04-14");
+        page.Find("input[data-testid=deployment-sku]").Input("GlobalStandard");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        page.WaitForAssertion(() => Assert.Equal("gpt-4.1-mini", Assert.Single(Api.CreatedDeployments).ModelName));
+    }
+
+    /// <summary>
+    /// Runs one autocomplete's own <c>SearchFunc</c> — MudBlazor's list lives in a popover the
+    /// headless renderer never opens, so the search is driven directly.
+    /// </summary>
+    private static IReadOnlyList<string> SearchOptions(IRenderedComponent<IComponent> page, string testId, string term)
+    {
+        var autocomplete = page.FindComponents<MudAutocomplete<string>>()
+            .Single(c => string.Equals(c.Instance.UserAttributes["data-testid"] as string, testId, StringComparison.Ordinal));
+
+        // Declared non-nullable: the compiler resets a nullable local's flow state inside a lambda.
+        Func<string, CancellationToken, Task<IEnumerable<string>?>> search = autocomplete.Instance.SearchFunc!;
+
+        return page.InvokeAsync(async () => (await search(term, CancellationToken.None))?.ToList() ?? [])
+            .GetAwaiter()
+            .GetResult();
     }
 
     [Fact]

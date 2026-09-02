@@ -166,6 +166,15 @@ public static class WebTestData
             CreatedDate: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
             ModifiedDate: null);
 
+    /// <summary>One <c>GET /foundry/catalog</c> row — a model the configured accounts can serve (#173).</summary>
+    public static FoundryCatalogEntryResponse CatalogEntry(
+        string modelName = "gpt-4.1-mini",
+        string modelVersion = "2025-04-14",
+        IReadOnlyList<string>? skuNames = null,
+        int? defaultCapacity = 10,
+        string modelFormat = "OpenAI") =>
+        new(modelFormat, modelName, modelVersion, skuNames ?? ["GlobalStandard"], defaultCapacity);
+
     public static GroupResponse Group(
         int groupId = 7,
         string name = "Platform",

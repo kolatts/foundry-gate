@@ -397,6 +397,81 @@ public class FoundryDeploymentServiceTests : InMemoryDatabaseTest
         };
 
     /// <summary>Wires the real accessor + audit service over this test's context, as the DI container would per request.</summary>
+    [Fact]
+    public async Task ListCatalogAsync_merges_the_accounts_and_unions_their_skus()
+    {
+        // #173: the create form names one account at a time, so a per-account catalogue would be a
+        // list of near-duplicates. A model both regions serve is one entry carrying both SKUs.
+        _client.SeedCatalog(Primary, "gpt-4.1-mini", "2025-04-14", defaultCapacity: 10, skuNames: ["GlobalStandard"]);
+        _client.SeedCatalog(Secondary, "gpt-4.1-mini", "2025-04-14", defaultCapacity: 10, skuNames: ["DataZoneStandard", "GlobalStandard"]);
+        // A model only one region carries is still offered — ARM decides the create.
+        _client.SeedCatalog(Secondary, "gpt-5-codex", "2026-01-01", defaultCapacity: 25, skuNames: ["GlobalStandard"]);
+
+        var catalog = await CreateService(oid: null).ListCatalogAsync(CancellationToken.None);
+
+        Assert.Equal(["gpt-4.1-mini", "gpt-5-codex"], catalog.Select(e => e.ModelName));
+        var mini = catalog[0];
+        Assert.Equal(["DataZoneStandard", "GlobalStandard"], mini.SkuNames);
+        Assert.Equal(10, mini.DefaultCapacity);
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_keeps_the_versions_of_a_model_apart_newest_first()
+    {
+        // A create needs an explicit version, so two versions of one model are two answers, not one.
+        _client.SeedCatalog(Primary, "gpt-4.1-mini", "2025-04-14");
+        _client.SeedCatalog(Primary, "gpt-4.1-mini", "2026-02-01");
+
+        var catalog = await CreateService(oid: null).ListCatalogAsync(CancellationToken.None);
+
+        Assert.Equal(["2026-02-01", "2025-04-14"], catalog.Select(e => e.ModelVersion));
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_lists_anthropic_models_even_though_creating_one_is_refused()
+    {
+        // What the account can serve is a fact worth showing; the create refusal explains itself.
+        _client.SeedCatalog(Primary, "claude-sonnet-4-5", "20250929", modelFormat: "Anthropic");
+
+        var catalog = await CreateService(oid: null).ListCatalogAsync(CancellationToken.None);
+
+        Assert.Equal("Anthropic", Assert.Single(catalog).ModelFormat);
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_serves_a_second_call_from_cache()
+    {
+        _client.SeedCatalog(Primary, "gpt-4.1-mini");
+        var service = CreateService(oid: null);
+
+        _ = await service.ListCatalogAsync(CancellationToken.None);
+        _ = await service.ListCatalogAsync(CancellationToken.None);
+
+        // One round of ARM calls, not two: every open of the create dialog asks for this.
+        Assert.Equal([Primary, Secondary], _client.CatalogCalls);
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_skips_a_missing_account_rather_than_failing_the_whole_read()
+    {
+        // One decommissioned region must not leave the create form with no suggestions at all.
+        _client.SeedCatalog(Primary, "gpt-4.1-mini");
+        var service = CreateService(oid: null, accounts: [Primary, Missing]);
+
+        var catalog = await service.ListCatalogAsync(CancellationToken.None);
+
+        Assert.Equal("gpt-4.1-mini", Assert.Single(catalog).ModelName);
+    }
+
+    [Fact]
+    public async Task ListCatalogAsync_is_503_when_foundry_is_not_configured_at_all()
+    {
+        var service = CreateService(oid: null, configured: false);
+
+        _ = await Assert.ThrowsAsync<FeatureNotConfiguredException>(
+            () => service.ListCatalogAsync(CancellationToken.None));
+    }
+
     private FoundryDeploymentService CreateService(string? oid, bool configured = true, List<string>? accounts = null)
     {
         var claims = oid is null ? [] : new List<Claim> { new(ClaimConstants.Oid, oid) };

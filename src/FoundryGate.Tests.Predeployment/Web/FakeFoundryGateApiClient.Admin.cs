@@ -19,6 +19,13 @@ public sealed partial class FakeFoundryGateApiClient
     public ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>> FoundryDeploymentsResult { get; set; } =
         ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>.Ok([]);
 
+    /// <summary>
+    /// What <c>GET /foundry/catalog</c> answers (#173). Defaults to empty, which is the "no
+    /// suggestions, free text" path the create dialog has to keep working.
+    /// </summary>
+    public ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>> FoundryCatalogResult { get; set; } =
+        ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>.Ok([]);
+
     public ApiCallResult<FoundryDeploymentResponse> CreateFoundryDeploymentResult { get; set; } =
         ApiCallResult<FoundryDeploymentResponse>.Fail(ApiCallStatus.Error, "No create result arranged for this test.");
 
@@ -61,6 +68,13 @@ public sealed partial class FakeFoundryGateApiClient
         return this;
     }
 
+    /// <summary>What <c>GET /foundry/catalog</c> returns.</summary>
+    public FakeFoundryGateApiClient ArrangeCatalog(params FoundryCatalogEntryResponse[] entries)
+    {
+        FoundryCatalogResult = ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>.Ok(entries);
+        return this;
+    }
+
     // -- IFoundryGateApiClient ------------------------------------------------------------------
 
     public Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(UserListQuery query, PagedRequest paging, CancellationToken ct = default)
@@ -81,6 +95,9 @@ public sealed partial class FakeFoundryGateApiClient
 
     public Task<ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>> GetFoundryDeploymentsAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetFoundryDeploymentsAsync), FoundryDeploymentsResult);
+
+    public Task<ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>> GetFoundryCatalogAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetFoundryCatalogAsync), FoundryCatalogResult);
 
     public Task<ApiCallResult<FoundryDeploymentResponse>> CreateFoundryDeploymentAsync(CreateFoundryDeploymentRequest request, CancellationToken ct = default)
     {

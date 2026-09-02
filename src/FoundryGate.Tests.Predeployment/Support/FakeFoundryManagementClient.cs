@@ -20,8 +20,14 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
     private readonly Dictionary<string, Dictionary<string, FoundryDeploymentResponse>> _accounts =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<string, List<FoundryCatalogEntryResponse>> _catalogs =
+        new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Every account the service asked to list, in order.</summary>
     public List<string> ListCalls { get; } = [];
+
+    /// <summary>Every account the service asked for a catalogue, in order — how a test proves the 5-minute cache is doing its job.</summary>
+    public List<string> CatalogCalls { get; } = [];
 
     /// <summary>Every create the service asked for, in order.</summary>
     public List<CreateFoundryDeploymentRequest> CreateCalls { get; } = [];
@@ -75,6 +81,44 @@ public sealed class FakeFoundryManagementClient : IFoundryManagementClient
             SeedTime);
         _accounts[accountName][deploymentName] = deployment;
         return deployment;
+    }
+
+    /// <summary>Adds a model to <paramref name="accountName"/>'s deployable catalogue (adding the account if needed).</summary>
+    public void SeedCatalog(
+        string accountName,
+        string modelName,
+        string modelVersion = "2025-04-14",
+        string modelFormat = "OpenAI",
+        int? defaultCapacity = 10,
+        params string[] skuNames)
+    {
+        ArgumentNullException.ThrowIfNull(skuNames);
+
+        AddAccount(accountName);
+        if (!_catalogs.TryGetValue(accountName, out var catalog))
+        {
+            catalog = [];
+            _catalogs[accountName] = catalog;
+        }
+
+        catalog.Add(new FoundryCatalogEntryResponse(
+            modelFormat,
+            modelName,
+            modelVersion,
+            skuNames.Length == 0 ? ["GlobalStandard"] : skuNames,
+            defaultCapacity));
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<FoundryCatalogEntryResponse>> ListCatalogAsync(string accountName, CancellationToken cancellationToken)
+    {
+        CatalogCalls.Add(accountName);
+
+        // Same account-missing contract as every other method: an unknown account throws.
+        _ = RequireAccount(accountName);
+
+        return Task.FromResult<IReadOnlyList<FoundryCatalogEntryResponse>>(
+            _catalogs.TryGetValue(accountName, out var catalog) ? [.. catalog] : []);
     }
 
     /// <inheritdoc />

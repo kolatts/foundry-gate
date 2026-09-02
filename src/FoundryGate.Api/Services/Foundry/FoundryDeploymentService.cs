@@ -32,6 +32,17 @@ public sealed class FoundryDeploymentService(
     /// <summary>How long <see cref="ListModelsAsync"/> serves a cached answer; creates/deletes invalidate early.</summary>
     public static readonly TimeSpan ModelsCacheDuration = TimeSpan.FromSeconds(30);
 
+    /// <summary><see cref="IMemoryCache"/> key for the deployable-model catalogue (#173).</summary>
+    public const string CatalogCacheKey = "FoundryGate.Foundry.Catalog";
+
+    /// <summary>
+    /// How long <see cref="ListCatalogAsync"/> serves a cached answer. Longer than the deployment
+    /// views' 30 s because it answers a slower-moving question — what Azure <em>offers</em>, which
+    /// changes when Microsoft ships a model, not when this fork deploys one — and because every open
+    /// of the create dialog asks for it.
+    /// </summary>
+    public static readonly TimeSpan CatalogCacheDuration = TimeSpan.FromMinutes(5);
+
     private const string SucceededState = "Succeeded";
     private static readonly string AnthropicFormat = FoundryModelFormatType.Anthropic.ToString();
 
@@ -96,6 +107,43 @@ public sealed class FoundryDeploymentService(
 
         _ = cache.Set<IReadOnlyList<FoundryModelResponse>>(ModelsCacheKey, models, ModelsCacheDuration);
         return models;
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<FoundryCatalogEntryResponse>> ListCatalogAsync(CancellationToken cancellationToken)
+    {
+        if (cache.TryGetValue(CatalogCacheKey, out IReadOnlyList<FoundryCatalogEntryResponse>? cached) && cached is not null)
+        {
+            return cached;
+        }
+
+        var accountNames = ConfiguredAccountNames();
+
+        // A missing account is skipped rather than fatal, as in the developer model view: one
+        // decommissioned region must not leave the create form with no suggestions at all — and the
+        // form still accepts anything typed, so a partial catalogue is a smaller failure than none.
+        var perAccount = await Task.WhenAll(accountNames.Select(account => TryListCatalogAsync(account, cancellationToken)));
+
+        // Merged across accounts: the same model is normally deployable in every region, and a form
+        // that names one account at a time has no use for the near-duplicates. SKUs are unioned, and
+        // the first default capacity any account reports wins — they agree in practice, and a
+        // suggestion in a form does not justify a per-account table.
+        var catalog = perAccount
+            .Where(entries => entries is not null)
+            .SelectMany(entries => entries!)
+            .GroupBy(entry => (entry.ModelFormat, entry.ModelName, entry.ModelVersion), CatalogKeyComparer)
+            .Select(group => new FoundryCatalogEntryResponse(
+                group.Key.ModelFormat,
+                group.Key.ModelName,
+                group.Key.ModelVersion,
+                [.. group.SelectMany(entry => entry.SkuNames).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+                group.Select(entry => entry.DefaultCapacity).FirstOrDefault(capacity => capacity is not null)))
+            .OrderBy(entry => entry.ModelName, StringComparer.OrdinalIgnoreCase)
+            .ThenByDescending(entry => entry.ModelVersion, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _ = cache.Set<IReadOnlyList<FoundryCatalogEntryResponse>>(CatalogCacheKey, catalog, CatalogCacheDuration);
+        return catalog;
     }
 
     /// <inheritdoc />
@@ -288,6 +336,41 @@ public sealed class FoundryDeploymentService(
         catch (FoundryAccountNotFoundException ex)
         {
             throw MissingAccount(ex);
+        }
+    }
+
+    /// <summary>Case-insensitive on all three parts, because ARM's own casing of a format or model name is not something to depend on.</summary>
+    private static readonly IEqualityComparer<(string ModelFormat, string ModelName, string ModelVersion)> CatalogKeyComparer =
+        new CatalogKeyEqualityComparer();
+
+    private sealed class CatalogKeyEqualityComparer : IEqualityComparer<(string ModelFormat, string ModelName, string ModelVersion)>
+    {
+        public bool Equals((string ModelFormat, string ModelName, string ModelVersion) x, (string ModelFormat, string ModelName, string ModelVersion) y) =>
+            string.Equals(x.ModelFormat, y.ModelFormat, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(x.ModelName, y.ModelName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(x.ModelVersion, y.ModelVersion, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string ModelFormat, string ModelName, string ModelVersion) obj) =>
+            HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.ModelFormat),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.ModelName),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.ModelVersion));
+    }
+
+    /// <summary>Lists one account's catalogue; <see langword="null"/> (and a Warning) when the account is missing.</summary>
+    private async Task<IReadOnlyList<FoundryCatalogEntryResponse>?> TryListCatalogAsync(string account, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await managementClient.ListCatalogAsync(account, cancellationToken);
+        }
+        catch (FoundryAccountNotFoundException ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Foundry account {Account} is configured in Gateway:FoundryAccountNames but was not found; skipping it in the deployable-model catalogue",
+                account);
+            return null;
         }
     }
 

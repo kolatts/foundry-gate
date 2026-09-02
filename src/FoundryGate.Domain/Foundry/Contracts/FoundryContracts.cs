@@ -50,6 +50,34 @@ public record FoundryModelResponse(
     string ProvisioningState);
 
 /// <summary>
+/// One model the configured Foundry accounts can actually serve — <c>GET /foundry/catalog</c>,
+/// admin-only (#173). Read from ARM's per-account model list, which is where the create call's
+/// <c>model.name</c> / <c>model.version</c> / <c>sku.name</c> have to come from anyway; the create
+/// dialog offered a hardcoded array until this existed, and a hardcoded model list goes stale the
+/// week after it ships.
+/// </summary>
+/// <remarks>
+/// Not scoped to an account: the gateway runs one account per region and a model is normally
+/// deployable in all of them, so a per-account breakdown would be a list of near-duplicates for a
+/// form that names one account at a time. Entries are merged across accounts by
+/// (<paramref name="ModelFormat"/>, <paramref name="ModelName"/>, <paramref name="ModelVersion"/>) and
+/// their SKUs unioned, so what an admin sees is "any configured account can serve this". A model only
+/// one region carries is still listed — ARM decides the create, and it will refuse an account that
+/// cannot serve it, with a message the admin can act on.
+/// </remarks>
+/// <param name="ModelFormat">ARM <c>model.format</c> (<c>OpenAI</c>, <c>Anthropic</c>, …). Anthropic models are listed for visibility even though the API refuses to create them (#107/#126).</param>
+/// <param name="ModelName">ARM <c>model.name</c>, exactly as a create must spell it.</param>
+/// <param name="ModelVersion">ARM <c>model.version</c>. Empty when ARM reports none — a create needs an explicit version, so an entry without one is a shortcut the admin has to complete.</param>
+/// <param name="SkuNames">The SKUs this model can be deployed under, deduplicated and ordered; empty when ARM reports none.</param>
+/// <param name="DefaultCapacity">The default capacity ARM suggests for the first SKU that names one, in thousands of TPM — a starting point for the form's capacity field, not a limit.</param>
+public record FoundryCatalogEntryResponse(
+    string ModelFormat,
+    string ModelName,
+    string ModelVersion,
+    IReadOnlyList<string> SkuNames,
+    int? DefaultCapacity);
+
+/// <summary>
 /// <c>POST /foundry/deployments</c> body (admin). Creates <b>one</b> deployment in <b>one</b>
 /// account; a pooled model (one per region) is several requests, one per account, so that each
 /// create is an explicit, auditable decision — never a loop the API drives on the admin's

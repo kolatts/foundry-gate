@@ -44,6 +44,13 @@ public partial interface IFoundryGateApiClient
     Task<ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>> GetFoundryDeploymentsAsync(CancellationToken ct = default);
 
     /// <summary>
+    /// <c>GET /foundry/catalog</c> — the models the configured accounts can serve, with their SKUs
+    /// and a suggested capacity (#173). What the create dialog's pickers offer instead of a hardcoded
+    /// array. A failure here is not fatal to the dialog: both fields still accept anything typed.
+    /// </summary>
+    Task<ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>> GetFoundryCatalogAsync(CancellationToken ct = default);
+
+    /// <summary>
     /// <c>POST /foundry/deployments</c> — create one OpenAI-format deployment. The API refuses
     /// Anthropic-format creates with a 400: Claude deployments are managed by infra end to end
     /// (plans/20-foundry-provisioning.md; lifting that is #126).

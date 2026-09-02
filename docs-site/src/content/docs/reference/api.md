@@ -361,6 +361,7 @@ The gateway runs one Azure AI Foundry account per region (`Gateway__FoundryAccou
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/foundry/models` | Any | Developer view: distinct deployment names with model, version, format and provisioning state. A model deployed in several regions is listed once — `Succeeded` if any region serves it. Served from a 30-second in-memory cache (invalidated by every create/delete); a configured account that is missing in Azure is skipped, not fatal. |
+| `GET` | `/foundry/catalog` | Admin | What the configured accounts **can** deploy: `{ modelFormat, modelName, modelVersion, skuNames, defaultCapacity }` per model and version, merged across accounts with their SKUs unioned. Served from a 5-minute cache; a configured account missing in Azure is skipped, not fatal. |
 | `GET` | `/foundry/deployments` | Admin | Every deployment in every configured account (account, name, model format/name/version, SKU, capacity in thousands of TPM, provisioning state, created/modified). Primary account first, then by name. Always live (no cache). |
 | `GET` | `/foundry/deployments/{accountName}/{deploymentName}` | Admin | One deployment — poll this after a create until `provisioningState` is `Succeeded`. |
 | `POST` | `/foundry/deployments` | Admin | Create one **OpenAI-format** deployment in one account. Body: `accountName`, `deploymentName`, `modelFormat` (`OpenAI`; default), `modelName`, `modelVersion`, `skuName`, `capacity` (thousands of TPM). `201` + `Location`; the body reflects ARM's initial state (usually `Creating`). |
@@ -374,13 +375,35 @@ Rules the mutation paths enforce (CLAUDE.md "Anthropic deployments are create-on
 - **`503 Service Unavailable — feature not configured`** on every `/foundry/*` route when the `Gateway__*` section is absent (local dev without a gateway). The `detail` names the keys to set, so the UI can tell "not set up" from "broken".
 - Every create and delete writes an audit entry (`foundry.deployment.created` / `foundry.deployment.deleted`, target type `FoundryDeployment`, target id `{accountName}/{deploymentName}`). The admin must have loaded the app once (`GET /users/me`) so the entry has an actor — otherwise the mutation is refused (`403`) before Azure is touched. Once Azure has accepted the change, the audit entry is written regardless of the client disconnecting.
 
+### `GET /foundry/catalog`
+
+What the configured accounts **can** deploy, as opposed to what they already have — the values a
+create needs, from the same ARM account-model list `az cognitiveservices model list` shows, so it
+already accounts for each account's kind and the subscription's entitlements
+([#173](https://github.com/kolatts/foundry-gate/issues/173)).
+
+Entries are merged across accounts by `(modelFormat, modelName, modelVersion)` with their `skuNames`
+unioned: the gateway runs one account per region, a model is normally deployable in all of them, and
+the create form names one account at a time — a per-account breakdown would be a list of
+near-duplicates. A model only one region carries is still listed; ARM decides the create and refuses
+an account that cannot serve it, with a message the admin can act on. `defaultCapacity` is the
+capacity ARM suggests, in thousands of TPM — a starting point for the form, not a limit.
+
+Anthropic-format models are listed even though `POST /foundry/deployments` refuses to create one:
+what an account can serve is a fact worth showing, and the refusal explains itself. Nothing here
+validates a create.
+
+Cached for **5 minutes** — the answer changes when Microsoft ships a model, not when this fork deploys
+one, and every open of the create dialog asks for it. Unlike the deployment views, nothing invalidates
+it early: deploying a model does not change what is deployable.
+
 ## Admin
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/config` | Admin | Every `SystemConfiguration` key, ordered by key: `{ key, value, updatedDate, updatedByUserId, updatedByDisplayName }`. The last two are `null` for a seeded key no admin has edited |
+| `GET` | `/config` | Admin | Every `SystemConfiguration` key, ordered by key: `{ key, value, updatedDate, updatedByUserId, updatedByDisplayName, isReadOnly }`. The editor fields are `null` for a seeded key no admin has edited; `isReadOnly` marks a key the system writes for itself, which `PUT` refuses with `409` |
 | `PUT` | `/config/{key}` | Admin | Set one key's value. Returns the row as it now stands |
-| `GET` | `/audit` | Admin | Audit log, paged. Filter: `?actor=&action=&from=&to=` |
+| `GET` | `/audit` | Admin | Audit log, paged. Filter: `?actorUserId=&action=&targetType=&targetId=&fromDate=&toDate=` |
 | `GET` | `/dashboard` | Admin | Summary stats for the dashboard. `?fresh=true` bypasses the 30-second cache |
 
 ### `PUT /config/{key}`
