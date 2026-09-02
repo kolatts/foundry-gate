@@ -125,8 +125,9 @@ else
             </TemplateColumn>
             @if (_hasCostEstimates)
             {
-                @* #177. Only once the fork has configured a RateCard: an always-empty "Est. cost"
-                   column would read as a failure to work it out rather than as "not priced". *@
+                @* #177. Only once this fork has been seen to price its tokens: an always-empty
+                   "Est. cost" column would read as a failure to work it out rather than as
+                   "nobody has priced this". Once shown it stays — see _hasCostEstimates. *@
                 <TemplateColumn Title="Est. cost" CellClass="fg-mono" Sortable="false">
                     <HeaderTemplate>
                         <MudTooltip Text="@TierDisplay.CostEstimateTooltip">Est. cost</MudTooltip>
@@ -226,9 +227,15 @@ else
     private bool _accessDenied;
 
     /// <summary>
-    /// Whether the last page carried any estimated cost — i.e. whether the fork has a
-    /// <c>RateCard</c> configured (#177). The column is hidden until it does.
+    /// Whether this fork prices its tokens at all — i.e. whether a <c>RateCard</c> is configured
+    /// (#177). Set once, by the first page that carries a cost, and never cleared.
     /// </summary>
+    /// <remarks>
+    /// Deliberately sticky. Deciding it from the <em>current</em> page made the "Est. cost" column
+    /// vanish whenever a filter matched nothing and come back when the filter was cleared, which
+    /// reads as the page losing track of something rather than as a filter returning no rows
+    /// (#208 review). A rate card is a property of the fork, not of the page you happen to be on.
+    /// </remarks>
     private bool _hasCostEstimates;
 
     private bool HasFilter =>
@@ -287,7 +294,7 @@ else
             var result = await Api.GetQuotaAllocationsAsync(query, new PagedRequest(state.Page + 1, state.PageSize), cancellationToken);
 
             var data = result.ToGridData(OnForbidden, Snackbar, "Couldn't load quota allocations.");
-            _hasCostEstimates = data.Items.Any(a => a.EstimatedCost is not null);
+            _hasCostEstimates |= data.Items.Any(a => a.EstimatedCost is not null);
             return data;
         }
         finally

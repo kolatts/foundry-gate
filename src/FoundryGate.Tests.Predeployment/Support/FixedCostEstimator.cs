@@ -23,6 +23,12 @@ public sealed class FixedCostEstimator(RateCard? rateCard = null) : ICostEstimat
     /// <summary>What every call answers. Settable so a test can change the prices mid-way.</summary>
     public RateCard RateCard { get; set; } = rateCard ?? RateCard.Empty;
 
+    /// <summary>How many times <see cref="Invalidate"/> was called — the eviction on <c>PUT /config/RateCard</c> is a claim worth asserting.</summary>
+    public int InvalidateCount { get; private set; }
+
     /// <inheritdoc />
-    public Task<RateCard> GetRateCardAsync(CancellationToken cancellationToken) => Task.FromResult(RateCard);
+    public Task<RateCard> GetRateCardAsync(bool fresh, CancellationToken cancellationToken) => Task.FromResult(RateCard);
+
+    /// <inheritdoc />
+    public void Invalidate() => InvalidateCount++;
 }

@@ -18,8 +18,9 @@ namespace FoundryGate.Tests.Predeployment.Web;
 /// failing assertion and retries, so an assertion that throws on every attempt looks exactly like a
 /// condition that never became true.
 /// <para>
-/// Every read takes a snapshot under the lock, so an assertion sees one consistent moment rather
-/// than a list mutating underneath it.
+/// Every read happens under the lock — a snapshot for the enumerating ones, a single acquisition for
+/// the indexers — so an assertion sees one consistent moment rather than a list mutating underneath
+/// it.
 /// </para>
 /// </remarks>
 public sealed class RecordedCalls<T> : IReadOnlyList<T>
@@ -47,6 +48,23 @@ public sealed class RecordedCalls<T> : IReadOnlyList<T>
             lock (_gate)
             {
                 return _items[index];
+            }
+        }
+    }
+
+    /// <summary>
+    /// One lock for <c>[^1]</c>, which is how nearly every assertion here reads "the last call the
+    /// page made". Without this overload the compiler lowers <c>[^1]</c> to <c>Count</c> followed by
+    /// <c>this[int]</c> — two lock acquisitions with a gap in between, so the one read the class
+    /// promises is consistent would be the one that isn't (#177 review).
+    /// </summary>
+    public T this[Index index]
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _items[index.GetOffset(_items.Count)];
             }
         }
     }

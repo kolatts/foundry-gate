@@ -212,6 +212,24 @@ public class QuotaAllocationsPageTests : WebTestContext
     }
 
     [Fact]
+    public void The_cost_column_survives_a_filter_that_matches_nothing()
+    {
+        // #208 review: deciding the column from the current page made it vanish on an empty filtered
+        // page and reappear when the filter was cleared, which reads as the page losing track of
+        // something. A rate card is a property of the fork, not of the page you are on.
+        Api.ArrangeAllocations(WebTestData.Allocation(userId: 11, estimatedCost: 36m));
+
+        var page = RenderPage<QuotaAllocations>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=quota-cost-11]")));
+
+        Api.ArrangeAllocations();
+        page.Find("[data-testid=quota-chip-hard-stopped]").Click();
+
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=quota-empty]")));
+        Assert.Contains("Est. cost", page.Find("[data-testid=quota-grid]").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Every_row_offers_a_keyboard_reachable_way_into_the_user()
     {
         Api.ArrangeAllocations(WebTestData.Allocation(userId: 11));

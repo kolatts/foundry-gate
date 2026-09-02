@@ -36,10 +36,17 @@ FoundryGate therefore computes it from your own prices:
 ```
 
 Prices are per million tokens, in whatever currency you priced them in — FoundryGate never renders a
-currency symbol, because it does not know which one you meant. `modelPrefix` is matched against a
-deployment's model name by prefix; `*` is the fallback. Each prefix may appear at most once and no
-price may be negative; `PUT /config/RateCard` answers `400` with the rule in the message, and stores
-the card re-serialized so whitespace differences do not leave two versions of the same rates.
+currency symbol, because it does not know which one you meant. **Only the `*` entry is read today**;
+nothing matches on `modelPrefix` yet, so the named entries above are validated and then ignored until
+[#213](https://github.com/kolatts/foundry-gate/issues/213) lands the per-model token split that can
+use them. They are part of the stored shape now so that a fork does not have to rewrite its row later.
+
+Each `modelPrefix` may appear at most once, and each price must be between `0` and `1,000,000` — the
+upper bound is a guardrail, not a business rule: no model costs a million per million tokens, and an
+unbounded price overflows the arithmetic behind every cost figure. `PUT /config/RateCard` answers
+`400` with the rule in the message, and stores the card re-serialized so whitespace differences do
+not leave two versions of the same rates. Editing it also drops the cached copy immediately, so a
+corrected price is live on the next read rather than up to 30 seconds later.
 
 **The formula, and its caveat.** For an allocation:
 
@@ -48,7 +55,7 @@ estimatedCost = tokensUsed / 1_000_000 × blendedRatePerMillion
 blendedRatePerMillion = mean(inputPerMillion, outputPerMillion) of the "*" entry
 ```
 
-Only the `*` entry is read today. `QuotaAllocation.TokensUsed` is a **single total**: it carries no
+`QuotaAllocation.TokensUsed` is a **single total**: it carries no
 prompt/completion split, so the two prices cannot be applied separately, and no per-model split, so
 the per-model entries are validated and stored but nothing reads them yet
 ([#213](https://github.com/kolatts/foundry-gate/issues/213) stores both splits — the reconciliation

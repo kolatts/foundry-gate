@@ -19,7 +19,7 @@ public class CostEstimatorTests : InMemoryDatabaseTest
     [Fact]
     public async Task No_rate_card_row_is_an_empty_card()
     {
-        var card = await CreateEstimator().GetRateCardAsync(CancellationToken.None);
+        var card = await CreateEstimator().GetRateCardAsync(fresh: false, CancellationToken.None);
 
         Assert.Empty(card.Entries);
         Assert.Null(card.Estimate(1_000_000));
@@ -30,7 +30,7 @@ public class CostEstimatorTests : InMemoryDatabaseTest
     {
         await SeedRateCardAsync("""[{"modelPrefix":"*","inputPerMillion":3,"outputPerMillion":15}]""");
 
-        var card = await CreateEstimator().GetRateCardAsync(CancellationToken.None);
+        var card = await CreateEstimator().GetRateCardAsync(fresh: false, CancellationToken.None);
 
         Assert.Equal(9m, card.BlendedRatePerMillion);
         Assert.Equal(90m, card.Estimate(10_000_000));
@@ -43,7 +43,7 @@ public class CostEstimatorTests : InMemoryDatabaseTest
         // dashboard with no prices on it beats a dashboard that 500s over a price list.
         await SeedRateCardAsync("{ not a rate card }");
 
-        var card = await CreateEstimator().GetRateCardAsync(CancellationToken.None);
+        var card = await CreateEstimator().GetRateCardAsync(fresh: false, CancellationToken.None);
 
         Assert.Empty(card.Entries);
         Assert.Null(card.Estimate(1_000_000));
@@ -55,8 +55,8 @@ public class CostEstimatorTests : InMemoryDatabaseTest
         await SeedRateCardAsync("""[{"modelPrefix":"*","inputPerMillion":2,"outputPerMillion":2}]""");
         var estimator = CreateEstimator();
 
-        var first = await estimator.GetRateCardAsync(CancellationToken.None);
-        var second = await estimator.GetRateCardAsync(CancellationToken.None);
+        var first = await estimator.GetRateCardAsync(fresh: false, CancellationToken.None);
+        var second = await estimator.GetRateCardAsync(fresh: false, CancellationToken.None);
 
         // Same instance, not merely equal: the allocations list prices a whole page of rows, and one
         // configuration row per row would be the cost of the feature.

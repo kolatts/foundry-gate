@@ -5,18 +5,20 @@ using System.Text.Json.Serialization;
 namespace FoundryGate.Api.Services.Cost;
 
 /// <summary>
-/// One model's price, per million tokens, in whatever currency the fork bills in (#177). The
-/// <see cref="ModelPrefix"/> is matched against a deployment's model name by prefix, so
-/// <c>claude-opus</c> covers every Opus deployment without naming each version.
+/// One entry in the stored rate card: a price per million tokens, in whatever currency the fork
+/// bills in (#177).
 /// </summary>
 /// <remarks>
-/// The entry whose prefix is <see cref="RateCard.BlendedPrefix"/> (<c>*</c>) is the fallback, and it
-/// is the <em>only</em> entry anything reads today — see <see cref="RateCard.BlendedRatePerMillion"/>
-/// for why.
+/// <b>Only the <see cref="RateCard.BlendedPrefix"/> (<c>*</c>) entry is read today, and nothing
+/// matches on <see cref="ModelPrefix"/> at all.</b> Applying a per-model price needs a per-model
+/// token split, which the control plane does not store — so the named entries are parsed and
+/// validated, then ignored, until #213 lands the split that can use them. The field is here rather
+/// than added later because it is the shape of the stored configuration, and changing that shape
+/// afterwards would mean rewriting every fork's row.
 /// </remarks>
-/// <param name="ModelPrefix">Case-insensitive prefix of the model name, or <c>*</c> for the fallback.</param>
-/// <param name="InputPerMillion">Price per million prompt tokens. Non-negative.</param>
-/// <param name="OutputPerMillion">Price per million completion tokens. Non-negative.</param>
+/// <param name="ModelPrefix">Names the model this price is for — <c>*</c> for the fallback, the only one anything reads. See the remarks.</param>
+/// <param name="InputPerMillion">Price per million prompt tokens. Between 0 and <see cref="RateCard.MaxPricePerMillion"/>.</param>
+/// <param name="OutputPerMillion">Price per million completion tokens. Between 0 and <see cref="RateCard.MaxPricePerMillion"/>.</param>
 public record RateCardEntry(
     [property: JsonPropertyName("modelPrefix")] string ModelPrefix,
     [property: JsonPropertyName("inputPerMillion")] decimal InputPerMillion,
@@ -41,8 +43,8 @@ public record RateCardEntry(
 /// input and output prices cannot be applied separately. See
 /// <see cref="BlendedRatePerMillion"/>.</item>
 /// <item><b>There is no per-model split either.</b> The same total covers whatever mix of models the
-/// developer used, so only the <c>*</c> fallback entry can be applied. The per-model entries are
-/// stored and validated ahead of a reader that can use them — <b>#213</b> is that reader: the
+/// developer used, so only the <c>*</c> fallback entry can be applied and <c>modelPrefix</c> is
+/// matched against nothing. The named entries are validated ahead of a reader — <b>#213</b> is that reader: the
 /// reconciliation KQL already selects <c>PromptTokens</c>/<c>CompletionTokens</c> and sees
 /// <c>ModelName</c> on every row, so both splits are thrown away on the way into the database
 /// rather than missing at the source.</item>
@@ -58,6 +60,15 @@ public sealed class RateCard
 {
     /// <summary>The <see cref="RateCardEntry.ModelPrefix"/> of the fallback entry — the one blended rate everything uses today.</summary>
     public const string BlendedPrefix = "*";
+
+    /// <summary>
+    /// Ceiling on a single price, per million tokens. A guardrail, not a business rule: no real model
+    /// costs a million currency units per million tokens, and without an upper bound
+    /// <c>PUT /config/RateCard</c> would accept <c>decimal.MaxValue</c> — which then overflows the
+    /// blended-rate addition and turns <c>GET /quota/allocations/me</c>, the endpoint every
+    /// authenticated developer hits, into a <c>500</c> until someone edits the row back by hand.
+    /// </summary>
+    public const decimal MaxPricePerMillion = 1_000_000m;
 
     /// <summary>An unconfigured rate card: no entries, no estimates. What a fork ships with.</summary>
     public static readonly RateCard Empty = new([]);
@@ -90,7 +101,24 @@ public sealed class RateCard
         get
         {
             var fallback = Entries.FirstOrDefault(e => string.Equals(e.ModelPrefix, BlendedPrefix, StringComparison.Ordinal));
-            return fallback is null ? null : (fallback.InputPerMillion + fallback.OutputPerMillion) / 2m;
+            if (fallback is null)
+            {
+                return null;
+            }
+
+            // MaxPricePerMillion already makes this addition unoverflowable for anything Parse
+            // accepts. The catch is for the row Parse never saw — a seed script or a DBA writing
+            // SystemConfiguration directly — because this property is on the read path of
+            // GET /dashboard, /quota/allocations and /quota/allocations/me, and none of those may
+            // fail over a price list. Unknown, not zero: a zero would read as "free".
+            try
+            {
+                return (fallback.InputPerMillion + fallback.OutputPerMillion) / 2m;
+            }
+            catch (OverflowException)
+            {
+                return null;
+            }
         }
     }
 
@@ -98,10 +126,26 @@ public sealed class RateCard
     /// <paramref name="tokens"/> priced at <see cref="BlendedRatePerMillion"/>, or
     /// <see langword="null"/> when the fork has configured no fallback rate. Rounded to cents.
     /// </summary>
-    public decimal? Estimate(long tokens) =>
-        BlendedRatePerMillion is { } rate
-            ? Math.Round(tokens / 1_000_000m * rate, 2, MidpointRounding.AwayFromZero)
-            : null;
+    public decimal? Estimate(long tokens)
+    {
+        if (BlendedRatePerMillion is not { } rate)
+        {
+            return null;
+        }
+
+        // Same reasoning as BlendedRatePerMillion: a read path may not throw over a stored value.
+        // decimal is exact here — no binary rounding drift on money — and wide enough that a bounded
+        // rate over long.MaxValue tokens cannot reach its limit, so this only fires for a row that
+        // never went through Parse.
+        try
+        {
+            return Math.Round(tokens / 1_000_000m * rate, 2, MidpointRounding.AwayFromZero);
+        }
+        catch (OverflowException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Parses a stored <c>RateCard</c> value. An empty or whitespace value is
@@ -124,8 +168,13 @@ public sealed class RateCard
         {
             entries = JsonSerializer.Deserialize<RateCardEntry[]>(value, ParseOptions);
         }
-        catch (JsonException exception)
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
         {
+            // The two System.Text.Json throws: malformed JSON, and JSON that is well formed but
+            // cannot become a RateCardEntry[] (a string where a number belongs). Both are the
+            // admin's typo, so both become the ArgumentException PUT /config/{key} maps to a 400 —
+            // which also makes ArgumentException Parse's only escape, so CostEstimator's catch is
+            // total rather than nearly so.
             throw new ArgumentException(
                 $"The rate card must be a JSON array of {{ \"modelPrefix\", \"inputPerMillion\", \"outputPerMillion\" }} objects. {exception.Message}",
                 nameof(value),
@@ -157,6 +206,14 @@ public sealed class RateCard
                     $"Rate card entry '{entry.ModelPrefix}' has a negative price. 'inputPerMillion' and 'outputPerMillion' must be zero or more.",
                     nameof(value));
             }
+
+            if (entry.InputPerMillion > MaxPricePerMillion || entry.OutputPerMillion > MaxPricePerMillion)
+            {
+                throw new ArgumentException(
+                    $"Rate card entry '{entry.ModelPrefix}' prices a million tokens above {MaxPricePerMillion:N0}. "
+                    + "'inputPerMillion' and 'outputPerMillion' are prices per million tokens, not per token.",
+                    nameof(value));
+            }
         }
 
         var duplicate = entries
@@ -181,7 +238,8 @@ public sealed class RateCard
     /// <summary>The rule, as a sentence an admin can act on — appended to validation failures.</summary>
     public static string Describe() =>
         "A rate card is a JSON array of { \"modelPrefix\", \"inputPerMillion\", \"outputPerMillion\" } objects, "
-        + $"prices per million tokens and never negative, each prefix at most once. The entry with modelPrefix \"{BlendedPrefix}\" "
-        + "is the blended fallback every estimate is computed from; without it no cost is estimated. "
+        + $"prices per million tokens between 0 and {MaxPricePerMillion:N0}, each modelPrefix at most once. The entry with "
+        + $"modelPrefix \"{BlendedPrefix}\" is the blended fallback every estimate is computed from; without it no cost is "
+        + "estimated, and no other entry is read yet (issue #213). "
         + $"Example: [{{\"modelPrefix\":\"{BlendedPrefix}\",\"inputPerMillion\":{3m.ToString(CultureInfo.InvariantCulture)},\"outputPerMillion\":{15m.ToString(CultureInfo.InvariantCulture)}}}]";
 }

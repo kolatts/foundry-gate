@@ -261,7 +261,12 @@ public class DashboardPageTests : WebTestContext
         var page = RenderPage<Dashboard>(("RefreshInterval", TimeSpan.FromMilliseconds(20)));
         page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 2));
 
-        await DisposeComponentsAsync();
+        // Disposed through the page's own DisposeAsync on the renderer's dispatcher, like the
+        // sibling test two methods down — not through bUnit's DisposeComponentsAsync(), which does
+        // not reach a component rendered inside a RenderFragment and so never asked this page to
+        // stop at all (#203; see WebTestContext.DisposeRenderedPagesAsync). This test was reporting
+        // a real defect: the loop was still running because nothing had disposed the page.
+        await DisposeRenderedPagesAsync();
 
         // A timer that outlives its page keeps hitting an admin-only endpoint forever. Asserting
         // that by sampling the count once and again a fixed delay later made this test a race with
@@ -269,19 +274,16 @@ public class DashboardPageTests : WebTestContext
         // the count moves for a reason that is not the bug. Waiting for the count to stop moving,
         // and only then requiring it to stay still, tests "the loop stopped" rather than "the loop
         // was slower than 200 ms".
-        //
-        // Two samples were not enough of a settle (#203): a tick that had already reached
-        // InvokeAsync when Dispose ran still lands, and 50 ms of quiet either side of it looks
-        // like a stop. Requiring several consecutive identical samples closes that window, and the
-        // final check is then a real assertion rather than a coin toss — once the loop has stopped
-        // no further call can ever start, so a count that is stable stays stable.
         var settled = await SettledCallCountAsync("GetDashboardAsync");
 
+        // Deliberately longer than the settle window and 20x the tick: a loop that is still running
+        // makes ~20 more calls in here, so this is the assertion that the count stopped *climbing*,
+        // not merely that it paused.
         await Task.Delay(StabilityWindow);
         Assert.Equal(settled, Api.CallCount("GetDashboardAsync"));
     }
 
-    /// <summary>How long the count has to stay still after settling before the loop counts as stopped.</summary>
+    /// <summary>How long the count has to stay still after settling before the loop counts as stopped. 20x the test's tick.</summary>
     private static readonly TimeSpan StabilityWindow = TimeSpan.FromMilliseconds(400);
 
     /// <summary>Consecutive identical samples that count as "the loop has stopped calling".</summary>

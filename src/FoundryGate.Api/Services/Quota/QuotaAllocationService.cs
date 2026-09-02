@@ -77,7 +77,7 @@ public sealed class QuotaAllocationService(
             .ToPagedAsync(paging, cancellationToken);
 
         // One rate card for the whole page — it is a cached configuration read, not a per-row one.
-        var rateCard = await costEstimator.GetRateCardAsync(cancellationToken);
+        var rateCard = await costEstimator.GetRateCardAsync(fresh: false, cancellationToken);
 
         return new PagedResult<QuotaAllocationResponse>(
             [.. page.Items.Select(row => ToResponse(row, rateCard))],
@@ -101,7 +101,7 @@ public sealed class QuotaAllocationService(
         }
 
         var period = BillingPeriod.Current(timeProvider);
-        var rateCard = await costEstimator.GetRateCardAsync(cancellationToken);
+        var rateCard = await costEstimator.GetRateCardAsync(fresh: false, cancellationToken);
 
         var row = await FindRowAsync(user.UserId, period, cancellationToken);
         if (row is not null)
@@ -148,7 +148,7 @@ public sealed class QuotaAllocationService(
     public async Task<QuotaAllocationResponse?> FindUserAllocationAsync(int userId, CancellationToken cancellationToken)
     {
         var row = await FindRowAsync(userId, BillingPeriod.Current(timeProvider), cancellationToken);
-        return row is null ? null : ToResponse(row, await costEstimator.GetRateCardAsync(cancellationToken));
+        return row is null ? null : ToResponse(row, await costEstimator.GetRateCardAsync(fresh: false, cancellationToken));
     }
 
     /// <inheritdoc />
@@ -159,7 +159,7 @@ public sealed class QuotaAllocationService(
         var row = await FindRowAsync(userId, period, cancellationToken);
         if (row is not null)
         {
-            return ToResponse(row, await costEstimator.GetRateCardAsync(cancellationToken));
+            return ToResponse(row, await costEstimator.GetRateCardAsync(fresh: false, cancellationToken));
         }
 
         if (!await dbContext.Users.AnyAsync(u => u.UserId == userId, cancellationToken))

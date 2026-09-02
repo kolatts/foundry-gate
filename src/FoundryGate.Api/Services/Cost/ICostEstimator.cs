@@ -24,5 +24,19 @@ public interface ICostEstimator
     /// A malformed stored value never fails a read: it is logged and treated as unconfigured, because
     /// a dashboard that 500s over a price list is worse than one with no prices on it.
     /// </summary>
-    Task<RateCard> GetRateCardAsync(CancellationToken cancellationToken);
+    /// <param name="fresh">
+    /// Bypasses the cache and re-reads the row. <c>GET /dashboard?fresh=true</c> passes its own flag
+    /// through: an admin who has just corrected a price and hit Refresh must not be served the price
+    /// they came to replace, and a cache nested inside a cache would otherwise make the documented
+    /// escape hatch a lie.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<RateCard> GetRateCardAsync(bool fresh, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Drops the cached card. Called by <c>PUT /config/RateCard</c> once the write has committed, so
+    /// a corrected price is live on the next read rather than up to <see cref="CostEstimator.CacheDuration"/>
+    /// later — and never up to that plus the dashboard's own cache window.
+    /// </summary>
+    void Invalidate();
 }

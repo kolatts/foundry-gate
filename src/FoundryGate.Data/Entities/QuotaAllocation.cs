@@ -12,12 +12,24 @@ namespace FoundryGate.Data.Entities;
 /// reconciliation compares consumption against; it is not read on the request hot path.
 /// </summary>
 /// <remarks>
-/// The <c>(PeriodYear, PeriodMonth)</c> index backs <c>GET /quota/allocations</c>, whose every page
-/// filters on the current period; the unique index leads with <c>UserId</c> so it cannot serve that
-/// seek.
+/// <b>Indexes.</b> The unique index leads with <c>UserId</c> — it exists to make one allocation per
+/// user per period a database fact, and it also covers the FK — so it cannot serve a period seek.
+/// The second index does, and it is extended to <c>(PeriodYear, PeriodMonth, TierProductId,
+/// IsHardStopped)</c> rather than joined by two single-column indexes (#208 review): every read of
+/// this table is scoped to one period first — <c>GET /quota/allocations</c>, its
+/// <c>?tier=</c>/<c>?isHardStopped=</c> filters and every dashboard count — so the period columns
+/// have to lead, and a filter appended to them is a seek into a range this index already narrows.
+/// <para>
+/// A standalone index on <c>IsHardStopped</c> would be worth nothing: two distinct values over a
+/// table holding one row per active developer per month, which the optimizer would decline in favour
+/// of the period index anyway. As the trailing column of this one it costs nothing and is a residual
+/// predicate over a range already reduced to a single month. <c>TierProductId</c> earns its position
+/// (a fork ships three tiers and may add more) but sits behind the period columns for the same
+/// reason.
+/// </para>
 /// </remarks>
 [Index(nameof(UserId), nameof(PeriodYear), nameof(PeriodMonth), IsUnique = true)]
-[Index(nameof(PeriodYear), nameof(PeriodMonth))]
+[Index(nameof(PeriodYear), nameof(PeriodMonth), nameof(TierProductId), nameof(IsHardStopped))]
 public class QuotaAllocation
 {
     public int QuotaAllocationId { get; set; }

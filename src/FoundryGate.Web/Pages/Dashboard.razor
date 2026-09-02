@@ -2,6 +2,7 @@
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @using FoundryGate.Domain.Dashboard.Contracts
 @implements IDisposable
+@implements IAsyncDisposable
 @inject IFoundryGateApiClient ApiClient
 @inject ISnackbar Snackbar
 @inject DashboardStateService DashboardState
@@ -265,10 +266,24 @@ else
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
+                // Re-checked here, not only at the top of the loop: the tick we just took may have
+                // been waiting while Dispose ran, and InvokeAsync would then queue a fetch on behalf
+                // of a page that is already gone. Cancellation alone cannot close that window —
+                // WaitForNextTickAsync has already returned true by the time the token flips.
+                if (_disposed || ct.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 // A background refresh never nags: a transient failure keeps the last good numbers
                 // on screen rather than replacing them with an error the admin didn't ask for.
                 await InvokeAsync(async () =>
                 {
+                    if (_disposed)
+                    {
+                        return;
+                    }
+
                     await LoadAsync(showErrors: false);
                     StateHasChanged();
                 });
@@ -312,11 +327,32 @@ else
         }
     }
 
+    /// <summary>
+    /// Stops the refresh loop. <b>Idempotent, and implemented twice on purpose</b>: Blazor calls
+    /// <see cref="DisposeAsync"/> when a component offers both, other hosts and test harnesses call
+    /// <see cref="Dispose"/>, and a timer that outlives its page keeps hitting an admin-only endpoint
+    /// for the life of the tab. Whoever gets here first wins; the second call does nothing.
+    /// </summary>
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
+
+        // Cancel before disposing: the loop's token has to flip while it is still a live token, and
+        // the in-flight GET has to be cancelled so its reply cannot reach DashboardState.
         _pageLifetime.Cancel();
         _timer?.Dispose();
         _pageLifetime.Dispose();
+    }
+
+    /// <inheritdoc cref="Dispose" />
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return ValueTask.CompletedTask;
     }
 }

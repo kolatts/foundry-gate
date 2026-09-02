@@ -91,6 +91,33 @@ public class RateCardTests
     public void A_malformed_card_is_an_ArgumentException(string value) =>
         Assert.Throws<ArgumentException>(() => RateCard.Parse(value));
 
+    [Theory]
+    [InlineData("79228162514264337593543950335")] // decimal.MaxValue — the reviewer's probe
+    [InlineData("1000000.01")]
+    public void A_price_above_the_ceiling_is_refused(string price)
+    {
+        // Unbounded above, Parse accepted decimal.MaxValue and BlendedRatePerMillion then overflowed
+        // on the addition — turning GET /quota/allocations/me, which every authenticated developer
+        // hits, into a 500 until someone edited the row back by hand (#177 review).
+        var exception = Assert.Throws<ArgumentException>(() => RateCard.Parse(
+            $$"""[{"modelPrefix":"*","inputPerMillion":{{price}},"outputPerMillion":1}]"""));
+
+        Assert.Contains("per million tokens", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_ceiling_itself_is_accepted_and_prices_the_largest_possible_usage()
+    {
+        // The widest estimate this can ever be asked for: the highest price Parse allows over more
+        // tokens than any fork could burn. decimal is wide enough that it does not come close, which
+        // is why the bound above is enough to make every read path total.
+        var card = RateCard.Parse(
+            $$"""[{"modelPrefix":"*","inputPerMillion":{{RateCard.MaxPricePerMillion}},"outputPerMillion":{{RateCard.MaxPricePerMillion}}}]""");
+
+        Assert.Equal(RateCard.MaxPricePerMillion, card.BlendedRatePerMillion);
+        Assert.NotNull(card.Estimate(long.MaxValue));
+    }
+
     [Fact]
     public void A_repeated_prefix_is_refused_whatever_its_casing()
     {

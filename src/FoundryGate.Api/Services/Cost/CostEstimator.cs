@@ -22,9 +22,9 @@ public sealed class CostEstimator(
     public static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(30);
 
     /// <inheritdoc />
-    public async Task<RateCard> GetRateCardAsync(CancellationToken cancellationToken)
+    public async Task<RateCard> GetRateCardAsync(bool fresh, CancellationToken cancellationToken)
     {
-        if (cache.TryGetValue(CacheKey, out RateCard? cached) && cached is not null)
+        if (!fresh && cache.TryGetValue(CacheKey, out RateCard? cached) && cached is not null)
         {
             return cached;
         }
@@ -51,4 +51,7 @@ public sealed class CostEstimator(
         _ = cache.Set(CacheKey, card, CacheDuration);
         return card;
     }
+
+    /// <inheritdoc />
+    public void Invalidate() => cache.Remove(CacheKey);
 }
