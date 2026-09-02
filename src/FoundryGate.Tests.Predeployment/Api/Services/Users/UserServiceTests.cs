@@ -167,6 +167,7 @@ public class UserServiceTests : InMemoryDatabaseTest
             audit,
             writer,
             accessor,
+            TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
         var quotaResolution = new QuotaResolutionService(
@@ -453,6 +454,7 @@ public class UserServiceTests : InMemoryDatabaseTest
             new AuditService(Context, writer, accessor),
             writer,
             accessor,
+            TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
     }

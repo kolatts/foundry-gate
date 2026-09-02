@@ -1,4 +1,5 @@
 using System.Globalization;
+using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Security;
@@ -34,6 +35,7 @@ public sealed class ApimKeyService(
     IAuditService audit,
     IAuditWriter auditWriter,
     ICurrentUserAccessor currentUser,
+    RevealAnomalyOptions revealAnomaly,
     TimeProvider timeProvider,
     ILogger<ApimKeyService> logger) : IApimKeyService
 {
@@ -350,6 +352,7 @@ public sealed class ApimKeyService(
             TargetId(user),
             new { apimSubscriptionId = user.ApimSubscriptionId },
             cancellationToken);
+        await DetectRevealAnomalyAsync(user, cancellationToken);
         await dbContext.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation("Revealed APIM key for user {UserId}.", user.UserId);
@@ -489,6 +492,78 @@ public sealed class ApimKeyService(
             // invisible.
             logger.LogError(auditException, "Could not record the key.rotation-failed audit row for user {UserId}; the log line above is the only trail.", user.UserId);
         }
+    }
+
+    /// <summary>
+    /// The reveal anomaly signal (#180). The rate limiter on <c>POST /keys/me/reveal</c> stops a
+    /// <em>fast</em> drain; it does nothing about a patient one — four reveals a minute, every minute,
+    /// is well inside the cap and is not something a human does. So the reveal that crosses
+    /// <c>Security:RevealAnomaly:Threshold</c> inside the rolling window logs a Warning and adds a
+    /// <c>key.reveal-anomaly</c> row, which commits with the <c>key.revealed</c> row it describes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Counted per key, not per person.</b> The rows are matched on <c>TargetId</c> — the user whose
+    /// credential is being read — because the thing worth noticing is a credential being drained, and
+    /// that stays true whoever holds the token. Today the only reveal route is <c>/keys/me</c>, so the
+    /// actor and the target are always the same user; the actor goes in the details either way.
+    /// </para>
+    /// <para>
+    /// <b>Once per window.</b> Without the second query a drain past the threshold would write an
+    /// anomaly row for every subsequent reveal, which turns a signal into noise and buries the reveals
+    /// themselves in the trail. The window is rolling, so a drain that continues past it is reported
+    /// again — which is the right behaviour: it is still happening.
+    /// </para>
+    /// <para>
+    /// The current reveal counts. Its row is on the change tracker and not yet in the table, so the
+    /// query's answer is one short by construction; the alternative — saving first — would split the
+    /// reveal and its anomaly across two transactions.
+    /// </para>
+    /// </remarks>
+    private async Task DetectRevealAnomalyAsync(User user, CancellationToken cancellationToken)
+    {
+        var since = timeProvider.GetUtcNow() - revealAnomaly.Window;
+        var targetId = TargetId(user);
+
+        var revealCount = 1 + await dbContext.AuditLogs.AsNoTracking()
+            .CountAsync(
+                row => row.Action == AuditActions.KeyRevealed
+                    && row.TargetType == AuditTargetTypes.ApiKey
+                    && row.TargetId == targetId
+                    && row.OccurredDate >= since,
+                cancellationToken);
+
+        if (revealCount < revealAnomaly.Threshold)
+        {
+            return;
+        }
+
+        var alreadyReported = await dbContext.AuditLogs.AsNoTracking()
+            .AnyAsync(
+                row => row.Action == AuditActions.KeyRevealAnomaly
+                    && row.TargetType == AuditTargetTypes.ApiKey
+                    && row.TargetId == targetId
+                    && row.OccurredDate >= since,
+                cancellationToken);
+
+        if (alreadyReported)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "User {UserId}'s APIM key has been revealed {RevealCount} times in the last {WindowMinutes} minute(s), at or past the configured threshold of {Threshold} (Security:RevealAnomaly). A rate limiter does not catch a drain this patient; check whether the developer's access token is compromised.",
+            user.UserId,
+            revealCount,
+            revealAnomaly.WindowMinutes,
+            revealAnomaly.Threshold);
+
+        _ = await audit.LogAsync(
+            AuditActions.KeyRevealAnomaly,
+            AuditTargetTypes.ApiKey,
+            targetId,
+            new { revealCount, threshold = revealAnomaly.Threshold, windowMinutes = revealAnomaly.WindowMinutes },
+            cancellationToken);
     }
 
     /// <summary>

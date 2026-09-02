@@ -592,6 +592,7 @@ public class UserLifecycleServiceTests : InMemoryDatabaseTest
             audit,
             writer,
             accessor,
+            TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
         var tierMapper = TestGatewayTiers.Mapper();

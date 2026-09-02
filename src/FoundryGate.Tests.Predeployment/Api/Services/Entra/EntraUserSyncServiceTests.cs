@@ -439,6 +439,7 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
             audit,
             writer,
             accessor,
+            TestSecurityOptions.RevealAnomaly(),
             _timeProvider,
             NullLogger<ApimKeyService>.Instance);
         var tierMapper = TestGatewayTiers.Mapper();

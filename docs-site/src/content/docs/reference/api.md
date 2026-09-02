@@ -342,8 +342,8 @@ transitions whose body is not the resource, matching `POST /users/{id}/activate`
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/keys/me` | Any | Own key info (masked, last 4 visible; `isProvisioned: false` when none). Served from a stored hint — no decryption |
-| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. Rate-limited: **5 per minute per user**. `404` when no key; `429` over the limit |
-| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. Rate-limited: **3 per minute per user**. `404` no key; `409` if the APIM subscription vanished; `429` over the limit |
+| `POST` | `/keys/me/reveal` | Any | Decrypt and return own full key once. Audited (`key.revealed`), never cached. Rate-limited: **5 per minute per user** by default (`Security:RateLimits:Reveal`). `404` when no key; `429` over the limit |
+| `POST` | `/keys/me/rotate` | Any | Rotate own key — regenerates **both** APIM keys (primary and never-issued secondary), returns the new primary once. Rate-limited: **3 per minute per user** by default (`Security:RateLimits:Rotate`). `404` no key; `409` if the APIM subscription vanished; `429` over the limit |
 | `POST` | `/keys/{userId}/rotate` | Admin | Rotate any user's key (same semantics) |
 | `POST` | `/keys/{userId}/provision` | Admin | Provision a key for an active user with none, under the tier **their quota resolves to** (no `?tier=`: a budget *is* a tier, so set the quota to change the product). Returns plaintext once. `409` key exists or user deactivated; reuses an orphaned APIM subscription with fresh keys |
 | `DELETE` | `/keys/{userId}` | Admin | Revoke key only: APIM subscription deleted, stored key cleared, `key.revoked` audited. **User stays active** and can be re-provisioned; `204` even when no key existed. Deactivation is `POST /users/{id}/deactivate` |
@@ -351,6 +351,21 @@ transitions whose body is not the resource, matching `POST /users/{id}/activate`
 Callers of every `/keys/me` route must already have a FoundryGate user row (`GET /users/me` provisions one) — otherwise `403`. The plaintext key is stored encrypted (Key Vault RSA key wrapping; see [Configuration](/reference/configuration/)) and appears in exactly one response per mint or reveal. Provisioning is race-safe: two concurrent `provision` calls for one user cannot both mint — the second gets `409`.
 
 **Rate limits on the `/me` routes.** Reveal hands back the plaintext credential and rotate mints a new one, so a leaked bearer token could otherwise replay either indefinitely with nothing to show for it but a growing run of `key.revealed` audit rows. Both are capped per **caller identity** (the token's `oid`, not the caller's IP address — the UI sits behind a shared egress, so an address limit would throttle a whole office or nobody): 5 reveals and 3 rotations per minute. Over the limit is a `429` with a `Retry-After` header and the usual ProblemDetails body. The admin routes (`/keys/{userId}/rotate`, `/keys/{userId}/provision`, `DELETE /keys/{userId}`) are deliberately uncapped: an admin rotating a compromised team's keys is exactly the traffic a limit would get in the way of, and none of them discloses the caller's own credential.
+
+The numbers are **configuration**, not constants: `Security:RateLimits:Reveal` and
+`Security:RateLimits:Rotate` each carry a `PermitLimit` and a `WindowSeconds`, defaulting to exactly
+the values above, so a fork whose developers work differently retunes them without recompiling
+([#181](https://github.com/kolatts/foundry-gate/issues/181)). Both are validated at startup.
+
+**The anomaly signal.** A limiter stops a *fast* drain and does nothing about a patient one — four
+reveals a minute, every minute, is well inside the cap and is not something a human does. So the
+reveal that pushes a key past `Security:RevealAnomaly:Threshold` (default **10**) inside
+`Security:RevealAnomaly:WindowMinutes` (default **60**) logs a Warning and writes a
+**`key.reveal-anomaly`** audit row alongside the `key.revealed` row that triggered it, carrying the
+count, the threshold and the window. It is written **once per window** — a continuing drain is
+reported again after the window rolls, which is correct, but every reveal does not get its own row.
+The developer's request still succeeds: this is a signal for whoever reads the trail, not a second
+limit ([#180](https://github.com/kolatts/foundry-gate/issues/180)).
 
 **Rotation is committed once APIM has regenerated.** The developer's old key is dead the instant the gateway accepts the regeneration of the *primary*, so everything after that point — reading the new key back, storing it, the `key.rotated` audit row — completes even if the client disconnects. A rotation that fails after that point restores the previous stored values, logs at Error and writes a `key.rotation-failed` row naming the remedy (rotate again, or revoke and re-provision), rather than leaving a key nobody can decrypt. A request abandoned *during* that regeneration gets the same row, marked `regenerationConfirmed: false` — the gateway never said whether it acted, so the stored key is possibly rather than definitely stale.
 

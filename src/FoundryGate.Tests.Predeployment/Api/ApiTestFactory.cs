@@ -1,3 +1,4 @@
+using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Foundry;
 using FoundryGate.Core.Gateway;
 using FoundryGate.Data;
@@ -35,7 +36,7 @@ namespace FoundryGate.Tests.Predeployment.Api;
 /// rather than asserting on absolute counts. <see cref="TimeProvider"/> is the app's clock; move it
 /// to control anything time-dependent (quota periods, audit timestamps).
 /// </remarks>
-public sealed class ApiTestFactory : WebApplicationFactory<Program>
+public class ApiTestFactory : WebApplicationFactory<Program>
 {
     private static readonly DateTimeOffset DefaultNow = new(2026, 9, 1, 12, 0, 0, TimeSpan.Zero);
 
@@ -67,6 +68,13 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     /// shared by the class's tests, so use unique deployment names.
     /// </summary>
     public FakeFoundryManagementClient FoundryClient { get; } = CreateFoundryClient();
+
+    /// <summary>
+    /// The host's <c>Security:RateLimits</c> as bound (#181), so the rate-limit tests read the permit
+    /// counts and window the host is actually enforcing instead of restating them in a
+    /// <c>private const</c> that has to be kept in step with <c>RateLimiterExtensions</c> by hand.
+    /// </summary>
+    public KeyRateLimitOptions RateLimits => Services.GetRequiredService<AppSettings>().Security.RateLimits;
 
     /// <summary>
     /// The in-memory APIM standing in for the management plane (<see cref="IApimManagementClient"/>):
@@ -204,6 +212,8 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             ["Gateway:ModelAliases:2:DeploymentName"] = "claude-opus-4-5",
             ["Gateway:ModelAliases:2:Provider"] = "anthropic",
         };
+        ConfigureSettings(settings);
+
         foreach (var (key, value) in settings)
         {
             _ = builder.UseSetting(key, value);
@@ -267,6 +277,18 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         ReferenceDataSeeder.SeedAsync(dbContext).GetAwaiter().GetResult();
 
         return host;
+    }
+
+    /// <summary>
+    /// Last chance for a derived factory to add or replace a host setting before it reaches
+    /// <c>UseSetting</c> — the only place configuration can be changed and still be seen by
+    /// <c>Program.cs</c>'s <c>Configuration.Get&lt;AppSettings&gt;()</c> (CONVENTIONS.md: never
+    /// <c>ConfigureAppConfiguration</c>). Used by the rate-limit tests to shorten a window rather than
+    /// race a real one.
+    /// </summary>
+    /// <param name="settings">The factory's own settings, keyed by configuration path.</param>
+    protected virtual void ConfigureSettings(IDictionary<string, string> settings)
+    {
     }
 
     private static FakeFoundryManagementClient CreateFoundryClient()
