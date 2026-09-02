@@ -73,7 +73,8 @@ public sealed class EntraGroupSyncService(
 
         // The whole user table by oid, like EntraUserSyncService: a group can hold thousands of members
         // and a `WHERE EntraObjectId IN (...)` over that set would blow past the provider's parameter
-        // limit. Case-insensitive because oids are GUID strings whose casing varies by source.
+        // limit. Case-insensitive because oids are GUID strings whose casing varies by source. Read once
+        // per group, so SyncAllAsync reads it once per linked group — hoisting it to the run is #149.
         var usersByOid = await dbContext.Users
             .Select(user => new UserRow(user.UserId, user.EntraObjectId, user.IsActive))
             .ToDictionaryAsync(row => row.EntraObjectId, StringComparer.OrdinalIgnoreCase, cancellationToken);

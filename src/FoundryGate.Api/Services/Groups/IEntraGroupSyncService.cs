@@ -51,7 +51,8 @@ public interface IEntraGroupSyncService
     /// Reconciles every group that has an <c>EntraGroupId</c>, in group-id order, one unit of work
     /// each. Groups without a link are not touched and do not appear in the result. A directory
     /// failure part-way through stops the run — the groups already reconciled stay reconciled, and
-    /// re-running is idempotent.
+    /// re-running is idempotent; whether to isolate failures per group instead, and to share one user
+    /// map across the loop, is issue #149.
     /// </summary>
     /// <exception cref="ArgumentException">Entra is disabled on this host and at least one group is linked (→ 400).</exception>
     Task<IReadOnlyList<GroupSyncResult>> SyncAllAsync(CancellationToken cancellationToken);

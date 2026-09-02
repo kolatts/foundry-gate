@@ -57,8 +57,8 @@ public interface IGroupService
     /// Updates name, description and quota policy. A change to <c>MonthlyTokenQuota</c> or
     /// <c>IsUnlimited</c> re-resolves every active member. <c>EntraGroupId</c> is deliberately not
     /// updatable — re-pointing a synced group at a different directory group would silently rewrite
-    /// its whole roster on the next sync; delete and recreate instead. Audited as <c>group.updated</c>
-    /// with the before/after values.
+    /// its whole roster on the next sync; delete and recreate instead. Whether a guarded
+    /// re-link should exist is issue #150. Audited as <c>group.updated</c> with the before/after values.
     /// </summary>
     /// <exception cref="KeyNotFoundException">No such group (→ 404).</exception>
     /// <exception cref="ArgumentException">The quota is not a configured tier cap (→ 400).</exception>
