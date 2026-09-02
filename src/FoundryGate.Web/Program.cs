@@ -23,6 +23,10 @@ builder.Services.AddMsalAuthentication(options =>
 });
 builder.Services.AddCascadingAuthenticationState();
 
+// Pending-request count published by /dashboard and consumed by the nav badge (#54). Scoped
+// rather than singleton — see DashboardStateService's remarks.
+builder.Services.AddScoped<DashboardStateService>();
+
 builder.Services.AddMudServices(config =>
 {
     config.SnackbarConfiguration.PositionClass = MudBlazor.Defaults.Classes.Position.BottomRight;

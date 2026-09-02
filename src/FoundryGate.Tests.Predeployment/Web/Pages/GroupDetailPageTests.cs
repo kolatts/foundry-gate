@@ -17,7 +17,7 @@ public class GroupDetailPageTests : WebTestContext
     public GroupDetailPageTests()
     {
         SignInAsAdmin();
-        Api.ArrangeTiers(WebTestData.Tiers);
+        Api.ArrangeTiers(WebTestData.Tiers());
     }
 
     private IRenderedComponent<Microsoft.AspNetCore.Components.IComponent> RenderDetail(GroupResponse group, params GroupMemberResponse[] members)
@@ -30,9 +30,9 @@ public class GroupDetailPageTests : WebTestContext
     public void Renders_the_group_and_its_roster()
     {
         var page = RenderDetail(
-            WebTestData.Group(groupId: 7, name: "Platform"),
-            WebTestData.Member(userId: 1, displayName: "Ada Lovelace"),
-            WebTestData.Member(userId: 2, displayName: "Grace Hopper"));
+            AdminTestData.Group(groupId: 7, name: "Platform"),
+            AdminTestData.Member(userId: 1, displayName: "Ada Lovelace"),
+            AdminTestData.Member(userId: 2, displayName: "Grace Hopper"));
 
         page.WaitForAssertion(() =>
         {
@@ -45,7 +45,7 @@ public class GroupDetailPageTests : WebTestContext
     [Fact]
     public void A_manual_group_offers_the_add_and_remove_controls()
     {
-        var page = RenderDetail(WebTestData.Group(groupId: 7), WebTestData.Member(userId: 1));
+        var page = RenderDetail(AdminTestData.Group(groupId: 7), AdminTestData.Member(userId: 1));
 
         page.WaitForAssertion(() =>
         {
@@ -59,7 +59,7 @@ public class GroupDetailPageTests : WebTestContext
     {
         // The API answers 409 for a membership edit on a linked group, because the next sync
         // would undo it. Offering the button and then failing would be worse than not offering it.
-        var page = RenderDetail(WebTestData.Group(groupId: 7, entraGroupId: EntraGroupId), WebTestData.Member(userId: 1));
+        var page = RenderDetail(AdminTestData.Group(groupId: 7, entraGroupId: EntraGroupId), AdminTestData.Member(userId: 1));
 
         page.WaitForAssertion(() =>
         {
@@ -72,7 +72,7 @@ public class GroupDetailPageTests : WebTestContext
     [Fact]
     public void Only_an_entra_linked_group_offers_a_sync_button()
     {
-        var manual = RenderDetail(WebTestData.Group(groupId: 7));
+        var manual = RenderDetail(AdminTestData.Group(groupId: 7));
         manual.WaitForAssertion(() => Assert.NotNull(manual.Find("[data-testid=group-save]")));
         Assert.Empty(manual.FindAll("[data-testid=group-sync]"));
     }
@@ -82,7 +82,7 @@ public class GroupDetailPageTests : WebTestContext
     {
         Api.GroupSyncResult = ApiCallResult<GroupSyncResult>.Ok(new GroupSyncResult(7, AddedCount: 2, RemovedCount: 1, SkippedUnknownUserCount: 3));
 
-        var page = RenderDetail(WebTestData.Group(groupId: 7, entraGroupId: EntraGroupId));
+        var page = RenderDetail(AdminTestData.Group(groupId: 7, entraGroupId: EntraGroupId));
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=group-sync]")));
 
         page.Find("[data-testid=group-sync]").Click();
@@ -99,7 +99,7 @@ public class GroupDetailPageTests : WebTestContext
     [Fact]
     public void Removing_a_member_is_gated_by_the_confirmation()
     {
-        var page = RenderDetail(WebTestData.Group(groupId: 7), WebTestData.Member(userId: 1));
+        var page = RenderDetail(AdminTestData.Group(groupId: 7), AdminTestData.Member(userId: 1));
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=group-remove-1]")));
 
         page.Find("[data-testid=group-remove-1]").Click();
@@ -111,7 +111,7 @@ public class GroupDetailPageTests : WebTestContext
     [Fact]
     public void Confirming_removes_the_member()
     {
-        var page = RenderDetail(WebTestData.Group(groupId: 7), WebTestData.Member(userId: 1));
+        var page = RenderDetail(AdminTestData.Group(groupId: 7), AdminTestData.Member(userId: 1));
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=group-remove-1]")));
 
         page.Find("[data-testid=group-remove-1]").Click();
@@ -123,7 +123,7 @@ public class GroupDetailPageTests : WebTestContext
     [Fact]
     public void Deleting_a_group_with_members_forces_and_says_what_that_costs()
     {
-        var page = RenderDetail(WebTestData.Group(groupId: 7, memberCount: 4), WebTestData.Member(userId: 1));
+        var page = RenderDetail(AdminTestData.Group(groupId: 7, memberCount: 4), AdminTestData.Member(userId: 1));
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=group-delete]")));
 
         page.Find("[data-testid=group-delete]").Click();
@@ -138,7 +138,7 @@ public class GroupDetailPageTests : WebTestContext
     [Fact]
     public void Deleting_an_empty_group_does_not_force()
     {
-        var page = RenderDetail(WebTestData.Group(groupId: 7, memberCount: 0));
+        var page = RenderDetail(AdminTestData.Group(groupId: 7, memberCount: 0));
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=group-delete]")));
 
         page.Find("[data-testid=group-delete]").Click();

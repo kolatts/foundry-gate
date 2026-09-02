@@ -1,4 +1,5 @@
 using Bunit;
+using Bunit.Rendering;
 using Bunit.TestDoubles;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Web.Services;
@@ -10,65 +11,69 @@ using MudBlazor.Services;
 namespace FoundryGate.Tests.Predeployment.Web;
 
 /// <summary>
-/// Base for every Blazor component test: a bUnit renderer wired the way
-/// <c>FoundryGate.Web</c>'s Program.cs wires the real app — MudBlazor's services, an
-/// <see cref="IFoundryGateApiClient"/> that answers from memory instead of HTTP, bUnit's fake
-/// authentication state, and loose JS interop so MudBlazor's popovers, scroll listeners and
-/// viewport observers don't need a browser.
+/// The shared bUnit host for every FoundryGate.Web component test: MudBlazor's services, a
+/// <see cref="FakeFoundryGateApiClient"/> behind <see cref="IFoundryGateApiClient"/>, the scoped
+/// <see cref="DashboardStateService"/> the nav badge reads, and JSInterop in loose mode (MudBlazor
+/// components call into JS on render — strict mode would fail every test for reasons that have
+/// nothing to do with the component under test).
 /// </summary>
 /// <remarks>
-/// Pages are rendered with <c>RenderPage</c> rather than <c>RenderComponent</c>, and it returns
-/// the <em>root</em>: MudBlazor's dialogs render inside <see cref="MudDialogProvider"/>, which
-/// sits beside the page rather than inside it, so a test that clicks "Delete" and expects a
-/// confirmation has to look at the whole tree. <c>root.FindComponent&lt;TPage&gt;()</c> reaches
-/// the page itself when a test needs it.
+/// Derive a test class from this and call <see cref="SignInAsDeveloper"/> or
+/// <see cref="SignInAsAdmin"/> before rendering anything that reads authentication state.
 /// </remarks>
-public abstract class WebTestContext : BunitContext, IAsyncLifetime
+public class WebTestContext : BunitContext, IAsyncLifetime
 {
     protected WebTestContext()
     {
-        // MudBlazor's own registration, minus the snackbar position the app sets (nothing here
-        // renders a real snackbar host).
-        Services.AddMudServices();
-        Services.AddSingleton<IFoundryGateApiClient>(Api);
-
-        // MudBlazor calls into JS on almost every component's first render (popover anchoring,
-        // resize observers, focus traps). Loose mode answers all of it with defaults.
         JSInterop.Mode = JSRuntimeMode.Loose;
 
-        Authorization = AddAuthorization();
+        Services.AddMudServices();
+        Services.AddSingleton<IFoundryGateApiClient>(Api);
+        Services.AddScoped<DashboardStateService>();
     }
 
-    /// <summary>The in-memory API the components under test talk to. Arrange on it before rendering.</summary>
+    // Some MudBlazor services (KeyInterceptorService) implement IAsyncDisposable only, and a
+    // container holding one refuses synchronous disposal. Implementing IAsyncLifetime makes xUnit
+    // tear the context down through DisposeAsync instead of Dispose.
+    Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
+
+    async Task IAsyncLifetime.DisposeAsync() => await DisposeAsync();
+
+    /// <summary>The canned API this context's components talk to. Set its result properties before rendering.</summary>
     public FakeFoundryGateApiClient Api { get; } = new();
 
-    /// <summary>bUnit's authentication/authorization double, behind <c>AuthorizeView</c> and <c>[Authorize]</c>.</summary>
-    protected BunitAuthorizationContext Authorization { get; }
+    /// <summary>Snackbar messages raised during the test, in the order they were added.</summary>
+    protected IEnumerable<Snackbar> Snackbars => Services.GetRequiredService<ISnackbar>().ShownSnackbars;
 
-    /// <summary>Signs in a caller holding <see cref="RoleNames.Admin"/> — what every admin page requires.</summary>
-    protected void SignInAsAdmin(string displayName = "Ada Admin")
+    /// <summary>Signs a plain developer in — authenticated, no roles.</summary>
+    protected BunitAuthorizationContext SignInAsDeveloper(string name = "Dev Eloper")
     {
-        Authorization.SetAuthorized(displayName);
-        Authorization.SetRoles(RoleNames.Admin);
+        var authorization = AddAuthorization();
+        _ = authorization.SetAuthorized(name);
+        return authorization;
     }
 
-    /// <summary>Signs in an authenticated caller with no roles — a developer.</summary>
-    protected void SignInAsDeveloper(string displayName = "Dev Eloper") => Authorization.SetAuthorized(displayName);
-
-    /// <summary>Leaves the caller unauthenticated.</summary>
-    protected void SignOut() => Authorization.SetNotAuthorized();
+    /// <summary>Signs an administrator in — authenticated, holding <see cref="RoleNames.Admin"/>.</summary>
+    protected BunitAuthorizationContext SignInAsAdmin(string name = "Ada Admin")
+    {
+        var authorization = AddAuthorization();
+        _ = authorization.SetAuthorized(name);
+        _ = authorization.SetRoles(RoleNames.Admin);
+        return authorization;
+    }
 
     /// <summary>
-    /// Renders a page alongside MudBlazor's dialog and popover providers and returns the root, so
-    /// dialogs the page opens are part of the same tree and can be found and clicked.
+    /// Renders <typeparamref name="TPage"/> under MudBlazor's popover and dialog providers, the way
+    /// <c>Layout/MainLayout</c> does in the app, and returns the <em>whole</em> tree. Both matter:
+    /// an inline <c>MudDialog</c> (the rotate-key confirm, the config diff) is hosted by
+    /// <c>MudDialogProvider</c> and therefore renders as a sibling of the page, so a result scoped
+    /// to the page component alone can neither see the dialog nor click its buttons.
     /// </summary>
-    /// <param name="parameters">Route/component parameters, e.g. the <c>Id</c> of a detail page.</param>
-    protected IRenderedComponent<IComponent> RenderPage<TPage>(params (string Name, object? Value)[] parameters)
+    /// <param name="parameters">Parameters to pass to the page, as <c>(name, value)</c> pairs.</param>
+    protected IRenderedComponent<ContainerFragment> RenderPage<TPage>(params (string Name, object? Value)[] parameters)
         where TPage : IComponent
     {
         ArgumentNullException.ThrowIfNull(parameters);
-
-        var attributes = parameters.ToDictionary(p => p.Name, p => p.Value);
 
         return Render(builder =>
         {
@@ -76,26 +81,29 @@ public abstract class WebTestContext : BunitContext, IAsyncLifetime
             builder.CloseComponent();
             builder.OpenComponent<MudDialogProvider>(1);
             builder.CloseComponent();
+
             builder.OpenComponent<TPage>(2);
-            builder.AddMultipleAttributes(3, attributes!);
+
+            // ASP0006 wants literal sequence numbers so the diffing algorithm can rely on source
+            // order. This fragment is built from a runtime array rather than source, so there is no
+            // source order to encode — and the tree is rendered once per test and never re-diffed.
+#pragma warning disable ASP0006
+            var sequence = 3;
+            foreach (var (name, value) in parameters)
+            {
+                builder.AddComponentParameter(sequence++, name, value);
+            }
+#pragma warning restore ASP0006
+
             builder.CloseComponent();
         });
     }
 
-    Task IAsyncLifetime.InitializeAsync() => Task.CompletedTask;
-
-    /// <summary>
-    /// MudBlazor registers services that only implement <see cref="IAsyncDisposable"/>
-    /// (<c>PointerEventsNoneService</c> among them), and a synchronous container teardown throws
-    /// on those. xUnit disposes an <see cref="IAsyncLifetime"/> test class asynchronously first,
-    /// so the real teardown happens here and <see cref="Dispose(bool)"/> is left with nothing to
-    /// do.
-    /// </summary>
-    async Task IAsyncLifetime.DisposeAsync() => await DisposeAsync();
-
-    /// <inheritdoc />
-    protected override void Dispose(bool disposing)
+    /// <summary>Leaves the caller signed out.</summary>
+    protected BunitAuthorizationContext SignOut()
     {
-        // Deliberately empty — see IAsyncLifetime.DisposeAsync above.
+        var authorization = AddAuthorization();
+        _ = authorization.SetNotAuthorized();
+        return authorization;
     }
 }

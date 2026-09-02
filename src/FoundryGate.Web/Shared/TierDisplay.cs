@@ -11,11 +11,18 @@ namespace FoundryGate.Web.Shared;
 /// would otherwise appear.
 /// </summary>
 /// <remarks>
+/// Overlaps <c>FoundryGate.Web.Services.QuotaDisplay</c>, which the developer surface (#49-#55)
+/// wrote in parallel: that one names a tier from its product id and formats a token count as
+/// "5,000,000", this one names a tier from a stored quota and formats it as "5M tokens". Two
+/// formats for the same number in one app is a bug, tracked as #188 — merging them is a
+/// mechanical move once both waves have landed, since each half is directly unit-tested.
+/// <para>
 /// A monthly budget is either unlimited or exactly one configured tier cap
 /// (fable-refactor-log.md D-013) — <c>GET /quota/tiers</c> is the whole vocabulary. Values
 /// that predate a tier change still exist in the database, and the API resolves those upward
 /// rather than failing (<c>IsGatewayCapped</c>), so <see cref="Describe"/> never throws: an
 /// unmatched number is rendered as itself with a note, not swallowed.
+/// </para>
 /// </remarks>
 public static class TierDisplay
 {

@@ -16,15 +16,15 @@ public class GroupsPageTests : WebTestContext
     public GroupsPageTests()
     {
         SignInAsAdmin();
-        Api.ArrangeTiers(WebTestData.Tiers);
+        Api.ArrangeTiers(WebTestData.Tiers());
     }
 
     [Fact]
     public void Renders_member_count_budget_tier_and_the_roster_source()
     {
         Api.ArrangeGroups(
-            WebTestData.Group(groupId: 1, name: "Platform", memberCount: 4, monthlyTokenQuota: 25_000_000),
-            WebTestData.Group(groupId: 2, name: "Data", entraGroupId: "9f0d3c5a-0000-0000-0000-000000000001"));
+            AdminTestData.Group(groupId: 1, name: "Platform", memberCount: 4, monthlyTokenQuota: 20_000_000),
+            AdminTestData.Group(groupId: 2, name: "Data", entraGroupId: "9f0d3c5a-0000-0000-0000-000000000001"));
 
         var page = RenderPage<Groups>();
 
@@ -76,7 +76,7 @@ public class GroupsPageTests : WebTestContext
     [Fact]
     public void The_create_form_sends_what_was_typed()
     {
-        Api.CreateGroupResult = ApiCallResult<GroupResponse>.Ok(WebTestData.Group(groupId: 9, name: "Platform"));
+        Api.CreateGroupResult = ApiCallResult<GroupResponse>.Ok(AdminTestData.Group(groupId: 9, name: "Platform"));
 
         var page = RenderPage<GroupNew>();
         page.Find("input[data-testid=group-name]").Input("Platform");

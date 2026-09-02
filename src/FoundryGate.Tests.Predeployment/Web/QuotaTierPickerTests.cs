@@ -16,7 +16,7 @@ public class QuotaTierPickerTests : WebTestContext
     [Fact]
     public void Offers_no_numeric_input_at_all()
     {
-        var picker = Render<QuotaTierPicker>(p => p.Add(x => x.Tiers, WebTestData.Tiers));
+        var picker = Render<QuotaTierPicker>(p => p.Add(x => x.Tiers, WebTestData.Tiers()));
 
         Assert.Empty(picker.FindAll("input[type=number]"));
     }
@@ -24,7 +24,7 @@ public class QuotaTierPickerTests : WebTestContext
     [Fact]
     public void Lists_every_capped_tier_by_display_name_with_its_cap()
     {
-        var picker = Render<QuotaTierPicker>(p => p.Add(x => x.Tiers, WebTestData.Tiers));
+        var picker = Render<QuotaTierPicker>(p => p.Add(x => x.Tiers, WebTestData.Tiers()));
 
         // MudSelect renders its items into a popover, so they are components in the render tree
         // rather than markup here. Unlimited is the switch, not an item: the select offers
@@ -43,7 +43,7 @@ public class QuotaTierPickerTests : WebTestContext
         long? quota = 5_000_000;
 
         var picker = Render<QuotaTierPicker>(p => p
-            .Add(x => x.Tiers, WebTestData.Tiers)
+            .Add(x => x.Tiers, WebTestData.Tiers())
             .Add(x => x.IsUnlimited, false)
             .Add(x => x.MonthlyTokenQuota, 5_000_000L)
             .Add(x => x.IsUnlimitedChanged, value => isUnlimited = value)
@@ -59,7 +59,7 @@ public class QuotaTierPickerTests : WebTestContext
     public void The_tier_select_is_disabled_while_unlimited_is_on()
     {
         var picker = Render<QuotaTierPicker>(p => p
-            .Add(x => x.Tiers, WebTestData.Tiers)
+            .Add(x => x.Tiers, WebTestData.Tiers())
             .Add(x => x.IsUnlimited, true));
 
         Assert.True(picker.Find(".mud-select input").HasAttribute("disabled"));

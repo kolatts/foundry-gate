@@ -1,7 +1,5 @@
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Foundry.Contracts;
-using FoundryGate.Domain.Quota.Contracts;
-using FoundryGate.Domain.Requests.Contracts;
 using FoundryGate.Domain.Users.Contracts;
 
 namespace FoundryGate.Web.Services;
@@ -23,13 +21,6 @@ public partial interface IFoundryGateApiClient
     /// </summary>
     Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(UserListQuery query, PagedRequest paging, CancellationToken ct = default);
 
-    /// <summary>
-    /// <c>GET /users/{id}</c> — the list row plus group memberships, the current-period
-    /// allocation (null when none has been resolved this month) and the masked key. This is
-    /// what <c>/users/{id}</c> renders; the shell's <c>GetUserAsync</c> returns only the row.
-    /// </summary>
-    Task<ApiCallResult<UserDetailResponse>> GetUserDetailAsync(int userId, CancellationToken ct = default);
-
     // Groups — api.md §Groups
 
     /// <summary>
@@ -38,25 +29,6 @@ public partial interface IFoundryGateApiClient
     /// plain delete and lets the API answer 409.
     /// </summary>
     Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, bool force, CancellationToken ct = default);
-
-    // Quota — api.md §Quota
-
-    /// <summary>
-    /// <c>GET /quota/tiers</c> — the configured budget tiers. A quota is either unlimited or
-    /// exactly one of these caps (fable-refactor-log D-013), so every quota editor in the admin
-    /// UI is a pick from this list and every quota number is rendered as its
-    /// <see cref="QuotaTierResponse.DisplayName"/>.
-    /// </summary>
-    Task<ApiCallResult<IReadOnlyList<QuotaTierResponse>>> GetQuotaTiersAsync(CancellationToken ct = default);
-
-    // Quota increase requests — api.md §Quota Increase Requests
-
-    /// <summary>
-    /// <c>GET /requests?status=&amp;userId=&amp;page=&amp;pageSize=</c>. Any authenticated caller
-    /// gets their own requests; an admin gets everyone's. <see cref="QuotaRequestQuery.UserId"/> is
-    /// admin-only and omitted when null.
-    /// </summary>
-    Task<ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>> GetRequestsAsync(QuotaRequestQuery query, PagedRequest paging, CancellationToken ct = default);
 
     // Foundry — api.md §Foundry
 

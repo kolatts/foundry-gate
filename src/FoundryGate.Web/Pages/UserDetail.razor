@@ -253,7 +253,7 @@ else
 
     private async Task LoadAsync()
     {
-        var result = await Api.GetUserDetailAsync(Id);
+        var result = await Api.GetUserAsync(Id);
         switch (result.Status)
         {
             case ApiCallStatus.Forbidden:
@@ -308,6 +308,7 @@ else
         await MutateAsync(
             () => shouldBeActive ? Api.ActivateUserAsync(Id) : Api.DeactivateUserAsync(Id),
             shouldBeActive ? "User activated." : "User deactivated.");
+
     }
 
     private async Task SaveQuotaAsync()
@@ -391,8 +392,12 @@ else
         return result is { Canceled: false };
     }
 
-    /// <summary>Runs one action-style mutation, reports it, and re-reads the user so nothing on screen is stale.</summary>
-    private async Task MutateAsync(Func<Task<ApiCallResult<bool>>> mutation, string successMessage)
+    /// <summary>
+    /// Runs one mutation, reports it, and re-reads the user so nothing on screen is stale. The
+    /// activate/deactivate/quota calls hand back the updated <c>UserResponse</c>, but the re-read
+    /// stays: those three also move the allocation and the key, which that row doesn't carry.
+    /// </summary>
+    private async Task MutateAsync<T>(Func<Task<ApiCallResult<T>>> mutation, string successMessage)
     {
         _busy = true;
         try

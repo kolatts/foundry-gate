@@ -14,19 +14,19 @@ namespace FoundryGate.Tests.Predeployment.Web.Pages;
 /// </summary>
 public class RequestsPageTests : WebTestContext
 {
-    public RequestsPageTests() => Api.ArrangeTiers(WebTestData.Tiers);
+    public RequestsPageTests() => Api.ArrangeTiers(WebTestData.Tiers());
 
     [Fact]
     public void An_admin_sees_the_requester_column_and_the_requested_tier()
     {
         SignInAsAdmin();
-        Api.ArrangeRequests(WebTestData.Request(requestId: 5, userDisplayName: "Ada Lovelace", requestedQuota: 25_000_000));
+        Api.ArrangeRequests(WebTestData.Request(id: 5, requestedQuota: 20_000_000));
 
         var page = RenderPage<Requests>();
 
         page.WaitForAssertion(() =>
         {
-            Assert.Contains("Ada Lovelace", page.Markup, StringComparison.Ordinal);
+            Assert.Contains("Dev Eloper", page.Markup, StringComparison.Ordinal);
             Assert.Contains("Power", page.Markup, StringComparison.Ordinal);
             Assert.Contains("Pending", page.Find("[data-testid=request-status-5]").TextContent, StringComparison.Ordinal);
         });
@@ -44,8 +44,8 @@ public class RequestsPageTests : WebTestContext
 
         page.WaitForAssertion(() =>
         {
-            Assert.NotEmpty(Api.RequestListCalls);
-            Assert.All(Api.RequestListCalls, c => Assert.Null(c.Query.UserId));
+            Assert.NotEmpty(Api.FilteredRequestQueries);
+            Assert.All(Api.FilteredRequestQueries, c => Assert.Null(c.Query.UserId));
         });
     }
 
@@ -57,7 +57,7 @@ public class RequestsPageTests : WebTestContext
         var page = RenderPage<Requests>(("StatusQuery", "Pending"));
 
         page.WaitForAssertion(() =>
-            Assert.All(Api.RequestListCalls, c => Assert.Equal(QuotaRequestStatusType.Pending, c.Query.Status)));
+            Assert.All(Api.FilteredRequestQueries, c => Assert.Equal(QuotaRequestStatusType.Pending, c.Query.Status)));
     }
 
     [Fact]
@@ -67,14 +67,14 @@ public class RequestsPageTests : WebTestContext
 
         var page = RenderPage<Requests>(("StatusQuery", "Sideways"));
 
-        page.WaitForAssertion(() => Assert.All(Api.RequestListCalls, c => Assert.Null(c.Query.Status)));
+        page.WaitForAssertion(() => Assert.All(Api.FilteredRequestQueries, c => Assert.Null(c.Query.Status)));
     }
 
     [Fact]
     public void Opening_a_pending_row_shows_the_justification_and_the_verdict_buttons()
     {
         SignInAsAdmin();
-        Api.ArrangeRequests(WebTestData.Request(requestId: 5));
+        Api.ArrangeRequests(WebTestData.Request(id: 5));
 
         var page = RenderPage<Requests>();
         page.WaitForAssertion(() => Assert.NotEmpty(page.FindAll("tbody tr")));
@@ -83,7 +83,7 @@ public class RequestsPageTests : WebTestContext
 
         page.WaitForAssertion(() =>
         {
-            Assert.Contains("Migrating the monolith", page.Find("[data-testid=request-justification]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Running a large migration", page.Find("[data-testid=request-justification]").TextContent, StringComparison.Ordinal);
             Assert.NotNull(page.Find("[data-testid=request-approve]"));
             Assert.NotNull(page.Find("[data-testid=request-reject]"));
         });
@@ -93,7 +93,7 @@ public class RequestsPageTests : WebTestContext
     public void Approving_from_the_drawer_sends_the_review_notes_and_flips_the_row()
     {
         SignInAsAdmin();
-        Api.ArrangeRequests(WebTestData.Request(requestId: 5));
+        Api.ArrangeRequests(WebTestData.Request(id: 5));
 
         var page = RenderPage<Requests>();
         page.WaitForAssertion(() => Assert.NotEmpty(page.FindAll("tbody tr")));
@@ -117,7 +117,7 @@ public class RequestsPageTests : WebTestContext
     public void Rejecting_from_the_drawer_calls_reject_not_approve()
     {
         SignInAsAdmin();
-        Api.ArrangeRequests(WebTestData.Request(requestId: 5));
+        Api.ArrangeRequests(WebTestData.Request(id: 5));
 
         var page = RenderPage<Requests>();
         page.WaitForAssertion(() => Assert.NotEmpty(page.FindAll("tbody tr")));
@@ -135,7 +135,7 @@ public class RequestsPageTests : WebTestContext
     public void An_already_decided_request_opens_read_only()
     {
         SignInAsAdmin();
-        Api.ArrangeRequests(WebTestData.Request(requestId: 5, status: QuotaRequestStatusType.Approved, reviewNotes: "Approved for the migration."));
+        Api.ArrangeRequests(WebTestData.Request(id: 5, status: QuotaRequestStatusType.Approved, reviewNotes: "Approved for the migration."));
 
         var page = RenderPage<Requests>();
         page.WaitForAssertion(() => Assert.NotEmpty(page.FindAll("tbody tr")));
@@ -153,7 +153,7 @@ public class RequestsPageTests : WebTestContext
     public void A_developer_sees_their_own_requests_with_no_verdict_buttons()
     {
         SignInAsDeveloper();
-        Api.ArrangeRequests(WebTestData.Request(requestId: 5));
+        Api.ArrangeRequests(WebTestData.Request(id: 5));
 
         var page = RenderPage<Requests>();
         page.WaitForAssertion(() => Assert.NotEmpty(page.FindAll("tbody tr")));
@@ -171,14 +171,14 @@ public class RequestsPageTests : WebTestContext
     public void The_detail_route_renders_the_same_panel_as_the_drawer()
     {
         SignInAsAdmin();
-        Api.RequestResult = ApiCallResult<QuotaIncreaseRequestResponse>.Ok(WebTestData.Request(requestId: 5));
+        Api.RequestResult = ApiCallResult<QuotaIncreaseRequestResponse>.Ok(WebTestData.Request(id: 5));
 
         var page = RenderPage<RequestDetail>(("Id", 5));
 
         page.WaitForAssertion(() =>
         {
             Assert.NotNull(page.Find("[data-testid=request-panel]"));
-            Assert.Contains("Migrating the monolith", page.Find("[data-testid=request-justification]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("Running a large migration", page.Find("[data-testid=request-justification]").TextContent, StringComparison.Ordinal);
         });
     }
 

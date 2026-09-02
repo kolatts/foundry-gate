@@ -1,7 +1,5 @@
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Foundry.Contracts;
-using FoundryGate.Domain.Quota.Contracts;
-using FoundryGate.Domain.Requests.Contracts;
 using FoundryGate.Domain.Users.Contracts;
 
 namespace FoundryGate.Web.Services;
@@ -32,42 +30,10 @@ public sealed partial class FoundryGateApiClient
         return GetAsync<PagedResult<UserResponse>>($"users?{string.Join('&', parts)}", ct);
     }
 
-    public Task<ApiCallResult<UserDetailResponse>> GetUserDetailAsync(int userId, CancellationToken ct = default) =>
-        GetAsync<UserDetailResponse>($"users/{userId}", ct);
-
     // Groups — api.md §Groups
 
     public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, bool force, CancellationToken ct = default) =>
         SendActionAsync(HttpMethod.Delete, force ? $"groups/{groupId}?force=true" : $"groups/{groupId}", body: null, ct);
-
-    // Quota — api.md §Quota
-
-    public Task<ApiCallResult<IReadOnlyList<QuotaTierResponse>>> GetQuotaTiersAsync(CancellationToken ct = default) =>
-        GetAsync<IReadOnlyList<QuotaTierResponse>>("quota/tiers", ct);
-
-    // Quota increase requests — api.md §Quota Increase Requests
-
-    public Task<ApiCallResult<PagedResult<QuotaIncreaseRequestResponse>>> GetRequestsAsync(QuotaRequestQuery query, PagedRequest paging, CancellationToken ct = default)
-    {
-        ArgumentNullException.ThrowIfNull(query);
-        ArgumentNullException.ThrowIfNull(paging);
-
-        var parts = PagingParts(paging);
-        if (query.Status is { } status)
-        {
-            // The API binds ?status= as the QuotaRequestStatusType's numeric value (no string
-            // enum converter is configured on either side) — see api.md's "0 Pending, 1 Approved,
-            // 2 Rejected".
-            parts.Add($"status={(int)status}");
-        }
-
-        if (query.UserId is { } userId)
-        {
-            parts.Add($"userId={userId}");
-        }
-
-        return GetAsync<PagedResult<QuotaIncreaseRequestResponse>>($"requests?{string.Join('&', parts)}", ct);
-    }
 
     // Foundry — api.md §Foundry
 

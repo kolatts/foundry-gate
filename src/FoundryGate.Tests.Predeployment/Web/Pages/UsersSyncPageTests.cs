@@ -19,7 +19,7 @@ public class UsersSyncPageTests : WebTestContext
     {
         RenderPage<UsersSync>();
 
-        Assert.Equal(0, Api.UserSyncCallCount);
+        Assert.Equal(0, Api.CallCount("SyncUsersAsync"));
     }
 
     [Fact]
@@ -32,7 +32,7 @@ public class UsersSyncPageTests : WebTestContext
 
         page.WaitForAssertion(() =>
         {
-            Assert.Equal(1, Api.UserSyncCallCount);
+            Assert.Equal(1, Api.CallCount("SyncUsersAsync"));
             Assert.Contains("3 added", page.Find("[data-testid=sync-added]").TextContent, StringComparison.Ordinal);
             Assert.Contains("12 updated", page.Find("[data-testid=sync-updated]").TextContent, StringComparison.Ordinal);
             Assert.Contains("1 deactivated", page.Find("[data-testid=sync-deactivated]").TextContent, StringComparison.Ordinal);

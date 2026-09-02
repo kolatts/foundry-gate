@@ -17,7 +17,7 @@ public class UserDetailPageTests : WebTestContext
     public UserDetailPageTests()
     {
         SignInAsAdmin();
-        Api.ArrangeTiers(WebTestData.Tiers);
+        Api.ArrangeTiers(WebTestData.Tiers());
     }
 
     private IRenderedComponent<Microsoft.AspNetCore.Components.IComponent> RenderDetail(UserDetailResponse detail)
@@ -29,7 +29,7 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Renders_the_users_identity_and_status()
     {
-        var page = RenderDetail(WebTestData.UserDetail(WebTestData.User(displayName: "Ada Lovelace", email: "ada@example.com")));
+        var page = RenderDetail(AdminTestData.UserDetail(AdminTestData.User(displayName: "Ada Lovelace", email: "ada@example.com")));
 
         page.WaitForAssertion(() =>
         {
@@ -42,8 +42,8 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Shows_the_resolved_level_and_tier_for_the_current_allocation()
     {
-        var page = RenderDetail(WebTestData.UserDetail(
-            allocation: WebTestData.Allocation(allocatedTokens: 25_000_000, level: QuotaLevelType.GroupMax)));
+        var page = RenderDetail(AdminTestData.UserDetail(
+            allocation: WebTestData.Allocation(allocatedTokens: 20_000_000, resolvedLevelType: QuotaLevelType.GroupMax)));
 
         page.WaitForAssertion(() =>
         {
@@ -55,7 +55,7 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Says_so_when_no_allocation_has_been_resolved_this_month()
     {
-        var page = RenderDetail(WebTestData.UserDetail(allocation: null) with { CurrentAllocation = null });
+        var page = RenderDetail(AdminTestData.UserDetail(allocation: null) with { CurrentAllocation = null });
 
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=user-quota-none]")));
     }
@@ -73,7 +73,7 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Cancelling_the_confirmation_leaves_the_account_untouched()
     {
-        var page = RenderDetail(WebTestData.UserDetail(WebTestData.User(isActive: true)));
+        var page = RenderDetail(AdminTestData.UserDetail(AdminTestData.User(isActive: true)));
         page.WaitForAssertion(() => Assert.NotNull(page.Find(".mud-switch input[type=checkbox]")));
 
         ToggleActiveSwitch(page);
@@ -86,7 +86,7 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Confirming_the_dialog_deactivates_the_user()
     {
-        var page = RenderDetail(WebTestData.UserDetail(WebTestData.User(userId: 42, isActive: true)));
+        var page = RenderDetail(AdminTestData.UserDetail(AdminTestData.User(userId: 42, isActive: true)));
         page.WaitForAssertion(() => Assert.NotNull(page.Find(".mud-switch input[type=checkbox]")));
 
         ToggleActiveSwitch(page);
@@ -98,7 +98,7 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Confirming_the_dialog_activates_a_deactivated_user()
     {
-        var page = RenderDetail(WebTestData.UserDetail(WebTestData.User(userId: 42, isActive: false)));
+        var page = RenderDetail(AdminTestData.UserDetail(AdminTestData.User(userId: 42, isActive: false)));
         page.WaitForAssertion(() => Assert.NotNull(page.Find(".mud-switch input[type=checkbox]")));
 
         ToggleActiveSwitch(page);
@@ -110,8 +110,8 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Provisioning_a_key_is_offered_only_when_there_isnt_one_and_reveals_it_once()
     {
-        var page = RenderDetail(WebTestData.UserDetail(
-            WebTestData.User(userId: 7, isApiKeyProvisioned: false),
+        var page = RenderDetail(AdminTestData.UserDetail(
+            AdminTestData.User(userId: 7, isApiKeyProvisioned: false),
             apiKey: new ApiKeyResponse(false, null, null)));
 
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=user-key-none]")));
@@ -123,14 +123,14 @@ public class UserDetailPageTests : WebTestContext
         page.WaitForAssertion(() =>
         {
             Assert.Equal(7, Assert.Single(Api.ProvisionedKeyUserIds));
-            Assert.Contains("fg-plaintext-key", page.Find("[data-testid=revealed-key]").GetAttribute("value"), StringComparison.Ordinal);
+            Assert.Contains("plaintext-key-value", page.Find("[data-testid=revealed-key]").GetAttribute("value"), StringComparison.Ordinal);
         });
     }
 
     [Fact]
     public void Revoking_a_key_needs_confirmation_and_does_not_deactivate_the_account()
     {
-        var page = RenderDetail(WebTestData.UserDetail(WebTestData.User(userId: 7, isApiKeyProvisioned: true)));
+        var page = RenderDetail(AdminTestData.UserDetail(AdminTestData.User(userId: 7, isApiKeyProvisioned: true)));
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=user-key-revoke]")));
 
         page.Find("[data-testid=user-key-revoke]").Click();
@@ -146,7 +146,7 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void Group_memberships_are_listed_with_a_link_to_the_group()
     {
-        var page = RenderDetail(WebTestData.UserDetail(groups: [WebTestData.Membership(groupId: 7, name: "Platform")]));
+        var page = RenderDetail(AdminTestData.UserDetail(groups: [AdminTestData.Membership(groupId: 7, name: "Platform")]));
 
         page.WaitForAssertion(() =>
         {
@@ -159,7 +159,7 @@ public class UserDetailPageTests : WebTestContext
     [Fact]
     public void A_user_in_no_groups_is_told_where_their_budget_comes_from()
     {
-        var page = RenderDetail(WebTestData.UserDetail(groups: []));
+        var page = RenderDetail(AdminTestData.UserDetail(groups: []));
 
         page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=user-groups-empty]")));
     }

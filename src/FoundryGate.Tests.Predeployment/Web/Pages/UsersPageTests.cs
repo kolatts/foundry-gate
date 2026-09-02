@@ -16,15 +16,15 @@ public class UsersPageTests : WebTestContext
     public UsersPageTests()
     {
         SignInAsAdmin();
-        Api.ArrangeTiers(WebTestData.Tiers);
+        Api.ArrangeTiers(WebTestData.Tiers());
     }
 
     [Fact]
     public void Renders_a_row_per_user_with_the_tier_name_not_a_token_count()
     {
         Api.ArrangeUsers(
-            WebTestData.User(userId: 1, displayName: "Ada Lovelace", monthlyTokenQuota: 5_000_000),
-            WebTestData.User(userId: 2, displayName: "Grace Hopper", isUnlimited: true, monthlyTokenQuota: null));
+            AdminTestData.User(userId: 1, displayName: "Ada Lovelace", monthlyTokenQuota: 5_000_000),
+            AdminTestData.User(userId: 2, displayName: "Grace Hopper", isUnlimited: true, monthlyTokenQuota: null));
 
         var page = RenderPage<Users>();
 
