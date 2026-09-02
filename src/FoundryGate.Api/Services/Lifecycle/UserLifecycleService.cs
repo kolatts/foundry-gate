@@ -107,7 +107,7 @@ public sealed class UserLifecycleService(
         var keyRevoked = await RevokeKeyAsync(trigger, user, cancellationToken);
 
         // Past the commit point once the subscription is gone.
-        var completionToken = keyRevoked ? CancellationToken.None : cancellationToken;
+        var completionToken = CommitToken.For(keyRevoked, cancellationToken);
 
         try
         {
@@ -246,7 +246,7 @@ public sealed class UserLifecycleService(
         // Past the commit point if anything reached the gateway: the mint, or a tier re-scope that
         // resolution triggered for a user who already had a subscription.
         var externalSideEffect = key is not null || resolution.TierSyncRequested;
-        var completionToken = externalSideEffect ? CancellationToken.None : cancellationToken;
+        var completionToken = CommitToken.For(externalSideEffect, cancellationToken);
 
         try
         {
@@ -320,6 +320,11 @@ public sealed class UserLifecycleService(
             Email = currentUser.Email ?? string.Empty,
             IsActive = true,
             LastSyncedDate = timeProvider.GetUtcNow(),
+
+            // First login IS a login (#167): stamping it here means a brand-new row's LastLoginDate
+            // equals its CreatedDate, and the profile read that provisioned it does not immediately
+            // rewrite the row it just created.
+            LastLoginDate = timeProvider.GetUtcNow(),
         };
 
         var directoryEnriched = false;
@@ -359,10 +364,21 @@ public sealed class UserLifecycleService(
         }
         catch (DbUpdateException exception)
         {
-            // Two tabs, one first login: EntraObjectId is unique, so the loser lands here. A retry
-            // finds the winner's row and returns it, which is why this is a 409 and not a 500.
-            // #154 makes the retry automatic so the caller never sees the race at all.
+            // Two tabs, one first login: EntraObjectId is unique, so the loser lands here. Detach, then
+            // ask the database whose row won — provider-agnostic (no SQL Server/SQLite error-number
+            // sniffing) and precise: only a save that lost *this* race becomes a conflict, so any other
+            // DbUpdateException (a value too long for its column, say) still surfaces as itself (#154).
             dbContext.Entry(user).State = EntityState.Detached;
+
+            if (!await dbContext.Users.AsNoTracking().AnyAsync(u => u.EntraObjectId == entraObjectId, cancellationToken))
+            {
+                throw;
+            }
+
+            // The inner DbUpdateException is load-bearing: it is how UserService.ProvisionFirstLoginAsync
+            // tells this race apart from the "provisioning is not repeatable" conflict above, which it
+            // must NOT absorb. Still a ConflictException so a caller that reaches this path some other
+            // way (the Cli, a future orchestrator) keeps its 409.
             throw new ConflictException(
                 $"Another request provisioned oid {entraObjectId} at the same time. Retry GET /users/me.",
                 exception);

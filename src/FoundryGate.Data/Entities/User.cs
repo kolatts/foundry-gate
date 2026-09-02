@@ -97,6 +97,23 @@ public class User : ICreatedDate
 
     public DateTimeOffset? LastSyncedDate { get; set; }
 
+    /// <summary>
+    /// When this person last loaded their own profile (<c>GET /users/me</c>); <see langword="null"/>
+    /// means <b>never signed in</b> — a real and interesting state for an offboarding or licence review,
+    /// which is why the column is nullable rather than defaulted to <c>CreatedDate</c> (#167).
+    /// </summary>
+    /// <remarks>
+    /// <b>Write policy (deliberate, #167):</b> <c>GET /users/me</c> stamps this only when it is null or
+    /// already older than <c>UserService.LastLoginGranularity</c> — a profile load is the hottest call in
+    /// the app and stamping it every time would turn every read into an <c>UPDATE</c> on <c>Users</c>,
+    /// which is the problem that made <c>LastSyncedDate</c> dishonest in the first place. So the value is
+    /// accurate to within that granularity, never to the second, and "has this account been used?" is the
+    /// only question it is meant to answer. First-login provisioning sets it, so it equals
+    /// <see cref="CreatedDate"/> for a brand-new user. Distinct from <see cref="LastSyncedDate"/>, which
+    /// means "an Entra sync last touched this row".
+    /// </remarks>
+    public DateTimeOffset? LastLoginDate { get; set; }
+
     // Navigation
     public ICollection<GroupMember> GroupMemberships { get; set; } = [];
 }

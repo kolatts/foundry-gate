@@ -133,7 +133,8 @@ public class UserServiceTests : InMemoryDatabaseTest
         string? name = "Token Name",
         string? email = "token@contoso.test",
         string? gatewayUrl = "https://apim-foundrygate-test.azure-api.net",
-        Func<IAuditService, IAuditService>? wrapAudit = null)
+        Func<IAuditService, IAuditService>? wrapAudit = null,
+        Func<ICurrentUserAccessor, ICurrentUserAccessor>? wrapAccessor = null)
     {
         var claims = new List<Claim> { new(ClaimConstants.Oid, callerOid), new(ClaimConstants.Roles, RoleNames.Admin) };
         if (name is not null)
@@ -147,7 +148,8 @@ public class UserServiceTests : InMemoryDatabaseTest
         }
 
         var identity = new ClaimsIdentity(claims, "TestAuth", nameType: ClaimConstants.Name, roleType: ClaimConstants.Roles);
-        var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(new DefaultHttpContext { User = new ClaimsPrincipal(identity) }), Context);
+        ICurrentUserAccessor accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(new DefaultHttpContext { User = new ClaimsPrincipal(identity) }), Context);
+        accessor = wrapAccessor?.Invoke(accessor) ?? accessor;
 
         var gateway = TestGatewayTiers.Options();
         gateway.ApimGatewayUrl = gatewayUrl;
@@ -204,6 +206,177 @@ public class UserServiceTests : InMemoryDatabaseTest
             accessor,
             _timeProvider,
             NullLogger<UserService>.Instance);
+    }
+
+    // -- #154: the first-login race is the caller's problem no longer -------------------------------
+
+    [Fact]
+    public async Task A_first_login_that_loses_the_race_returns_the_winners_profile_instead_of_a_409()
+    {
+        // Forced deterministically, as #154 asks: the accessor reports "no user" for the first two
+        // lookups — the profile read's own and the provision pipeline's — while the winner's row is
+        // already committed. That is exactly the state the losing tab is in when its INSERT reaches the
+        // unique index on EntraObjectId. Before the fix the developer's very first request 4xx'd.
+        await SeedReferenceDataAsync();
+        var oid = Guid.NewGuid().ToString();
+        var winner = new User { EntraObjectId = oid, DisplayName = "Winning Tab", Email = "winner@contoso.test" };
+        Context.Users.Add(winner);
+        _ = await Context.SaveChangesAsync();
+        var winnerId = winner.UserId;
+
+        var service = CreateService(
+            oid,
+            name: "Winning Tab",
+            email: "winner@contoso.test",
+            wrapAccessor: inner => new RaceLosingCurrentUserAccessor(inner, missesBeforeReporting: 2));
+
+        var profile = await service.GetMyProfileAsync(CancellationToken.None);
+
+        Assert.Equal(winnerId, profile.UserId);
+        Assert.Equal("Winning Tab", profile.DisplayName);
+
+        // The loser's insert rolled back with its transaction: one row for the oid, not two.
+        Context.ChangeTracker.Clear();
+        Assert.Equal(1, await Context.Users.AsNoTracking().CountAsync(u => u.EntraObjectId == oid));
+
+        // And the profile handed back is the winner's, complete — quota resolved against their row.
+        Assert.Equal(winnerId, profile.Quota.UserId);
+    }
+
+    [Fact]
+    public async Task A_first_login_whose_save_fails_for_any_other_reason_is_not_absorbed()
+    {
+        // Only the unique-index race is swallowed (#154). Nothing else may be: here no row exists for
+        // the oid at all, so the pipeline's own "who won?" check finds nobody and the failure surfaces.
+        await SeedReferenceDataAsync();
+        var oid = Guid.NewGuid().ToString();
+
+        // A caller with no name and no email produces a User the database is perfectly happy with, so
+        // the failure has to come from somewhere real: break the audit row the pipeline writes.
+        var service = CreateService(
+            oid,
+            name: "Broken Provision",
+            email: "broken@contoso.test",
+            wrapAudit: inner => new FailingAuditService(inner) { FailOn = action => action == AuditActions.UserProvisioned });
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => service.GetMyProfileAsync(CancellationToken.None));
+
+        Context.ChangeTracker.Clear();
+        Assert.Equal(0, await Context.Users.AsNoTracking().CountAsync(u => u.EntraObjectId == oid));
+    }
+
+    // -- #167: LastLoginDate is honest without making every profile load a write ---------------------
+
+    [Fact]
+    public async Task First_login_stamps_LastLoginDate_and_a_reload_inside_the_granularity_window_leaves_it_alone()
+    {
+        await SeedReferenceDataAsync();
+        var oid = Guid.NewGuid().ToString();
+
+        var profile = await CreateService(oid, name: "New Dev", email: "new@contoso.test").GetMyProfileAsync(CancellationToken.None);
+
+        Context.ChangeTracker.Clear();
+        Assert.Equal(Now, (await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == profile.UserId)).LastLoginDate);
+
+        // A UI that reloads the profile on every navigation must not turn each read into an UPDATE on
+        // Users — the problem that made LastSyncedDate dishonest in the first place (#156 review).
+        _timeProvider.Advance(UserService.LastLoginGranularity - TimeSpan.FromMinutes(1));
+        _ = await CreateService(oid, name: "New Dev", email: "new@contoso.test").GetMyProfileAsync(CancellationToken.None);
+
+        Context.ChangeTracker.Clear();
+        Assert.Equal(Now, (await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == profile.UserId)).LastLoginDate);
+    }
+
+    [Fact]
+    public async Task A_profile_load_past_the_granularity_window_restamps_LastLoginDate_and_surfaces_it()
+    {
+        await SeedReferenceDataAsync();
+        var oid = Guid.NewGuid().ToString();
+        var profile = await CreateService(oid, name: "Returning Dev", email: "returning@contoso.test").GetMyProfileAsync(CancellationToken.None);
+
+        _timeProvider.Advance(TimeSpan.FromDays(3));
+        var later = _timeProvider.GetUtcNow();
+        _ = await CreateService(oid, name: "Returning Dev", email: "returning@contoso.test").GetMyProfileAsync(CancellationToken.None);
+
+        Context.ChangeTracker.Clear();
+        Assert.Equal(later, (await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == profile.UserId)).LastLoginDate);
+
+        // And an admin reads it off the user row, which is the point of the column (#167).
+        var detail = await CreateService(oid, name: "Returning Dev", email: "returning@contoso.test").GetAsync(profile.UserId, CancellationToken.None);
+        Assert.Equal(later, detail.User.LastLoginDate);
+    }
+
+    [Fact]
+    public async Task A_user_who_has_never_loaded_their_profile_reads_as_null_not_as_created_date()
+    {
+        // "Never signed in" is a real, interesting state for an offboarding sweep — not a date to
+        // invent (#167).
+        var provisioned = await SeedUserAsync("Never Signed In");
+        var admin = await SeedUserAsync("Ada Admin");
+
+        var detail = await CreateService(admin.EntraObjectId).GetAsync(provisioned.UserId, CancellationToken.None);
+
+        Assert.Null(detail.User.LastLoginDate);
+    }
+
+    // -- #163/#158: a quota change the gateway accepted is written down whatever the client does -----
+
+    [Fact]
+    public async Task A_quota_change_whose_client_disconnects_the_instant_the_gateway_moves_still_lands()
+    {
+        // The commit-point rule applied to PUT /users/{id}/quota: past IGatewayTierSync the subscription
+        // is already on the new product, so the row and its audit row run on CancellationToken.None.
+        var admin = await SeedUserAsync("Ada Admin");
+        var developer = await SeedUserAsync("Hangs Up");
+        var subscriptionName = ApimSubscriptionNames.ForUser(developer.UserId);
+        _ = await CreateService(admin.EntraObjectId).GetMyProfileAsync(CancellationToken.None); // admin row exists
+        _ = await BuildKeyServiceFor(admin).ProvisionAsync(developer, GatewayTiers.Standard, CancellationToken.None);
+        _ = await Context.SaveChangesAsync();
+
+        using var cts = new CancellationTokenSource();
+        _apim.AfterMutation = cts.Cancel;
+
+        _ = await CreateService(admin.EntraObjectId).UpdateQuotaAsync(
+            developer.UserId,
+            new UpdateUserQuotaRequest { MonthlyTokenQuota = TestGatewayTiers.PowerCap },
+            cts.Token);
+
+        _apim.AfterMutation = null;
+        Assert.True(cts.IsCancellationRequested);
+        Assert.Equal(GatewayTiers.Power, _apim.ProductOf(subscriptionName));
+
+        Context.ChangeTracker.Clear();
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == developer.UserId);
+        Assert.Equal(TestGatewayTiers.PowerCap, saved.MonthlyTokenQuota);
+        _ = Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.UserQuotaChanged).ToListAsync());
+        _ = Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.KeyTierChanged).ToListAsync());
+    }
+
+    /// <summary>
+    /// An <see cref="ICurrentUserAccessor"/> that reports "no user for this caller" for the first
+    /// <c>missesBeforeReporting</c> lookups and delegates afterwards. That is the loser's view of a
+    /// first-login race, made deterministic: the profile read and the provision pipeline both see no
+    /// row while the winner's is already committed, so the loser's INSERT hits the unique index exactly
+    /// as it does in production (#154). Hand-rolled — no mocking library (CONVENTIONS.md).
+    /// </summary>
+    private sealed class RaceLosingCurrentUserAccessor(ICurrentUserAccessor inner, int missesBeforeReporting) : ICurrentUserAccessor
+    {
+        private int _lookups;
+
+        public string EntraObjectId => inner.EntraObjectId;
+
+        public bool IsAdmin => inner.IsAdmin;
+
+        public string? DisplayName => inner.DisplayName;
+
+        public string? Email => inner.Email;
+
+        public async Task<User?> TryGetUserAsync(CancellationToken cancellationToken) =>
+            _lookups++ < missesBeforeReporting ? null : await inner.TryGetUserAsync(cancellationToken);
+
+        public async Task<User> GetRequiredUserAsync(CancellationToken cancellationToken) =>
+            await TryGetUserAsync(cancellationToken)
+            ?? throw new UnauthorizedAccessException($"No FoundryGate user exists for the caller (oid {EntraObjectId}).");
     }
 
     [Fact]

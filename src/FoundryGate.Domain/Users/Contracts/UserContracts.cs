@@ -22,6 +22,12 @@ namespace FoundryGate.Domain.Users.Contracts;
 /// </param>
 /// <param name="CreatedDate">When the user record was first created (spec &#167;7.1).</param>
 /// <param name="LastSyncedDate">When this user was last touched by an Entra sync (spec &#167;7).</param>
+/// <param name="LastLoginDate">
+/// When this person last loaded their own profile; <see langword="null"/> means they have never
+/// signed in — the signal an offboarding or licence review wants (#167). Accurate to within
+/// <c>UserService.LastLoginGranularity</c>, not to the second: a profile load is only a write when
+/// the stored value is that stale, so <c>GET /users/me</c> stays a read in the common case.
+/// </param>
 public record UserResponse(
     int UserId,
     Guid UserUnique,
@@ -33,7 +39,8 @@ public record UserResponse(
     long? MonthlyTokenQuota,
     bool IsApiKeyProvisioned,
     DateTimeOffset CreatedDate,
-    DateTimeOffset? LastSyncedDate);
+    DateTimeOffset? LastSyncedDate,
+    DateTimeOffset? LastLoginDate);
 
 /// <summary>
 /// The caller's own profile: identity fields, current-period quota gauge, masked API
