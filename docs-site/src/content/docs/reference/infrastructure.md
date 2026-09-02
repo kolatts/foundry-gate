@@ -217,6 +217,12 @@ used instead, so the developer's own delegated Graph access applies.
 Set as Container App environment variables and Function App settings; keys are ASP.NET
 Core configuration paths (`__` = section separator). None of them is a secret.
 
+This table is the **provenance** view: which Azure resource each value comes from. For what each
+setting *means*, which host reads it, and what happens when it is absent, the
+[Configuration Reference](/foundry-gate/reference/configuration/#environment-variables--appsettings)
+is the single per-host table. A predeployment test (`GatewayInfraBindingTests`) reads
+`control-plane.bicep` and fails if the `Gateway__*` names here drift from what the control plane binds.
+
 | Key | Value |
 |---|---|
 | `ASPNETCORE_ENVIRONMENT` (API) / `AZURE_FUNCTIONS_ENVIRONMENT` + `DOTNET_ENVIRONMENT` (Functions) | `qa` or `prod` |
@@ -230,6 +236,13 @@ Core configuration paths (`__` = section separator). None of them is a secret.
 | `Gateway__LogAnalyticsWorkspaceId` / `Gateway__LogAnalyticsWorkspaceResourceId` | the workspace **GUID** (`customerId` — what `LogsQueryClient.QueryWorkspaceAsync` and `/v1/workspaces/{id}/query` mean by "workspace id") / the ARM resource id (`QueryResourceAsync`, management plane) |
 | `AzureWebJobsStorage__accountName` / `__credential=managedidentity` / `__clientId` (Functions) | identity-based host storage — also where the monthly reset takes its lock lease, so the reset needed no setting of its own |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` (Functions) | host telemetry |
+
+Everything in the `Gateway` section is set on **both** hosts from one shared block in the Bicep, so
+the API and the Functions host can never be told about different gateways. The one exception is the
+quota tier table (`Gateway__Tiers__*`), which infra does not emit at all: both hosts ship it in their
+own `appsettings.json` mirroring the `quotaTiers` parameter, so a fork that overrides that parameter
+must update them by hand — [#201](https://github.com/kolatts/foundry-gate/issues/201) tracks closing
+that gap.
 
 ## Outputs contract
 
