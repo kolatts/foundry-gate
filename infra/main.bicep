@@ -177,6 +177,9 @@ param sqlDatabaseSku object = {
 @description('Azure SQL backup storage redundancy: Local for dev, Geo for prod.')
 param sqlBackupStorageRedundancy string = 'Local'
 
+@description('Zone-redundant Azure SQL database (prod). Adds ~60% to the compute meter (eastus2 retail 2026-09-02: $0.152217/vCore-hr + $0.09133/vCore-hr ZR surcharge) and needs a region with availability zones and a SKU that supports ZR; false for dev.')
+param sqlZoneRedundant bool = false
+
 @description('Entra tenant the API validates bearer tokens against (AzureAd__TenantId).')
 param entraTenantId string = tenant().tenantId
 
@@ -196,6 +199,23 @@ param containerAppMinReplicas int = 1
 @minValue(1)
 @description('Container App maximum replicas (HTTP concurrency scale rule, 50 concurrent requests per replica).')
 param containerAppMaxReplicas int = 3
+
+@description('vCPU per API replica, as a decimal string. Only the Consumption profile pairs are valid: 0.25/0.5Gi, 0.5/1.0Gi, 0.75/1.5Gi, 1.0/2.0Gi, ... The default matches the published cost model.')
+param containerAppCpu string = '0.25'
+
+@description('Memory per API replica — must be the pair of containerAppCpu (see above).')
+param containerAppMemory string = '0.5Gi'
+
+@description('Zone-redundant Container Apps environment. ARM rejects it without a VNet-integrated environment (infrastructureSubnetId), which infra/ does not declare anywhere yet, and the property is immutable — so turning this on is part of the private-networking change (spec §11) and RECREATES the environment, changing the Container App ingress FQDN. Tracked in #196; the parameter exists so that work does not also have to re-thread it.')
+param containerAppsZoneRedundant bool = false
+
+@allowed(['Standard_LRS', 'Standard_ZRS', 'Standard_GRS'])
+@description('Functions runtime storage SKU: Standard_LRS for dev, Standard_ZRS for prod.')
+param functionsStorageSku string = 'Standard_LRS'
+
+@allowed(['Basic', 'Standard', 'Premium'])
+@description('Container registry SKU: Basic for dev, Standard for prod (10x the included storage and higher throughput; Premium only buys geo-replication and private link).')
+param containerRegistrySku string = 'Basic'
 
 @allowed(['Free', 'Standard'])
 @description('Static Web App tier: Free for dev, Standard for prod (custom domain, SLA).')
@@ -217,6 +237,9 @@ param keyVaultSoftDeleteRetentionInDays int = 7
 
 @description('Create the Key Vault RSA key the API wraps APIM subscription keys with (#95).')
 param createKeyEncryptionKey bool = true
+
+@description('Define the custom RBAC role the ui-preview CI identity is assigned for Static Web Apps PR previews (#155). No built-in role grants any Microsoft.Web/staticSites action, so without this the only working option is Contributor. Needs Microsoft.Authorization/roleDefinitions/write at subscription scope; a fork whose principal lacks it must set this false and hand-craft the role (the assignment itself is an owner action either way, #109).')
+param deploySwaPreviewRole bool = true
 
 // Standard tags on every resource. Scale model: one FoundryGate stack per environment
 // per subscription; additional REGIONS scale inside a stack (foundryRegions → pool
@@ -360,12 +383,18 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     sqlAdminGroupName: sqlAdminGroupName
     sqlDatabaseSku: sqlDatabaseSku
     sqlBackupStorageRedundancy: sqlBackupStorageRedundancy
+    sqlZoneRedundant: sqlZoneRedundant
     entraTenantId: entraTenantId
     entraApiClientId: entraApiClientId
     entraApiAudience: entraApiAudience
     apiContainerImage: apiContainerImage
     containerAppMinReplicas: containerAppMinReplicas
     containerAppMaxReplicas: containerAppMaxReplicas
+    containerAppCpu: containerAppCpu
+    containerAppMemory: containerAppMemory
+    containerAppsZoneRedundant: containerAppsZoneRedundant
+    functionsStorageSku: functionsStorageSku
+    containerRegistrySku: containerRegistrySku
     staticWebAppSku: staticWebAppSku
     staticWebAppLocation: staticWebAppLocation
     functionsRuntimeVersion: functionsRuntimeVersion
@@ -374,6 +403,20 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     createKeyEncryptionKey: createKeyEncryptionKey
   }
   dependsOn: [gateway]
+}
+
+// The role the `ui-preview` GitHub Environment identity gets assigned so PR previews can read
+// one Static Web App's deployment token and manage its staging environments — and nothing
+// else (#155). Subscription scope because that is where role DEFINITIONS live; its single
+// assignableScope is the Static Web App above, so the role cannot be assigned anywhere else
+// even by someone who wanted to. The ASSIGNMENT is an owner action (#109) — the app
+// registration is not in Bicep.
+module swaPreviewRole 'modules/swa-preview-role.bicep' = if (deployControlPlane && deploySwaPreviewRole) {
+  name: 'foundrygate-swa-preview-role'
+  params: {
+    staticWebAppId: controlPlane.?outputs.staticWebAppId ?? ''
+    environmentName: environmentName
+  }
 }
 
 // ---- Outputs: the contract the deploy workflows and the CLI consume -------------
@@ -418,7 +461,12 @@ output functionAppName string = controlPlane.?outputs.functionAppName ?? ''
 output functionAppHostname string = controlPlane.?outputs.functionAppHostname ?? ''
 output functionsStorageAccountName string = controlPlane.?outputs.functionsStorageAccountName ?? ''
 output staticWebAppName string = controlPlane.?outputs.staticWebAppName ?? ''
+output staticWebAppId string = controlPlane.?outputs.staticWebAppId ?? ''
 output staticWebAppHostname string = controlPlane.?outputs.staticWebAppHostname ?? ''
+@description('Role definition id to assign to the ui-preview identity, and the one scope it may be assigned at (#155/#109). Empty when the role was not deployed.')
+output swaPreviewRoleDefinitionId string = swaPreviewRole.?outputs.roleDefinitionId ?? ''
+output swaPreviewRoleName string = swaPreviewRole.?outputs.roleName ?? ''
+output swaPreviewRoleAssignableScope string = swaPreviewRole.?outputs.assignableScope ?? ''
 output apiIdentityName string = controlPlane.?outputs.apiIdentityName ?? ''
 output apiIdentityClientId string = controlPlane.?outputs.apiIdentityClientId ?? ''
 output apiIdentityPrincipalId string = controlPlane.?outputs.apiIdentityPrincipalId ?? ''

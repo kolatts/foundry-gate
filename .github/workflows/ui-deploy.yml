@@ -1,17 +1,65 @@
 name: UI Deploy
 
-# Targeted UI pipeline for FoundryGate.Web (#73) — never triggers on infra/**.
-#   workflow_dispatch (environment) -> publish + deploy
+# Targeted UI pipeline for FoundryGate.Web (#73).
+#   workflow_dispatch (environment) -> publish + deploy to that environment's Static Web App
+#   pull_request (UI paths)         -> publish + deploy a Static Web Apps PREVIEW (#155)
 #
 # There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, the single
-# ordered chain. This file is the "redeploy just the UI" button.
+# ordered chain. This file is the "redeploy just the UI" button plus the PR preview.
 #
-# There is also NO `pull_request` trigger any more. Static Web Apps PR previews need the SWA
-# deployment token (`az staticwebapp secrets list`) under an identity with write access to the
-# dev environment. A `pull_request` run executes the PR branch's own copy of these files, so
-# any PR could have printed that token or driven `az` against dev. The `dev` Environment is now
-# restricted to protected branches and PR-track Azure work is limited to the read-only
-# `dev-plan` Environment (Bicep what-if). Restoring previews behind a safe design is #155.
+# ---------------------------------------------------------------------------------------
+# PR PREVIEWS: THE ACTUAL BLAST RADIUS (#155, restoring what #144 removed)
+# ---------------------------------------------------------------------------------------
+# A `pull_request` run executes the PR branch's OWN copy of these files. Whatever identity
+# the job can reach, the PR author can drive arbitrarily. The workflow can therefore never be
+# the control; only the identity can. Previews were removed in #144 because they ran under
+# `dev`, whose identity is Owner on the subscription.
+#
+# What the `ui-preview` identity can do, stated honestly:
+#
+#   * Through ARM: read ONE Static Web App (`stapp-foundrygate-dev`), read its deployment
+#     token, and list/delete its preview environments. That is the whole of the custom role
+#     `FoundryGate SWA Preview Publisher`, defined in infra/modules/swa-preview-role.bicep and
+#     assignable only at that one resource. ("Static Web App Contributor" does not exist —
+#     no built-in role grants any `Microsoft.Web/staticSites` action at all, so the built-in
+#     answer would have been plain Contributor, i.e. Write + Delete on the site.)
+#
+#   * Through the deployment token: the token is **app-scoped, not slot-scoped**. Azure
+#     exposes no slot-scoped Static Web Apps credential. So a compromised PR-track run could
+#     publish to the dev site's PRODUCTION slot, not merely to a preview slot — overwriting
+#     what `https://<stapp-foundrygate-dev hostname>` serves. That hostname is a registered
+#     MSAL redirect origin for the dev SPA app registration (and #138 is about registering
+#     more of them), so the realistic worst case is serving attacker-controlled JavaScript
+#     from an origin the dev Entra app trusts.
+#
+# We accept that, explicitly, as a DEV-ONLY risk: the production Static Web App is a
+# different resource in a different resource group and this identity has no role on it, the
+# dev site holds no data, and the recovery is one `UI Deploy` dispatch. What buys the
+# reduction is that the identity cannot reach anything else in the subscription — not that
+# the preview slot is a hard boundary. `deployment_environment` below names a staging slot so
+# the intended target is explicit and auditable in the SWA environment list, but it is a
+# convention the token does not enforce.
+#
+# Two invariants keep the ARM half true, and a reviewer should check them on any change here:
+#   1. The preview jobs must never call `az deployment sub show` or any other
+#      subscription-scope command. They resolve nothing: the SWA name, resource group and
+#      API base URL come from `ui-preview` Environment VARIABLES. The identity holds one role
+#      on one resource and could not read the deployment outputs anyway — requiring that it
+#      cannot is the point.
+#   2. The only Azure call is `az staticwebapp secrets list` / `environment list` against that
+#      one app, both inside `.github/actions/swa-preview-token`.
+#
+# Fork safety: `.github/actions/azure-oidc-login` soft-skips on every `pull_request` event —
+# a fork resolves the base repo's Environment variables but never receives an OIDC token, so
+# the job goes green with a `::notice::` instead of red. Same-repo PRs with `ui-preview`
+# unconfigured skip identically.
+#
+# Two known limits of a preview, both tracked on #138 (which is now unblocked):
+#   * sign-in fails, because the preview hostname is not in the SPA app registration's
+#     redirect URIs;
+#   * every API call is CORS-blocked, because infra/modules/control-plane.bicep sets exactly
+#     one allowed origin — the dev SWA's own hostname. So a preview is honest for layout and
+#     for routes that never touch the API, and nothing more, until #138 lands both fixes.
 
 on:
   workflow_dispatch:
@@ -22,21 +70,234 @@ on:
         type: choice
         options: [dev, production]
         default: dev
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    # FoundryGate.Web references FoundryGate.Domain only (the CONVENTIONS hard boundary), so
+    # Core/Data changes cannot alter the published site. `_deploy-ui.yml` is not listed either:
+    # the preview jobs deliberately never call it.
+    paths:
+      - "src/FoundryGate.Web/**"
+      - "src/FoundryGate.Domain/**"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - "global.json"
+      - ".github/workflows/ui-deploy.yml"
+      - ".github/actions/swa-preview-token/**"
 
 permissions:
-  id-token: write
   contents: read
 
+# Dispatches take the shared per-environment deploy lock; PR previews take a per-PR lock and
+# cancel in flight, so pushing three commits does not queue three preview uploads.
 concurrency:
-  group: deploy-${{ inputs.environment }}
-  cancel-in-progress: false
+  group: >-
+    ${{ github.event_name == 'pull_request'
+        && format('ui-preview-{0}', github.event.pull_request.number)
+        || format('deploy-{0}', inputs.environment) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   ui:
     name: UI
+    if: github.event_name == 'workflow_dispatch'
     uses: ./.github/workflows/_deploy-ui.yml
     permissions:
       id-token: write
       contents: read
     with:
       environment: ${{ inputs.environment }}
+
+  # ---- PR preview -----------------------------------------------------------------------
+  # Deliberately NOT `_deploy-ui.yml`: that workflow is the production deploy path and reads
+  # the infra outputs under an identity with subscription access. Keeping the preview here,
+  # in one file, is what makes its blast radius reviewable.
+  preview:
+    name: UI - PR preview
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ui-preview
+      url: ${{ steps.summary.outputs.url }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    env:
+      # One name for the staging slot, used by the publish, the free-tier check and the close
+      # job, so a preview can always be found and torn down by PR number.
+      PREVIEW_ENV: pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Azure login and Static Web App token
+        id: swa-token
+        uses: ./.github/actions/swa-preview-token
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          static-web-app-name: ${{ vars.FG_STATIC_WEB_APP_NAME }}
+          resource-group: ${{ vars.FG_RESOURCE_GROUP }}
+
+      # `stapp-foundrygate-dev` is Free tier, which allows THREE staging environments. Without
+      # this check the fourth concurrent UI pull request fails inside the deploy action, after
+      # the token has already been fetched — past every soft guard, so the check just goes red
+      # on a contributor who did nothing wrong. Skip loudly instead, and say what to do.
+      - name: Check the Free-tier preview slot budget
+        id: budget
+        if: steps.swa-token.outputs.ready == 'true'
+        env:
+          SWA_NAME: ${{ vars.FG_STATIC_WEB_APP_NAME }}
+          SWA_RESOURCE_GROUP: ${{ vars.FG_RESOURCE_GROUP }}
+        run: |
+          set -uo pipefail
+          envs="$(az staticwebapp environment list --name "$SWA_NAME" --resource-group "$SWA_RESOURCE_GROUP" -o json 2>/dev/null || echo '[]')"
+          # buildId "default" is the production slot, not a preview.
+          staging="$(jq '[.[] | select(.name != "default")] | length' <<<"$envs")"
+          mine="$(jq --arg n "$PREVIEW_ENV" '[.[] | select(.name == $n)] | length' <<<"$envs")"
+          echo "Staging environments in use: ${staging} (this PR's '${PREVIEW_ENV}': ${mine})"
+
+          if [ "$mine" -eq 0 ] && [ "$staging" -ge 3 ]; then
+            echo "::notice title=UI preview slot budget exhausted - skipping::${SWA_NAME} is Free tier and already has ${staging}/3 staging environments in use. This PR gets no preview until one is freed — close a stale UI pull request, or bump the Static Web App to Standard (staticWebAppSku in infra/parameters/dev.bicepparam)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up .NET
+        if: steps.budget.outputs.ready == 'true'
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Version
+        id: version
+        if: steps.budget.outputs.ready == 'true'
+        uses: ./.github/actions/version
+
+      - name: Publish FoundryGate.Web
+        if: steps.budget.outputs.ready == 'true'
+        env:
+          SEMVER: ${{ steps.version.outputs.semver }}
+          ASSEMBLY_VERSION: ${{ steps.version.outputs.major-minor-patch }}
+        run: |
+          dotnet publish src/FoundryGate.Web/FoundryGate.Web.csproj --configuration Release \
+            -o publish/web \
+            "-p:Version=${SEMVER}" \
+            "-p:AssemblyVersion=${ASSEMBLY_VERSION}" \
+            "-p:FileVersion=${ASSEMBLY_VERSION}"
+          test -f publish/web/wwwroot/index.html
+
+      # Same rewrite as _deploy-ui.yml, except every value is a `ui-preview` variable rather
+      # than a deployment output — see invariant 1 in this file's header. Nothing here is a
+      # secret: MSAL public client ids and URLs.
+      - name: Write wwwroot/appsettings.json
+        if: steps.budget.outputs.ready == 'true'
+        env:
+          API_BASE_URL: ${{ vars.FG_API_BASE_URL }}
+          TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          WEB_CLIENT_ID: ${{ vars.FG_ENTRA_WEB_CLIENT_ID }}
+          API_CLIENT_ID: ${{ vars.FG_ENTRA_API_CLIENT_ID }}
+        run: |
+          set -uo pipefail
+          zero="00000000-0000-0000-0000-000000000000"
+          [ -n "$WEB_CLIENT_ID" ] || { echo "::warning::FG_ENTRA_WEB_CLIENT_ID is not set on ui-preview — sign-in will fail on the preview (#109)."; WEB_CLIENT_ID="$zero"; }
+          [ -n "$API_CLIENT_ID" ] || { echo "::warning::FG_ENTRA_API_CLIENT_ID is not set on ui-preview — API calls will be rejected (#109)."; API_CLIENT_ID="$zero"; }
+          [ -n "$API_BASE_URL" ] || { echo "::warning::FG_API_BASE_URL is not set on ui-preview — the preview will call the dev API's placeholder URL and every request will fail. Set it to https://<dev container app fqdn>/api/v1/."; API_BASE_URL="https://localhost:7100/api/v1/"; }
+
+          file=publish/web/wwwroot/appsettings.json
+          jq --arg authority "https://login.microsoftonline.com/${TENANT_ID}" \
+             --arg clientId "$WEB_CLIENT_ID" \
+             --arg baseUrl "$API_BASE_URL" \
+             --arg scope "api://${API_CLIENT_ID}/access_as_user" \
+             '.AzureAd.Authority = $authority
+              | .AzureAd.ClientId = $clientId
+              | .Api.BaseUrl = $baseUrl
+              | .Api.Scopes = [$scope]
+              | del(._README)' "$file" > appsettings.tmp && mv appsettings.tmp "$file"
+
+          # Blazor pre-compresses static assets at publish; the stale .br/.gz copies of the
+          # file we just rewrote must not be served instead of it.
+          find publish/web/wwwroot -maxdepth 1 -name 'appsettings*.json.br' -delete
+          find publish/web/wwwroot -maxdepth 1 -name 'appsettings*.json.gz' -delete
+          echo "Runtime configuration:"; cat "$file"
+
+      # `deployment_environment` names the staging slot explicitly rather than relying on the
+      # action's PR-number default, so the intended target is visible in the environment list
+      # and the close job can address it by the same name. It is a convention, not a boundary:
+      # the token itself is app-scoped (see the header).
+      - name: Deploy preview to Azure Static Web Apps
+        id: swa
+        if: steps.budget.outputs.ready == 'true'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          repo_token: ${{ github.token }}
+          action: upload
+          app_location: publish/web/wwwroot
+          skip_app_build: true
+          skip_api_build: true
+          deployment_environment: ${{ env.PREVIEW_ENV }}
+
+      - name: Summary
+        id: summary
+        if: always()
+        env:
+          READY: ${{ steps.budget.outputs.ready }}
+          PREVIEW_URL: ${{ steps.swa.outputs.static_web_app_url }}
+        run: |
+          if [ "${READY:-false}" != "true" ]; then
+            {
+              echo "## UI preview skipped"
+              echo ""
+              echo "Either the \`ui-preview\` Environment is not configured (fork PR, or owner setup pending — #109), or the Free-tier staging slot budget is full. The step annotations above say which."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## UI preview — \`${PREVIEW_ENV}\`"
+            echo ""
+            echo "- ${PREVIEW_URL:-see the Static Web Apps comment on the PR}"
+            echo "- Sign-in does not work on a preview hostname, and every API call is CORS-blocked"
+            echo "  (the API allows exactly one origin, the dev site's own). Layout and routes that"
+            echo "  never call the API are real; both fixes are #138."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Tears the staging environment down when the PR closes, so merged/abandoned PRs do not
+  # accumulate slots — which on the Free tier is a budget of three (see the check above).
+  # Same identity, same single resource.
+  close-preview:
+    name: UI - Close PR preview
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ui-preview
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      PREVIEW_ENV: pr-${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login and Static Web App token
+        id: swa-token
+        uses: ./.github/actions/swa-preview-token
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          static-web-app-name: ${{ vars.FG_STATIC_WEB_APP_NAME }}
+          resource-group: ${{ vars.FG_RESOURCE_GROUP }}
+
+      - name: Close the preview environment
+        if: steps.swa-token.outputs.ready == 'true'
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ steps.swa-token.outputs.token }}
+          action: close
+          deployment_environment: ${{ env.PREVIEW_ENV }}

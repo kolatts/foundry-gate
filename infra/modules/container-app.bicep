@@ -49,9 +49,12 @@ param minReplicas int
 @minValue(1)
 param maxReplicas int
 
-@description('vCPU per replica, as a decimal string (Consumption profile pairs: 0.25/0.5Gi, 0.5/1Gi, 1/2Gi ...). The default matches the published cost model (docs reference/cost-and-capacity).')
+@description('vCPU per replica, as a decimal string (Consumption profile pairs: 0.25/0.5Gi, 0.5/1.0Gi, 1.0/2.0Gi ...). The default matches the published cost model (docs reference/cost-and-capacity).')
 param cpu string = '0.25'
 param memory string = '0.5Gi'
+
+@description('Spread the Container Apps environment across availability zones. REQUIRES a VNet-integrated environment (properties.vnetConfiguration.infrastructureSubnetId) — ARM rejects zoneRedundant:true without one — so this stays false until private networking (spec §11 / #196) lands.')
+param zoneRedundant bool = false
 
 @description('Environment variables: [{ name, value }]. No secretRef entries — the control plane resolves @KeyVault() references itself via its identity.')
 param environmentVariables array = []
@@ -77,7 +80,7 @@ resource containerAppsEnvironment 'Microsoft.App/managedEnvironments@2025-01-01'
         workloadProfileType: 'Consumption'
       }
     ]
-    zoneRedundant: false
+    zoneRedundant: zoneRedundant
   }
 }
 

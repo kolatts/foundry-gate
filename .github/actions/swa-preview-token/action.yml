@@ -1,0 +1,90 @@
+name: Static Web Apps preview token (ui-preview)
+description: >-
+  The whole Azure surface of the PR-preview track, in one place: log in with the `ui-preview`
+  GitHub Environment's OIDC identity, check the preview target is configured, and read the
+  Static Web App's deployment token. Used by BOTH `ui-deploy.yml` preview jobs (publish and
+  close) — they used to carry byte-identical copies of these three steps, which is how the
+  publish half drifted from its `_deploy-ui.yml` original within a single commit.
+
+  Every guard here is soft: a fork `pull_request` never receives an OIDC token and an
+  unconfigured `ui-preview` Environment has no variables, and neither is a reason to turn a
+  contributor's PR red. Callers gate their remaining steps on `ready == 'true'`.
+
+  SCOPE DISCIPLINE (#155): the only Azure call in this action is
+  `az staticwebapp secrets list` against the one Static Web App named by the Environment's own
+  variables. It deliberately does not resolve anything from the subscription deployment
+  outputs — the identity holds one role on one resource (see infra/modules/swa-preview-role.bicep)
+  and could not read them. A change that adds a subscription-scope call here reopens the hole
+  #144 closed.
+
+inputs:
+  client-id:
+    description: "vars.AZURE_CLIENT_ID of the ui-preview Environment (may be empty)."
+    required: true
+  tenant-id:
+    description: "vars.AZURE_TENANT_ID (may be empty)."
+    required: true
+  subscription-id:
+    description: "vars.AZURE_SUBSCRIPTION_ID (may be empty)."
+    required: true
+  static-web-app-name:
+    description: "vars.FG_STATIC_WEB_APP_NAME — the one Static Web App this identity can touch."
+    required: true
+  resource-group:
+    description: "vars.FG_RESOURCE_GROUP — its resource group."
+    required: true
+
+outputs:
+  ready:
+    description: "'true' when the identity logged in, the target is configured and a deployment token was read."
+    value: ${{ steps.token.outputs.ready }}
+  token:
+    description: "The Static Web Apps deployment token (masked). Empty unless ready == 'true'."
+    value: ${{ steps.token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Azure login (OIDC)
+      id: login
+      uses: ./.github/actions/azure-oidc-login
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+        environment: ui-preview
+        required: "false"
+
+    - name: Read the Static Web App deployment token
+      id: token
+      shell: bash
+      env:
+        CONFIGURED: ${{ steps.login.outputs.configured }}
+        SWA_NAME: ${{ inputs.static-web-app-name }}
+        SWA_RESOURCE_GROUP: ${{ inputs.resource-group }}
+      run: |
+        set -uo pipefail
+
+        skip() {
+          echo "::notice title=UI preview not configured - skipping::$1"
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
+        [ "${CONFIGURED}" = "true" ] || skip "The ui-preview Environment has no usable OIDC identity (fork pull request, or owner setup pending — https://github.com/kolatts/foundry-gate/issues/109)."
+
+        if [ -z "$SWA_NAME" ] || [ -z "$SWA_RESOURCE_GROUP" ]; then
+          skip "The ui-preview Environment needs FG_STATIC_WEB_APP_NAME and FG_RESOURCE_GROUP (the dev Static Web App its identity is scoped to). Owner setup: https://github.com/kolatts/foundry-gate/issues/109"
+        fi
+
+        token="$(az staticwebapp secrets list --name "$SWA_NAME" --resource-group "$SWA_RESOURCE_GROUP" \
+          --query properties.apiKey -o tsv)"
+        if [ -z "$token" ]; then
+          echo "::error::Could not read the Static Web App deployment token for ${SWA_NAME}. The ui-preview identity needs the FoundryGate SWA Preview Publisher role on that resource (infra/modules/swa-preview-role.bicep, assigned per #109)."
+          exit 1
+        fi
+        echo "::add-mask::$token"
+        {
+          echo "token=$token"
+          echo "ready=true"
+        } >> "$GITHUB_OUTPUT"
