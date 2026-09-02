@@ -159,7 +159,17 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   `SaveChangesAsync` run on `CancellationToken.None` — a client that disconnects mid-call
   must not turn an accepted change into an unaudited one. The residual "save failed after
   the external system accepted" orphan is logged at Error with the change's full identity
-  and rethrown (precedent: `FoundryDeploymentService.AuditAfterCommitAsync`).
+  and rethrown (precedent: `FoundryDeploymentService.AuditAfterCommitAsync`). Where the commit
+  point is *conditional* — quota resolution reaches APIM only when
+  `QuotaResolution.TierSyncRequested` — express it with
+  **`CommitToken.For(reachedExternal, cancellationToken)`**
+  (`FoundryGate.Data/Concurrency/CommitToken.cs` — in Data, not the Api, so every host that saves can
+  reach it), never a hand-rolled ternary, and carry the token it returns through the audit row, the save, the
+  transaction commit *and* any read-back that turns the committed change into the response (a
+  cancelled read-back reports a change that actually landed as an error). The predicate is "we
+  reached the external system", not "we called something that might have": an empty member list or
+  an unchanged tier is not a commit point, and an abandoned request that changed nothing outside
+  the database should still stop.
 - **Optional external features throw `FeatureNotConfiguredException` (503)** — from
   `FoundryGate.Domain.Exceptions` — when their configuration is absent or names a resource
   Azure does not have. It is a server problem the operator fixes from the message, so the

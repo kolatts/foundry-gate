@@ -18,6 +18,13 @@ public sealed class RecordingGatewayTierSync : IGatewayTierSync
     /// </summary>
     public int? ThrowFor { get; set; }
 
+    /// <summary>
+    /// Runs immediately after a sync is recorded and before the caller gets control back — the seam for
+    /// the "client disconnects the instant the gateway accepted the tier move" probe (#163), mirroring
+    /// <see cref="FakeApimManagementClient.AfterMutation"/>.
+    /// </summary>
+    public Action? AfterSync { get; set; }
+
     /// <inheritdoc />
     public Task SyncAsync(User user, string tierProductId, CancellationToken cancellationToken)
     {
@@ -29,6 +36,7 @@ public sealed class RecordingGatewayTierSync : IGatewayTierSync
         }
 
         Calls.Add((user.UserId, tierProductId));
+        AfterSync?.Invoke();
         return Task.CompletedTask;
     }
 }

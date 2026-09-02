@@ -4,6 +4,7 @@ using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Core.Quota;
 using FoundryGate.Data;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Data.Extensions;
 using FoundryGate.Domain.Common;
@@ -203,9 +204,13 @@ public sealed class QuotaRequestService(
         // fails the approval rather than leaving the database claiming a budget nobody enforces.
         var resolution = await quotaResolution.ResolveAsync(subject.UserId, BillingPeriod.Current(timeProvider), cancellationToken);
 
-        // Past the commit point (CONVENTIONS.md "External side effects have a commit point"): the gateway
-        // may already have moved the subscription, so the audit row and the save must not be abandoned
-        // because the client hung up. Every refusal above happened before that call.
+        // Past the commit point (CONVENTIONS.md "External side effects have a commit point") exactly when
+        // resolution actually moved the subscription: from there the audit row and the save must not be
+        // abandoned because the client hung up. Every refusal above happened before that call; when
+        // nothing reached the gateway the request's own token still applies and the transaction below
+        // simply rolls back (#163).
+        var completionToken = CommitToken.For(resolution.TierSyncRequested, cancellationToken);
+
         _ = await audit.LogAsync(
             AuditActions.QuotaIncreaseApproved,
             AuditTargetTypes.QuotaIncreaseRequest,
@@ -222,15 +227,17 @@ public sealed class QuotaRequestService(
                 previousTierProductId = resolution.PreviousTierProductId,
                 tierSyncRequested = resolution.TierSyncRequested,
             },
-            CancellationToken.None);
+            completionToken);
 
-        await dbContext.SaveChangesAsync(CancellationToken.None);
+        await dbContext.SaveChangesAsync(completionToken);
         if (transaction is not null)
         {
-            await transaction.CommitAsync(CancellationToken.None);
+            await transaction.CommitAsync(completionToken);
         }
 
-        return await GetProjectedAsync(entity.QuotaIncreaseRequestId, cancellationToken);
+        // completionToken again: the read-back is what turns the committed decision into the response,
+        // and failing it on a cancelled token would report an approval that actually landed as an error.
+        return await GetProjectedAsync(entity.QuotaIncreaseRequestId, completionToken);
     }
 
     /// <inheritdoc />

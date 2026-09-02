@@ -34,8 +34,9 @@ public interface IQuotaResetService
     /// <param name="trigger">Who is resetting and under which audit action — <see cref="QuotaResetTrigger.Scheduled"/> or <see cref="QuotaResetTrigger.Admin"/>.</param>
     /// <param name="cancellationToken">
     /// Honoured up to the point resolution asks the gateway to move a subscription; past that commit
-    /// point the audit row and the save run on <see cref="CancellationToken.None"/> (CONVENTIONS.md:
-    /// "external side effects have a commit point").
+    /// point the audit row, the save and the read-back run on <see cref="CancellationToken.None"/>,
+    /// via <c>CommitToken.For</c> (CONVENTIONS.md: "external side effects have a commit point").
+    /// A reset that moved nobody's tier never reached APIM and keeps the caller's own token.
     /// </param>
     Task<QuotaResetOutcome> ResetAsync(QuotaResetTrigger trigger, CancellationToken cancellationToken);
 }

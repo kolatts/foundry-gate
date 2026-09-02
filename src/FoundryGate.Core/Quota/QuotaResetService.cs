@@ -1,5 +1,6 @@
 using FoundryGate.Data;
 using FoundryGate.Data.Audit;
+using FoundryGate.Data.Concurrency;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Quota;
 using Microsoft.EntityFrameworkCore;
@@ -36,8 +37,10 @@ public sealed class QuotaResetService(
         // Past the commit point once any subscription has been re-scoped at the gateway. A mid-loop ARM
         // failure aborts before this line and saves nothing (the tier sync adds its audit row without
         // saving, #156 review), so the reset is all-or-nothing exactly as the interface promises.
+        // The predicate is "we reached APIM", not "we called something that might have": a reset over
+        // unchanged inputs moves nobody and is not a commit point (CONVENTIONS.md; #184).
         var tierSyncCount = resolutions.Count(r => r.TierSyncRequested);
-        var completionToken = tierSyncCount > 0 ? CancellationToken.None : cancellationToken;
+        var completionToken = CommitToken.For(tierSyncCount > 0, cancellationToken);
 
         foreach (var allocation in touched)
         {

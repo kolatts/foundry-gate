@@ -83,6 +83,10 @@ public sealed class UsageSyncJob(
                 periodsReconciled = periods.Select(p => p.ToString()).ToList(),
             });
 
+        // The caller's own token, deliberately: no CommitToken here because reconciliation has no commit
+        // point. Its only external call is a *read* of Log Analytics — nothing outside the database has
+        // accepted a change that the database now owes a record of, so an abandoned pass should stop,
+        // and the next tick recomputes the same totals anyway (CONVENTIONS.md).
         await dbContext.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(

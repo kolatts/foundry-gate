@@ -39,6 +39,18 @@ public sealed class FakeApimManagementClient : IApimManagementClient
     /// <summary>When set, <see cref="ListSecretsAsync"/> throws it — simulates ARM failing between "keys regenerated" and "new key read".</summary>
     public Exception? ThrowOnListSecrets { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="RegeneratePrimaryKeyAsync"/> throws it — simulates ARM failing, or the
+    /// caller disconnecting, while the one call that kills the developer's live key is in flight.
+    /// </summary>
+    public Exception? ThrowOnRegeneratePrimaryKey { get; set; }
+
+    /// <summary>
+    /// When set, <see cref="RegenerateSecondaryKeyAsync"/> throws it — the never-issued key failing to
+    /// rotate, which must not cost the developer the primary they were just handed.
+    /// </summary>
+    public Exception? ThrowOnRegenerateSecondaryKey { get; set; }
+
     /// <summary>When set, <see cref="DeleteSubscriptionAsync"/> throws it instead of deleting — simulates ARM refusing a deprovision.</summary>
     public Exception? ThrowOnDelete { get; set; }
 
@@ -49,9 +61,10 @@ public sealed class FakeApimManagementClient : IApimManagementClient
     public HashSet<string> FailDeleteFor { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Runs immediately after APIM has accepted a mutation and before the caller gets control back. The
-    /// hook for the "client disconnects the instant the external system said yes" probe: everything the
-    /// caller does after this point must survive a cancelled token (CONVENTIONS.md commit point).
+    /// Runs immediately after APIM has accepted a mutation — create, re-scope, either key regeneration,
+    /// or delete — and before the caller gets control back. The hook for the "client disconnects the
+    /// instant the external system said yes" probe: everything the caller does after this point must
+    /// survive a cancelled token (CONVENTIONS.md commit point).
     /// </summary>
     public Action? AfterMutation { get; set; }
 
@@ -174,7 +187,14 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         lock (_gate)
         {
             _calls.Add($"RegeneratePrimary:{subscriptionName}");
+
+            if (ThrowOnRegeneratePrimaryKey is { } primaryException)
+            {
+                throw primaryException;
+            }
+
             Require(subscriptionName).PrimaryKey = NewKey();
+            AfterMutation?.Invoke();
             return Task.CompletedTask;
         }
     }
@@ -185,7 +205,14 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         lock (_gate)
         {
             _calls.Add($"RegenerateSecondary:{subscriptionName}");
+
+            if (ThrowOnRegenerateSecondaryKey is { } secondaryException)
+            {
+                throw secondaryException;
+            }
+
             Require(subscriptionName).SecondaryKey = NewKey();
+            AfterMutation?.Invoke();
             return Task.CompletedTask;
         }
     }
@@ -197,6 +224,7 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         {
             _calls.Add($"UpdateScope:{subscriptionName}:{productId}");
             Require(subscriptionName).ProductId = productId;
+            AfterMutation?.Invoke();
             return Task.CompletedTask;
         }
     }

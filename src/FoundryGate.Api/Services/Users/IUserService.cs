@@ -18,11 +18,20 @@ public interface IUserService
     /// <c>User</c> row this runs the full provision pipeline — create the row from token claims
     /// (enriched from the directory when <c>Entra:Enabled</c>), resolve this month's quota, mint the
     /// APIM subscription, audit <c>user.provisioned</c> — and with one it refreshes the display fields
-    /// from the token, stamps <c>LastSyncedDate</c>, and resolves this month's allocation if the month
-    /// just turned over. Idempotent from the second call on.
+    /// from the token and resolves this month's allocation if the month just turned over. Idempotent
+    /// from the second call on, and in the common case a pure read: the row is written only when a token
+    /// claim actually differs from what is stored, or when <c>LastLoginDate</c> has gone stale
+    /// (<see cref="UserService.LastLoginGranularity"/>, #167). <c>LastSyncedDate</c> is never touched
+    /// here — it means "an Entra sync last saw this user", and a profile load is not a sync.
     /// </summary>
+    /// <remarks>
+    /// <b>The first-login race is absorbed (#154):</b> when two of these arrive together for one oid,
+    /// the loser's insert fails on the unique index, its transaction rolls back and it returns the
+    /// <em>winner's</em> profile rather than a 409. Only that collision is swallowed; every other failed
+    /// save still surfaces.
+    /// </remarks>
     /// <exception cref="UnauthorizedAccessException">The caller's account is deactivated (→ 403): an admin must re-activate it before the profile is available again.</exception>
-    /// <exception cref="ConflictException">Two first logins for the same oid raced (→ 409, retry).</exception>
+    /// <exception cref="ConflictException">A lost first-login race whose winning row could not then be read back (→ 409, retry) — not the race itself, which is absorbed.</exception>
     /// <exception cref="FeatureNotConfiguredException">First login on a host where APIM is not configured (→ 503): no user is created, because a user with no key cannot call the gateway.</exception>
     /// <exception cref="UpstreamDependencyException">First login where APIM or Microsoft Graph failed (→ 502); no user is created.</exception>
     Task<UserProfileResponse> GetMyProfileAsync(CancellationToken cancellationToken);

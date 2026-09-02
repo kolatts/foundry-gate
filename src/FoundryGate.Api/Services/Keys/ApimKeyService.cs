@@ -47,6 +47,9 @@ public sealed class ApimKeyService(
 
     private const string RotationFailureRemedy = "Rotate again (POST /keys/{userId}/rotate) or revoke and re-provision (DELETE /keys/{userId}, then POST /keys/{userId}/provision).";
 
+    /// <summary>What to do about a secondary key that was not rotated. The developer is unaffected; the stale credential is the problem.</summary>
+    private const string SecondaryRotationFailureRemedy = "Rotate again (POST /keys/{userId}/rotate) to retire the old secondary; the developer's primary key is live and correct, so nothing is urgent.";
+
     /// <inheritdoc />
     public async Task<ApiKeyRevealResponse> ProvisionAsync(User user, string tierProductId, CancellationToken cancellationToken)
     {
@@ -172,47 +175,110 @@ public sealed class ApimKeyService(
 
         var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
 
+        // Captured before the first ARM call: every failure path from here needs them to leave the row
+        // self-consistent, including the one where we never learn whether ARM acted at all.
+        var previous = (user.ApimSubscriptionKey, user.ApimSubscriptionKeyHint, user.ApimKeyIssuedDate);
+
         try
         {
-            // Both keys (#117): the secondary is never issued, but leaving it unrotated would leave a
-            // live credential whose lifetime exceeds every primary the developer has ever held.
             await apim.RegeneratePrimaryKeyAsync(subscriptionName, cancellationToken);
-            await apim.RegenerateSecondaryKeyAsync(subscriptionName, cancellationToken);
         }
         catch (ApimSubscriptionNotFoundException exception)
         {
             throw SubscriptionMissing(user, exception);
         }
+        catch (OperationCanceledException exception)
+        {
+            // The likeliest moment to lose a client (#184 review): this is the longest operation in the
+            // method and the last one still on the request's token, and ARM may already have swapped the
+            // key by the time the token trips. There is nothing to restore — the row still holds the
+            // previous ciphertext — but "that ciphertext may now be dead" must not escape silently, so
+            // this gets the same Error log and key.rotation-failed row as every confirmed failure. It is
+            // recorded as unconfirmed, because that is what we actually know.
+            await RecordRotationFailureAsync(user, subscriptionName, previous, rotatedRow: null, exception, regenerationConfirmed: false);
+            throw;
+        }
 
-        // From here on APIM holds new keys; anything that stops us storing the new primary leaves the
-        // row's ciphertext stale. Keep the previous values so the failure path can restore them and
-        // leave a trail instead of a silently unrevealable key.
-        var previous = (user.ApimSubscriptionKey, user.ApimSubscriptionKeyHint, user.ApimKeyIssuedDate);
+        // THE commit point (#168): the developer's old key died the instant APIM returned above, and
+        // nothing can bring it back. Everything from here therefore runs on CancellationToken.None — a
+        // client that hangs up in this window must not be the reason the new key is never stored, which
+        // would leave the row holding ciphertext for a key the gateway no longer recognises and lock the
+        // developer out with no signal.
         AuditLog? rotatedRow = null;
         DateTimeOffset issuedDate;
         ApimSubscriptionKeys keys;
+        string? secondaryRotationError = null;
 
         try
         {
-            keys = await apim.ListSecretsAsync(subscriptionName, cancellationToken);
+            keys = await apim.ListSecretsAsync(subscriptionName, CancellationToken.None);
             issuedDate = timeProvider.GetUtcNow();
-            await StoreKeyAsync(user, user.ApimSubscriptionId, keys.PrimaryKey, issuedDate, cancellationToken);
+
+            // The new primary is captured onto the row BEFORE the secondary is touched (#184 review).
+            // The primary is the only credential here that can lock a developer out, and at this point it
+            // is one ListSecrets away from being safe; putting a second ARM call in front of it meant an
+            // ARM blip on a key nobody has ever been issued restored the stale ciphertext and cost the
+            // developer their access.
+            await StoreKeyAsync(user, user.ApimSubscriptionId, keys.PrimaryKey, issuedDate, CancellationToken.None);
+
+            // Both keys (#117): the secondary is never issued, but leaving it unrotated would leave a
+            // live credential whose lifetime exceeds every primary the developer has ever held. It is
+            // not worth the developer's access, though — a failure here is logged, recorded on the
+            // key.rotated row below, and the rotation still succeeds with a stale secondary to retire.
+            try
+            {
+                await apim.RegenerateSecondaryKeyAsync(subscriptionName, CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                secondaryRotationError = exception.GetType().Name;
+                logger.LogError(
+                    exception,
+                    "Rotated the primary key of subscription {SubscriptionName} for user {UserId}, but the secondary key could not be regenerated and is still live. {Remedy}",
+                    subscriptionName,
+                    user.UserId,
+                    SecondaryRotationFailureRemedy);
+            }
 
             rotatedRow = await audit.LogAsync(
                 AuditActions.KeyRotated,
                 AuditTargetTypes.ApiKey,
                 TargetId(user),
-                new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, keysRegenerated = new[] { "primary", "secondary" } },
-                cancellationToken);
-            await dbContext.SaveChangesAsync(cancellationToken);
+                new
+                {
+                    apimSubscriptionId = user.ApimSubscriptionId,
+                    subscriptionName,
+                    keysRegenerated = secondaryRotationError is null ? new[] { "primary", "secondary" } : ["primary"],
+                    secondaryRotationError,
+                },
+                CancellationToken.None);
+            await dbContext.SaveChangesAsync(CancellationToken.None);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception)
         {
-            await RecordRotationFailureAsync(user, subscriptionName, previous, rotatedRow, exception, cancellationToken);
+            // No `when (exception is not OperationCanceledException)` guard (#168): a cancellation used
+            // to be the one failure that skipped compensation entirely, silently — the worst outcome of
+            // the lot, since the key is already dead. With this section on None a cancellation should no
+            // longer arise here at all, and if one does it gets the same restore-and-audit treatment as
+            // every other failure.
+            await RecordRotationFailureAsync(user, subscriptionName, previous, rotatedRow, exception, regenerationConfirmed: true);
+
+            if (exception is ApimSubscriptionNotFoundException notFound)
+            {
+                // Deleted out from under us right after the regeneration — vanishingly unlikely, but this
+                // keeps the 409 the method documents ("revoke and re-provision") for the whole of it,
+                // rather than the primary regeneration mapping and the rest falling through to a 500.
+                throw SubscriptionMissing(user, notFound);
+            }
+
             throw;
         }
 
-        logger.LogInformation("Rotated APIM subscription {SubscriptionName} for user {UserId} (primary and secondary regenerated).", subscriptionName, user.UserId);
+        logger.LogInformation(
+            "Rotated APIM subscription {SubscriptionName} for user {UserId} (primary regenerated; secondary {SecondaryOutcome}).",
+            subscriptionName,
+            user.UserId,
+            secondaryRotationError is null ? "regenerated" : "left unrotated - see the error above");
 
         return Reveal(user, keys.PrimaryKey, issuedDate);
     }
@@ -397,18 +463,27 @@ public sealed class ApimKeyService(
     }
 
     /// <summary>
-    /// APIM regenerated the keys but the new primary was not stored. Restore the previous (stale)
-    /// values so the row is at least self-consistent, drop the unsaved <c>key.rotated</c> row, log at
-    /// Error with the remedy, and try to leave a <c>key.rotation-failed</c> audit row (best effort — the
-    /// database itself may be what failed).
+    /// APIM regenerated the primary key — or may have — but the new value was not stored. Restore the
+    /// previous (now possibly dead) values so the row is at least self-consistent, drop the unsaved
+    /// <c>key.rotated</c> row, log at Error with the remedy, and try to leave a
+    /// <c>key.rotation-failed</c> audit row (best effort — the database itself may be what failed).
+    /// Takes no <c>CancellationToken</c> on purpose (#168): this runs past the commit point, so it must
+    /// not be abandoned by the token that abandoned the rotation.
     /// </summary>
+    /// <remarks>
+    /// <paramref name="regenerationConfirmed"/> is <see langword="false"/> on the one path where ARM
+    /// never answered — the request was cancelled while the primary regeneration was in flight (#184
+    /// review). The stored key is then <em>possibly</em> stale rather than definitely so, and the log
+    /// line and the audit row say which, because an operator reconciling this needs to know whether to
+    /// trust the ciphertext or replace it.
+    /// </remarks>
     private async Task RecordRotationFailureAsync(
         User user,
         string subscriptionName,
         (string Key, string Hint, DateTimeOffset? IssuedDate) previous,
         AuditLog? rotatedRow,
         Exception exception,
-        CancellationToken cancellationToken)
+        bool regenerationConfirmed)
     {
         user.ApimSubscriptionKey = previous.Key;
         user.ApimSubscriptionKeyHint = previous.Hint;
@@ -419,12 +494,24 @@ public sealed class ApimKeyService(
             dbContext.Entry(rotatedRow).State = EntityState.Detached;
         }
 
-        logger.LogError(
-            exception,
-            "APIM regenerated the keys of subscription {SubscriptionName} but the new key could not be stored; the ciphertext on user {UserId} is now STALE and reveal will return a dead key. {Remedy}",
-            subscriptionName,
-            user.UserId,
-            RotationFailureRemedy);
+        if (regenerationConfirmed)
+        {
+            logger.LogError(
+                exception,
+                "APIM regenerated the keys of subscription {SubscriptionName} but the new key could not be stored; the ciphertext on user {UserId} is now STALE and reveal will return a dead key. {Remedy}",
+                subscriptionName,
+                user.UserId,
+                RotationFailureRemedy);
+        }
+        else
+        {
+            logger.LogError(
+                exception,
+                "The request to regenerate the primary key of subscription {SubscriptionName} was abandoned before ARM confirmed it; the ciphertext on user {UserId} may now be STALE and reveal may return a dead key. {Remedy}",
+                subscriptionName,
+                user.UserId,
+                RotationFailureRemedy);
+        }
 
         try
         {
@@ -432,12 +519,14 @@ public sealed class ApimKeyService(
                 AuditActions.KeyRotationFailed,
                 AuditTargetTypes.ApiKey,
                 TargetId(user),
-                new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, error = exception.GetType().Name, remedy = RotationFailureRemedy },
-                cancellationToken);
-            await dbContext.SaveChangesAsync(cancellationToken);
+                new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, error = exception.GetType().Name, regenerationConfirmed, remedy = RotationFailureRemedy },
+                CancellationToken.None);
+            await dbContext.SaveChangesAsync(CancellationToken.None);
         }
-        catch (Exception auditException) when (auditException is not OperationCanceledException)
+        catch (Exception auditException)
         {
+            // Every arm logs (#168): a compensation that gives up quietly is how a dead key becomes
+            // invisible.
             logger.LogError(auditException, "Could not record the key.rotation-failed audit row for user {UserId}; the log line above is the only trail.", user.UserId);
         }
     }

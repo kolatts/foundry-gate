@@ -500,6 +500,40 @@ public class QuotaRequestServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
+    public async Task ApproveAsync_survives_a_client_that_disconnects_the_instant_the_gateway_moves_the_tier()
+    {
+        // The commit-point rule on the approval path (#158/#163): past IGatewayTierSync the subscription
+        // is already on the new product, so the decision, the new budget and the audit row that explains
+        // them must commit whatever the reviewer's browser does next.
+        await SeedReferenceDataAsync();
+        var admin = await SeedUserAsync("Admin");
+        var ada = await SeedUserAsync("Ada", u =>
+        {
+            u.MonthlyTokenQuota = TestGatewayTiers.StandardCap;
+            u.ApimSubscriptionId = "sub-ada";
+        });
+        await SeedAllocationAsync(ada, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 1);
+        var request = await SeedRequestAsync(ada, ada, Period, requestedQuota: TestGatewayTiers.PowerCap);
+
+        using var cts = new CancellationTokenSource();
+        _tierSync.AfterSync = cts.Cancel;
+
+        var result = await CreateService(admin.EntraObjectId, isAdmin: true)
+            .ApproveAsync(request.QuotaIncreaseRequestId, new ReviewQuotaIncreaseRequest(), cts.Token);
+
+        _tierSync.AfterSync = null;
+        Assert.True(cts.IsCancellationRequested);
+        Assert.Equal(QuotaRequestStatusType.Approved, result.StatusType);
+
+        Context.ChangeTracker.Clear();
+        Assert.Equal(TestGatewayTiers.PowerCap, (await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == ada.UserId)).MonthlyTokenQuota);
+        Assert.Equal(
+            QuotaRequestStatusType.Approved,
+            (await Context.QuotaIncreaseRequests.AsNoTracking().SingleAsync(r => r.QuotaIncreaseRequestId == request.QuotaIncreaseRequestId)).StatusType);
+        _ = Assert.Single(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaIncreaseApproved).ToListAsync());
+    }
+
+    [Fact]
     public async Task ApproveAsync_for_an_unlimited_request_sets_the_flag_and_clears_the_number()
     {
         await SeedReferenceDataAsync();
