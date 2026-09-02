@@ -166,6 +166,36 @@ public static class WebTestData
             CreatedDate: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
             ModifiedDate: null);
 
+    /// <summary>
+    /// One <c>GET /foundry/catalog</c> row — a model the configured accounts can serve (#173).
+    /// <paramref name="defaultSkuName"/> defaults to the first of <paramref name="skuNames"/>, which is
+    /// what ARM's own ordering would give; pass it explicitly to make the two differ, which is the case
+    /// worth testing (the list is sorted for display, the default is not).
+    /// </summary>
+    public static FoundryCatalogEntryResponse CatalogEntry(
+        string modelName = "gpt-4.1-mini",
+        string modelVersion = "2025-04-14",
+        IReadOnlyList<string>? skuNames = null,
+        int? defaultCapacity = 10,
+        string modelFormat = "OpenAI",
+        string? defaultSkuName = null,
+        bool isDefaultVersion = true,
+        string lifecycleStatus = "GenerallyAvailable",
+        DateTimeOffset? inferenceRetiresOn = null)
+    {
+        IReadOnlyList<string> skus = skuNames ?? ["GlobalStandard"];
+        return new(
+            modelFormat,
+            modelName,
+            modelVersion,
+            skus,
+            defaultCapacity,
+            defaultSkuName ?? (skus.Count > 0 ? skus[0] : string.Empty),
+            isDefaultVersion,
+            lifecycleStatus,
+            inferenceRetiresOn);
+    }
+
     public static GroupResponse Group(
         int groupId = 7,
         string name = "Platform",
@@ -220,14 +250,18 @@ public static class WebTestData
         int unlimitedUserCount = 3,
         int pendingRequestCount = 2,
         long totalTokensUsed = 123_456_789,
-        IReadOnlyList<TopConsumerResponse>? topConsumers = null) =>
+        IReadOnlyList<TopConsumerResponse>? topConsumers = null,
+        int hardStoppedUserCount = 0,
+        int overBudgetUserCount = 0) =>
         new(
             totalUserCount,
             activeUserCount,
             unlimitedUserCount,
             pendingRequestCount,
             totalTokensUsed,
-            topConsumers ?? [Consumer()]);
+            topConsumers ?? [Consumer()],
+            hardStoppedUserCount,
+            overBudgetUserCount);
 
     public static TopConsumerResponse Consumer(
         string displayName = "Heavy User",
@@ -240,8 +274,9 @@ public static class WebTestData
         string key = SystemConfigurationKeys.DefaultMonthlyTokenQuota,
         string value = "5000000",
         int? updatedByUserId = null,
-        string? updatedByDisplayName = null) =>
-        new(key, value, DateTimeOffset.UnixEpoch, updatedByUserId, updatedByDisplayName);
+        string? updatedByDisplayName = null,
+        bool isReadOnly = false) =>
+        new(key, value, DateTimeOffset.UnixEpoch, updatedByUserId, updatedByDisplayName, isReadOnly);
 
     public static AuditLogEntryResponse AuditEntry(
         int id = 1,

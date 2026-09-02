@@ -67,6 +67,31 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<FoundryCatalogEntryResponse>> ListCatalogAsync(string accountName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+
+        var entries = new List<FoundryCatalogEntryResponse>();
+        try
+        {
+            // Account-scoped (CognitiveServicesAccountResource.GetModelsAsync), not the
+            // subscription/location listing: it is already filtered to what this account's kind and the
+            // subscription's entitlements allow, which is exactly the question the create form asks.
+            await foreach (var model in Account(accountName).GetModelsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                entries.Add(MapCatalogEntry(model));
+            }
+        }
+        catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
+        {
+            // Like the deployments collection, a 404 on the account's own model list is the account.
+            throw new FoundryAccountNotFoundException(accountName, ex);
+        }
+
+        return entries;
+    }
+
+    /// <inheritdoc />
     public async Task<FoundryDeploymentResponse?> GetDeploymentAsync(string accountName, string deploymentName, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
@@ -226,11 +251,41 @@ public sealed class ArmFoundryManagementClient(ArmClient armClient, AppSettings 
         appSettings.Gateway.ResourceGroup
         ?? throw new InvalidOperationException("Gateway:ResourceGroup is not configured.");
 
+    private CognitiveServicesAccountResource Account(string accountName) =>
+        armClient.GetCognitiveServicesAccountResource(
+            CognitiveServicesAccountResource.CreateResourceIdentifier(RequiredSubscriptionId, RequiredResourceGroup, accountName));
+
     private CognitiveServicesAccountDeploymentCollection Deployments(string accountName) =>
-        armClient
-            .GetCognitiveServicesAccountResource(
-                CognitiveServicesAccountResource.CreateResourceIdentifier(RequiredSubscriptionId, RequiredResourceGroup, accountName))
-            .GetCognitiveServicesAccountDeployments();
+        Account(accountName).GetCognitiveServicesAccountDeployments();
+
+    /// <summary>
+    /// ARM's account model → the create form's vocabulary, carrying the three things ARM knows and
+    /// nothing else can work out: which version is the <em>default</em> one (inferring it from version
+    /// strings puts <c>turbo-2024-04-09</c> above <c>2025-04-14</c>), whether the model is on its way
+    /// out, and which SKU ARM itself lists first.
+    /// </summary>
+    /// <remarks>
+    /// <c>DefaultSkuName</c> and <c>DefaultCapacity</c> come from the <em>same</em> SKU — the first ARM
+    /// lists. Capacity limits are per-SKU, so a suggested capacity taken from one SKU and offered
+    /// beside another is a head start on a create ARM refuses. <c>SkuNames</c> is sorted separately,
+    /// for a readable dropdown only.
+    /// </remarks>
+    private static FoundryCatalogEntryResponse MapCatalogEntry(CognitiveServicesAccountModel model)
+    {
+        var skus = (model.Skus ?? []).Where(sku => !string.IsNullOrWhiteSpace(sku.Name)).ToList();
+        var defaultSku = skus.FirstOrDefault();
+
+        return new FoundryCatalogEntryResponse(
+            model.Format ?? string.Empty,
+            model.Name ?? string.Empty,
+            model.Version ?? string.Empty,
+            [.. skus.Select(sku => sku.Name).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
+            defaultSku?.Capacity?.Default,
+            defaultSku?.Name ?? string.Empty,
+            model.IsDefaultVersion ?? false,
+            model.LifecycleStatus?.ToString() ?? string.Empty,
+            model.Deprecation?.InferenceOn);
+    }
 
     private static FoundryDeploymentResponse Map(string accountName, CognitiveServicesAccountDeploymentData data) =>
         new(

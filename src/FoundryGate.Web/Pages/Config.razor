@@ -54,6 +54,12 @@ else
         <RowTemplate Context="entry">
             <MudTd DataLabel="Key" Style="vertical-align: top; width: 22rem;">
                 <MudText Typo="Typo.body2" Class="fg-mono-raw">@entry.Key</MudText>
+                @if (entry.IsReadOnly)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text" Icon="@Icons.Material.Filled.Lock" data-testid="@($"config-readonly-{entry.Key}")">
+                        System-managed
+                    </MudChip>
+                }
                 @if (IsDirty(entry))
                 {
                     <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Text" data-testid="@($"config-dirty-{entry.Key}")">
@@ -70,7 +76,8 @@ else
                               Margin="Margin.Dense"
                               Class="fg-mono-raw"
                               MaxLength="@ValidationConstants.ConfigValueMaxLength"
-                              Disabled="@_saving"
+                              Disabled="@(_saving || entry.IsReadOnly)"
+                              HelperText="@(entry.IsReadOnly ? "Written by Foundry Gate itself — the API refuses an edit." : null)"
                               data-testid="@($"config-value-{entry.Key}")" />
                 @if (_rowResults.TryGetValue(entry.Key, out var result))
                 {
@@ -188,15 +195,21 @@ else
     }
 
     /// <summary>
-    /// A row is dirty when its draft differs from what the API returned. There is deliberately no
-    /// client-side list of keys the API refuses: <c>SystemConfigValidator.EnsureEditable</c> is the
-    /// one authority on that (a retired key answers <c>409</c> with the replacement named in the
-    /// message), and a second copy here would drift the moment a key is retired or un-retired —
-    /// which it already had, blocking a key the API would happily write. The refusal is reported
-    /// next to the field it belongs to, so the admin reads the API's own reason rather than ours.
+    /// A row is dirty when its draft differs from what the API returned. There is deliberately <b>no
+    /// client-side list of keys the API refuses</b> (#172): the field is disabled from the row's own
+    /// <c>IsReadOnly</c> flag, which the API sets from the one Domain map
+    /// <c>SystemConfigValidator.EnsureEditable</c> also reads, and any other refusal is reported next
+    /// to the field it belongs to in the API's own words. A second copy of that list here drifted the
+    /// moment a key was retired or un-retired — which it had already done once, blocking a key the API
+    /// would happily write.
+    /// <para>
+    /// A read-only row can therefore never be dirty (its input is disabled), but the check is
+    /// belt-and-braces rather than a claim about the UI: nothing should send a <c>PUT</c> that exists
+    /// only to be refused.
+    /// </para>
     /// </summary>
     private bool IsDirty(SystemConfigEntryResponse entry) =>
-        !string.Equals(Draft(entry.Key), entry.Value, StringComparison.Ordinal);
+        !entry.IsReadOnly && !string.Equals(Draft(entry.Key), entry.Value, StringComparison.Ordinal);
 
     private void DiscardChanges()
     {

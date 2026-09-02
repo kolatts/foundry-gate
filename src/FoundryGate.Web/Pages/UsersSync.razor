@@ -84,19 +84,66 @@ else
         }
     }
 
-    <MudAlert Severity="Severity.Normal" Class="mt-6" Style="max-width: 44rem;" data-testid="sync-history-note">
-        Only this session's run is shown. Foundry Gate doesn't yet keep the time and result of the
-        last sync anywhere durable — see
-        <MudLink Href="https://github.com/kolatts/foundry-gate/issues/171" Target="_blank">#171</MudLink>.
-        Every run does write an audit row, so
-        <MudLink Href="audit">the audit log</MudLink> has the history in the meantime.
+    <MudAlert Severity="@(_lastSyncUnavailable is null ? Severity.Normal : Severity.Warning)"
+              Class="mt-6"
+              Style="max-width: 44rem;"
+              data-testid="sync-history-note">
+        @if (_lastSyncUnavailable is { } unavailable)
+        {
+            @* "Couldn't read the last run" and "there was no last run" are different facts, and only
+               one of them is something this page actually learned. *@
+            <span data-testid="sync-last-summary">Couldn't read the last run: @unavailable</span>
+        }
+        else if (_lastSync is { LastSyncDate: { } lastSyncDate })
+        {
+            <MudText Typo="Typo.subtitle2" Class="mb-1">
+                Last run @lastSyncDate.ToLocalTime().ToString("d MMM yyyy HH:mm")
+            </MudText>
+            <span data-testid="sync-last-summary">
+                @(_lastSync.LastResult is { } last
+                    ? $"{last.AddedCount} added, {last.UpdatedCount} updated, {last.DeactivatedCount} deactivated, {last.FailedCount} failed."
+                    : "The counts from that run weren't recorded.")
+            </span>
+        }
+        else
+        {
+            <span data-testid="sync-last-summary">This fork has no record of a previous sync.</span>
+        }
+        <MudText Typo="Typo.caption" Class="d-block mt-2">
+            Only the most recent run is kept. Every run writes an audit row, so
+            <MudLink Href="@($"audit?action={AuditActions.UsersSynced}")">the audit log</MudLink> has the
+            full history.
+        </MudText>
     </MudAlert>
 }
 
 @code {
     private UserSyncResult? _result;
+    private UserSyncStatusResponse? _lastSync;
+    private string? _lastSyncUnavailable;
     private bool _running;
     private bool _accessDenied;
+
+    /// <summary>
+    /// The previous run, from <c>GET /users/sync/last</c> (#171). A failure does not stop the page —
+    /// its job is running a sync — but it is reported rather than swallowed: rendering "no record of a
+    /// previous sync" for a call that failed asserts a fact about the database the page never learned.
+    /// </summary>
+    protected override Task OnInitializedAsync() => LoadLastSyncAsync();
+
+    private async Task LoadLastSyncAsync()
+    {
+        var result = await Api.GetLastUserSyncAsync();
+        if (result.IsSuccess)
+        {
+            _lastSync = result.Value;
+            _lastSyncUnavailable = null;
+            return;
+        }
+
+        _lastSync = null;
+        _lastSyncUnavailable = result.Message ?? "the API didn't answer.";
+    }
 
     /// <summary>
     /// A run that left someone holding a key is an error, not a success; one that suspended
@@ -144,6 +191,10 @@ else
 
             _result = result.Value;
             Snackbar.Add("Entra sync finished.", Severity.Success);
+
+            // Re-read rather than assuming: the stored record is what a reload would show, and if the
+            // run somehow didn't write one, the page should say so rather than invent it.
+            await LoadLastSyncAsync();
         }
         finally
         {

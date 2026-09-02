@@ -19,6 +19,13 @@ public sealed partial class FakeFoundryGateApiClient
     public ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>> FoundryDeploymentsResult { get; set; } =
         ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>.Ok([]);
 
+    /// <summary>
+    /// What <c>GET /foundry/catalog</c> answers (#173). Defaults to empty, which is the "no
+    /// suggestions, free text" path the create dialog has to keep working.
+    /// </summary>
+    public ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>> FoundryCatalogResult { get; set; } =
+        ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>.Ok([]);
+
     public ApiCallResult<FoundryDeploymentResponse> CreateFoundryDeploymentResult { get; set; } =
         ApiCallResult<FoundryDeploymentResponse>.Fail(ApiCallStatus.Error, "No create result arranged for this test.");
 
@@ -30,6 +37,13 @@ public sealed partial class FakeFoundryGateApiClient
         ApiCallResult<IReadOnlyList<GroupSyncResult>>.Ok([]);
 
     // -- Captured arguments ---------------------------------------------------------------------
+
+    /// <summary>
+    /// What <c>GET /users/sync/last</c> answers (#171). Defaults to "this fork has never run one",
+    /// which is what a freshly deployed fork sees.
+    /// </summary>
+    public ApiCallResult<UserSyncStatusResponse> LastUserSyncResult { get; set; } =
+        ApiCallResult<UserSyncStatusResponse>.Ok(new UserSyncStatusResponse(null, null));
 
     /// <summary>Every filtered <c>GET /users</c> the pages made, in order — search, status and paging.</summary>
     public List<(UserListQuery Query, PagedRequest Paging)> UserListCalls { get; } = [];
@@ -54,6 +68,13 @@ public sealed partial class FakeFoundryGateApiClient
         return this;
     }
 
+    /// <summary>What <c>GET /foundry/catalog</c> returns.</summary>
+    public FakeFoundryGateApiClient ArrangeCatalog(params FoundryCatalogEntryResponse[] entries)
+    {
+        FoundryCatalogResult = ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>.Ok(entries);
+        return this;
+    }
+
     // -- IFoundryGateApiClient ------------------------------------------------------------------
 
     public Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(UserListQuery query, PagedRequest paging, CancellationToken ct = default)
@@ -61,6 +82,9 @@ public sealed partial class FakeFoundryGateApiClient
         UserListCalls.Add((query, paging));
         return RespondAsync(nameof(GetUsersAsync), UsersResult);
     }
+
+    public Task<ApiCallResult<UserSyncStatusResponse>> GetLastUserSyncAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetLastUserSyncAsync), LastUserSyncResult);
 
     public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, bool force, CancellationToken ct = default)
     {
@@ -71,6 +95,9 @@ public sealed partial class FakeFoundryGateApiClient
 
     public Task<ApiCallResult<IReadOnlyList<FoundryDeploymentResponse>>> GetFoundryDeploymentsAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetFoundryDeploymentsAsync), FoundryDeploymentsResult);
+
+    public Task<ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>> GetFoundryCatalogAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetFoundryCatalogAsync), FoundryCatalogResult);
 
     public Task<ApiCallResult<FoundryDeploymentResponse>> CreateFoundryDeploymentAsync(CreateFoundryDeploymentRequest request, CancellationToken ct = default)
     {

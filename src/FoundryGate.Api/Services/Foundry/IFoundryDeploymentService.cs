@@ -70,6 +70,24 @@ public interface IFoundryDeploymentService
     Task<IReadOnlyList<FoundryModelResponse>> ListModelsAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// What the configured accounts <em>can</em> deploy, as opposed to what they already have (#173):
+    /// one entry per model and version with the SKUs it supports and a suggested capacity. Merged
+    /// across accounts and served from a <c>FoundryDeploymentService.CatalogCacheDuration</c> (5 min)
+    /// cache — the answer changes when Microsoft ships a model, not when this fork deploys one, and
+    /// every open of the create dialog asks for it. A missing account is skipped with a Warning rather
+    /// than failing the read: the create form still accepts anything typed, so a partial catalogue is
+    /// a smaller failure than none.
+    /// </summary>
+    /// <remarks>
+    /// Anthropic-format models are listed even though <see cref="CreateDeploymentAsync"/> refuses them
+    /// (#107/#126): what the account can serve is a fact worth showing, and the refusal explains
+    /// itself when it happens. Nothing here validates a create — ARM decides, and it refuses an
+    /// account that cannot serve a model with a message the admin can act on.
+    /// </remarks>
+    /// <exception cref="Domain.Exceptions.FeatureNotConfiguredException">Foundry management is not configured at all (503).</exception>
+    Task<IReadOnlyList<FoundryCatalogEntryResponse>> ListCatalogAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Creates one OpenAI-format deployment in one account and audits <c>foundry.deployment.created</c>.
     /// Returns the deployment as ARM reported it on acceptance (usually <c>Accepted</c>/<c>Creating</c> —
     /// poll <see cref="GetDeploymentAsync"/> for <c>Succeeded</c>).

@@ -136,3 +136,20 @@ public record UpdateUserQuotaRequest
 /// a subscription that is already gone). Non-zero means someone still holds a working key.
 /// </param>
 public record UserSyncResult(int AddedCount, int UpdatedCount, int DeactivatedCount, int SkippedGroupAssignmentCount, int FailedCount);
+
+/// <summary>
+/// What the last <c>POST /users/sync</c> did and when — <c>GET /users/sync/last</c>, admin-only
+/// (#171). Read from the <c>LastUserSyncDate</c> / <c>LastUserSyncResult</c> configuration rows the
+/// sync writes in its own unit of work, so it survives the browser session, covers runs triggered
+/// outside the UI, and is there on a cold page load.
+/// </summary>
+/// <param name="LastSyncDate">
+/// When the last run finished, or <see langword="null"/> if this fork has never run one (or ran one
+/// before #171 shipped — nothing backfills history that was never recorded).
+/// </param>
+/// <param name="LastResult">
+/// That run's counts, or <see langword="null"/> when there is no recorded run — and also when the
+/// stored JSON cannot be read, which is reported as "no result" rather than as an error: a broken
+/// souvenir of a past run must not fail the page that shows it.
+/// </param>
+public record UserSyncStatusResponse(DateTimeOffset? LastSyncDate, UserSyncResult? LastResult);

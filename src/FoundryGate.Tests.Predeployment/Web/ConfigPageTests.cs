@@ -176,6 +176,78 @@ public class ConfigPageTests : WebTestContext
     }
 
     [Fact]
+    public void A_key_the_api_says_is_read_only_is_disabled_and_labelled()
+    {
+        // #171/#172: the flag comes off the row the API returned. There is still no client-side list
+        // of keys — this page cannot decide read-only-ness, only render the API's decision.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+        [
+            WebTestData.ConfigEntry(SystemConfigurationKeys.DefaultMonthlyTokenQuota, "5000000"),
+            WebTestData.ConfigEntry(SystemConfigurationKeys.LastUserSyncDate, "2026-08-31T06:30:00.0000000+00:00", isReadOnly: true),
+        ]);
+
+        var page = RenderPage<Config>();
+
+        Assert.True(page.Find($"[data-testid='config-value-{SystemConfigurationKeys.LastUserSyncDate}']").HasAttribute("disabled"));
+        Assert.Contains(
+            "System-managed",
+            page.Find($"[data-testid='config-readonly-{SystemConfigurationKeys.LastUserSyncDate}']").TextContent,
+            StringComparison.Ordinal);
+
+        // ...and an editable key beside it is untouched.
+        Assert.False(page.Find($"[data-testid='config-value-{SystemConfigurationKeys.DefaultMonthlyTokenQuota}']").HasAttribute("disabled"));
+        Assert.Empty(page.FindAll($"[data-testid='config-readonly-{SystemConfigurationKeys.DefaultMonthlyTokenQuota}']"));
+    }
+
+    [Theory]
+    [InlineData("AKeyThisPageHasNeverHeardOf")]
+    [InlineData(SystemConfigurationKeys.DefaultMonthlyTokenQuota)]
+    public void Read_only_ness_is_the_apis_decision_whatever_the_key_is_called(string key)
+    {
+        // The #172 tripwire. The page owns no opinion about which keys are editable: a key it has
+        // never heard of is disabled when the API flags it, and a key it renders every day would be
+        // disabled too. A client-side list could satisfy neither case.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+            [WebTestData.ConfigEntry(key, "whatever", isReadOnly: true)]);
+
+        var page = RenderPage<Config>();
+
+        Assert.True(page.Find($"[data-testid='config-value-{key}']").HasAttribute("disabled"));
+    }
+
+    [Theory]
+    [InlineData(SystemConfigurationKeys.LastUserSyncDate)]
+    [InlineData(SystemConfigurationKeys.LastUserSyncResult)]
+    public void A_system_managed_key_the_api_did_not_flag_is_still_editable_here(string key)
+    {
+        // The other half of the tripwire, and the shape of the bug #172 named: the page used to be
+        // *stricter* than the API, disabling a key the API would happily write. It must render what
+        // the API said about this row — not what the Domain constants happen to say today.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+            [WebTestData.ConfigEntry(key, "recorded", isReadOnly: false)]);
+
+        var page = RenderPage<Config>();
+        Edit(page, key, "an edit the API allowed");
+
+        Assert.False(page.Find($"[data-testid='config-value-{key}']").HasAttribute("disabled"));
+        Assert.False(page.Find("[data-testid='config-save']").HasAttribute("disabled"));
+    }
+
+    [Fact]
+    public void A_read_only_row_is_never_sent_as_a_change()
+    {
+        // Nothing should issue a PUT that exists only to be refused.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+            [WebTestData.ConfigEntry(SystemConfigurationKeys.LastUserSyncDate, "recorded", isReadOnly: true)]);
+
+        var page = RenderPage<Config>();
+        Edit(page, SystemConfigurationKeys.LastUserSyncDate, "tampered");
+
+        Assert.True(page.Find("[data-testid='config-save']").HasAttribute("disabled"));
+        Assert.Empty(Api.ConfigUpdates);
+    }
+
+    [Fact]
     public void A_rejected_edit_stays_in_the_box_to_be_fixed_rather_than_being_retyped()
     {
         Api.UpdateConfigResult = ApiCallResult<bool>.Fail(ApiCallStatus.Error, "DefaultMonthlyTokenQuota must equal a configured tier cap.");

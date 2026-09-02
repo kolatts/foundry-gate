@@ -36,6 +36,7 @@ public class FoundryGateApiClientRouteMatchTests(ApiTestFactory factory) : IClas
         { "POST", "/api/v1/users/7/activate" },
         { "POST", "/api/v1/users/7/deactivate" },
         { "POST", "/api/v1/users/sync" },
+        { "GET", "/api/v1/users/sync/last" },
 
         // Groups
         { "GET", "/api/v1/groups" },
@@ -74,6 +75,7 @@ public class FoundryGateApiClientRouteMatchTests(ApiTestFactory factory) : IClas
         // Foundry
         { "GET", "/api/v1/foundry/models" },
         { "GET", "/api/v1/foundry/deployments" },
+        { "GET", "/api/v1/foundry/catalog" },
         { "POST", "/api/v1/foundry/deployments" },
         { "DELETE", "/api/v1/foundry/deployments/fg-eastus/gpt-4-1-mini" },
 
