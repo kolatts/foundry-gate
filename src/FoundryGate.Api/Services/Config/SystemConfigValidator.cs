@@ -19,7 +19,8 @@ namespace FoundryGate.Api.Services.Config;
 /// wired to anything (<see cref="SystemConfigurationKeys.ApimProductId"/>, superseded by the per-tier
 /// APIM products; <see cref="SystemConfigurationKeys.EntraTenantId"/>, unused since #123). They stay in
 /// the table because the seed data references them, but editing one would be a silent no-op — so the
-/// refusal names what to change instead.</item>
+/// refusal names what to change instead. #164 removes the rows themselves, which is a data change
+/// rather than an API one.</item>
 /// <item><b>Known key, bad value</b> → <see cref="ArgumentException"/> (400) whose message states the
 /// rule.</item>
 /// <item><b>Known key, good value</b> → the <em>normalized</em> string to store (trimmed; booleans
@@ -111,7 +112,10 @@ public sealed class SystemConfigValidator(GatewayTierMapper tierMapper)
         return quota.ToString(CultureInfo.InvariantCulture);
     }
 
-    /// <summary>1–28: the reset must land on a day every calendar month actually has (spec §6 ships "1").</summary>
+    /// <summary>
+    /// 1–28: the reset must land on a day every calendar month actually has (spec §6 ships "1"). The
+    /// rule is enforced ahead of a reader — nothing consumes this key yet (#165).
+    /// </summary>
     private static string NormalizeResetDayOfMonth(string value)
     {
         if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var day)

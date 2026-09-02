@@ -127,7 +127,61 @@ Rules the mutation paths enforce (CLAUDE.md "Anthropic deployments are create-on
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/config` | Admin | All SystemConfiguration keys |
-| `PUT` | `/config/{key}` | Admin | Update a configuration value |
+| `GET` | `/config` | Admin | Every `SystemConfiguration` key, ordered by key: `{ key, value, updatedDate, updatedByUserId, updatedByDisplayName }`. The last two are `null` for a seeded key no admin has edited |
+| `PUT` | `/config/{key}` | Admin | Set one key's value. Returns the row as it now stands |
 | `GET` | `/audit` | Admin | Audit log, paged. Filter: `?actor=&action=&from=&to=` |
-| `GET` | `/dashboard` | Admin | Summary stats for the dashboard |
+| `GET` | `/dashboard` | Admin | Summary stats for the dashboard. `?fresh=true` bypasses the 30-second cache |
+
+### `PUT /config/{key}`
+
+Body: `{ "value": "..." }`. The key is matched case-insensitively; an unknown one is `404`. The
+value is validated **per key** before it is stored — a configuration editor that accepts a value
+the system cannot use only moves the failure somewhere harder to find — and stored **normalized**
+(trimmed, booleans lower-cased, URLs and resource ids without a trailing slash), so two admins
+typing `True` and `true` leave the same row behind.
+
+| Key | Rule |
+|---|---|
+| `DefaultMonthlyTokenQuota` | A non-negative whole number that is exactly one of the configured tier caps (`Gateway:Tiers`; `GET /quota/tiers` lists them). Same D-013 rule as every other quota write path — the gateway enforces a tier, not a number. Unlimited is not expressible fork-wide: it is set per user or per group |
+| `ResetDayOfMonth` | A whole number from 1 to 28 (28 is the last day every month has) |
+| `EntraGroupSyncEnabled` | `true` or `false` |
+| `ApimGatewayUrl` | An absolute `https` URL, or empty |
+| `ApimResourceId`, `FoundryResourceId` | An ARM resource id (`/subscriptions/{id}/resourceGroups/{group}/providers/{namespace}/{type}/{name}`), or empty. Shape only — whether the resource exists is Azure's answer, reported as `503` by the endpoints that use it |
+| Any other row a fork operator added | Free text, up to 4000 characters |
+
+Two seeded keys are **read-only (`409`)**, because editing them would be a silent no-op. They stay
+in the table only so re-seeding is idempotent, and the refusal names the replacement:
+
+- `ApimProductId` — quota tiers are APIM *products* now, so a developer's subscription is issued
+  against the product for their tier (`Gateway:Tiers` in the API, `quotaTiers` in `infra/main.bicep`),
+  not against one fork-wide product id.
+- `EntraTenantId` — Graph access is configured by the `Entra` options section over the host's
+  `AzureAd:TenantId` ([#123](https://github.com/kolatts/foundry-gate/issues/123)).
+
+Every accepted edit stamps `updatedByUserId` (the calling admin) and `updatedDate`, and writes one
+`config.updated` audit row with `{ key, before, after }` — in the same transaction as the change, so
+a value can never move without a trail. The calling admin must already have a FoundryGate user row
+(`GET /users/me` provisions one) or the write is `403`; reading `/config` needs no such row.
+
+**A deploy never reverts an edit.** `SystemConfiguration`'s value, timestamp and editor columns are
+`[DoNotUpdate]`, so the reference-data seeder that runs after every database deploy only *inserts*
+keys that are missing.
+
+### `GET /dashboard`
+
+Returns `{ totalUserCount, activeUserCount, unlimitedUserCount, pendingQuotaIncreaseRequestCount,
+totalTokensUsedThisPeriod, topConsumers }` for the current UTC calendar month.
+
+- `unlimitedUserCount` counts **active** unlimited users — a deactivated account consumes nothing.
+- `totalTokensUsedThisPeriod` sums every allocation in the period, deactivated users included: the
+  tokens they spent before offboarding are still tokens this month spent.
+- `topConsumers` is the ten busiest **active** users this period, each with `userId`, `userUnique`,
+  `displayName`, `tokensUsed`, `allocatedTokens` and `percentUsed` — `null` for an unlimited user,
+  `100` for a zero quota with any usage.
+
+Every usage figure here is a reconciliation number from the Log Analytics sync, refreshed on that
+job's cadence — not a live view of gateway enforcement.
+
+The summary is computed once and served to every admin for **30 seconds**, keyed by billing period
+(so the first read after a month boundary can never show last month's figures). The admin page
+refreshes itself every 60 s; pass `?fresh=true` to recompute immediately after a change.
