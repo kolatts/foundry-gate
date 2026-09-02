@@ -5,10 +5,10 @@ namespace FoundryGate.Tests.Predeployment.Domain;
 public class SystemConfigurationKeysTests
 {
     [Fact]
-    public void All_contains_exactly_the_seven_seeded_keys_with_no_duplicates()
+    public void All_contains_exactly_the_eight_seeded_keys_with_no_duplicates()
     {
-        // Five originals plus the two LastUserSync* rows #171 added.
-        Assert.Equal(7, SystemConfigurationKeys.All.Count);
+        // Five originals, the two LastUserSync* rows #171 added, and #177's RateCard.
+        Assert.Equal(8, SystemConfigurationKeys.All.Count);
         Assert.Equal(SystemConfigurationKeys.All.Count, SystemConfigurationKeys.All.Distinct().Count());
     }
 
@@ -20,6 +20,7 @@ public class SystemConfigurationKeysTests
     [InlineData(nameof(SystemConfigurationKeys.ResetDayOfMonth))]
     [InlineData(nameof(SystemConfigurationKeys.LastUserSyncDate))]
     [InlineData(nameof(SystemConfigurationKeys.LastUserSyncResult))]
+    [InlineData(nameof(SystemConfigurationKeys.RateCard))]
     public void All_contains_the_named_key(string expectedKey)
     {
         Assert.Contains(expectedKey, SystemConfigurationKeys.All);

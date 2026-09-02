@@ -22,6 +22,7 @@ public class AdminPageAuthorizationTests
         typeof(GroupNew),
         typeof(GroupDetail),
         typeof(Foundry),
+        typeof(QuotaAllocations),
     ];
 
     [Theory]

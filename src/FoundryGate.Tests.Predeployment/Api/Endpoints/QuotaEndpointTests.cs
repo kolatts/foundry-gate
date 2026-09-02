@@ -153,6 +153,122 @@ public class QuotaEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestF
         Assert.False(mine.IsGatewayCapped);
     }
 
+    // -- GET /quota/allocations filters (#208) --
+
+    [Fact]
+    public async Task Admin_list_filtered_by_isHardStopped_returns_only_the_hard_stopped_rows()
+    {
+        var stopped = await factory.SeedUserAsync(displayName: $"Stopped {Guid.NewGuid():N}");
+        var running = await factory.SeedUserAsync(displayName: $"Running {Guid.NewGuid():N}");
+        await SeedAllocationAsync(stopped.UserId, allocated: 5_000_000, tokensUsed: 1, isHardStopped: true);
+        await SeedAllocationAsync(running.UserId, allocated: 5_000_000, tokensUsed: 1);
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var onlyStopped = await ReadFilteredAsync(client, "isHardStopped=true");
+        Assert.Contains(onlyStopped, a => a.UserId == stopped.UserId);
+        Assert.DoesNotContain(onlyStopped, a => a.UserId == running.UserId);
+        Assert.All(onlyStopped, a => Assert.True(a.IsHardStopped));
+
+        // false is a filter of its own, not "no filter" — the other half has to be reachable too.
+        var onlyRunning = await ReadFilteredAsync(client, "isHardStopped=false");
+        Assert.Contains(onlyRunning, a => a.UserId == running.UserId);
+        Assert.DoesNotContain(onlyRunning, a => a.UserId == stopped.UserId);
+    }
+
+    [Fact]
+    public async Task Admin_list_filtered_by_isOverBudget_uses_the_same_rule_the_dashboard_counts_with()
+    {
+        // Exactly at the cap counts as over: the gateway's token-quota policy refuses the request
+        // that would cross it, so "reached it" is already "cut off" — DashboardService uses >= for
+        // the count, and a card that links to a list applying a different rule would be a lie.
+        var atCap = await factory.SeedUserAsync(displayName: $"AtCap {Guid.NewGuid():N}");
+        var under = await factory.SeedUserAsync(displayName: $"Under {Guid.NewGuid():N}");
+        var unlimited = await factory.SeedUserAsync(displayName: $"Unlimited {Guid.NewGuid():N}");
+        await SeedAllocationAsync(atCap.UserId, allocated: 5_000_000, tokensUsed: 5_000_000);
+        await SeedAllocationAsync(under.UserId, allocated: 5_000_000, tokensUsed: 4_999_999);
+        await SeedAllocationAsync(unlimited.UserId, allocated: null, tokensUsed: 99_000_000);
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var over = await ReadFilteredAsync(client, "isOverBudget=true");
+        Assert.Contains(over, a => a.UserId == atCap.UserId);
+        Assert.DoesNotContain(over, a => a.UserId == under.UserId);
+        Assert.DoesNotContain(over, a => a.UserId == unlimited.UserId);
+
+        // An unlimited allocation is never over budget, so it belongs to the "false" half.
+        var withinBudget = await ReadFilteredAsync(client, "isOverBudget=false");
+        Assert.Contains(withinBudget, a => a.UserId == under.UserId);
+        Assert.Contains(withinBudget, a => a.UserId == unlimited.UserId);
+        Assert.DoesNotContain(withinBudget, a => a.UserId == atCap.UserId);
+    }
+
+    [Theory]
+    [InlineData("power")]
+    [InlineData("Power")]
+    [InlineData("POWER")]
+    public async Task Admin_list_filtered_by_tier_matches_a_configured_tier_whatever_its_casing(string tier)
+    {
+        var powerUser = await factory.SeedUserAsync(displayName: $"Power {Guid.NewGuid():N}");
+        var standardUser = await factory.SeedUserAsync(displayName: $"Standard {Guid.NewGuid():N}");
+        await SeedAllocationAsync(powerUser.UserId, allocated: 20_000_000, tokensUsed: 0, tierProductId: GatewayTiers.Power);
+        await SeedAllocationAsync(standardUser.UserId, allocated: 5_000_000, tokensUsed: 0, tierProductId: GatewayTiers.Standard);
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var items = await ReadFilteredAsync(client, $"tier={tier}");
+
+        Assert.Contains(items, a => a.UserId == powerUser.UserId);
+        Assert.DoesNotContain(items, a => a.UserId == standardUser.UserId);
+        Assert.All(items, a => Assert.Equal(GatewayTiers.Power, a.TierProductId));
+    }
+
+    [Fact]
+    public async Task Admin_list_filtered_by_search_matches_the_owning_users_name_or_email()
+    {
+        var marker = Guid.NewGuid().ToString("N");
+        var byName = await factory.SeedUserAsync(displayName: $"Ada {marker}");
+        var byEmail = await factory.SeedUserAsync(displayName: "Someone Else", email: $"{marker}@contoso.test");
+        var neither = await factory.SeedUserAsync(displayName: $"Nobody {Guid.NewGuid():N}");
+        await SeedAllocationAsync(byName.UserId, allocated: 5_000_000, tokensUsed: 0);
+        await SeedAllocationAsync(byEmail.UserId, allocated: 5_000_000, tokensUsed: 0);
+        await SeedAllocationAsync(neither.UserId, allocated: 5_000_000, tokensUsed: 0);
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var items = await ReadFilteredAsync(client, $"search={marker}");
+
+        Assert.Contains(items, a => a.UserId == byName.UserId);
+        Assert.Contains(items, a => a.UserId == byEmail.UserId);
+        Assert.DoesNotContain(items, a => a.UserId == neither.UserId);
+    }
+
+    [Fact]
+    public async Task Admin_list_filtered_by_isActive_scopes_to_the_population_the_dashboard_counts()
+    {
+        var active = await factory.SeedUserAsync(displayName: $"Active {Guid.NewGuid():N}");
+        var departed = await factory.SeedUserAsync(displayName: $"Departed {Guid.NewGuid():N}", isActive: false);
+        await SeedAllocationAsync(active.UserId, allocated: 5_000_000, tokensUsed: 5_000_000, isHardStopped: true);
+        await SeedAllocationAsync(departed.UserId, allocated: 5_000_000, tokensUsed: 5_000_000, isHardStopped: true);
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        // The dashboard's hard-stopped and over-budget counts are both scoped to active users, and
+        // the deprovision pipeline hard-stops *and* deactivates — so without this filter the card's
+        // link would land on everyone who ever left.
+        var items = await ReadFilteredAsync(client, "isHardStopped=true&isActive=true");
+
+        Assert.Contains(items, a => a.UserId == active.UserId);
+        Assert.DoesNotContain(items, a => a.UserId == departed.UserId);
+    }
+
+    [Fact]
+    public async Task Admin_list_with_no_filters_still_returns_the_rows_the_filters_would_exclude()
+    {
+        var stopped = await factory.SeedUserAsync(displayName: $"Unfiltered {Guid.NewGuid():N}", isActive: false);
+        await SeedAllocationAsync(stopped.UserId, allocated: 5_000_000, tokensUsed: 5_000_000, isHardStopped: true);
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var items = await ReadAllPagesAsync(client);
+
+        Assert.Contains(items, a => a.UserId == stopped.UserId);
+    }
+
     // -- GET /quota/allocations/me --
 
     [Fact]
@@ -296,7 +412,12 @@ public class QuotaEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestF
 
     // -- Helpers --
 
-    private async Task SeedAllocationAsync(int userId, long? allocated, long tokensUsed)
+    private async Task SeedAllocationAsync(
+        int userId,
+        long? allocated,
+        long tokensUsed,
+        bool isHardStopped = false,
+        string? tierProductId = null)
     {
         var period = BillingPeriod.Current(factory.TimeProvider);
         await using var dbContext = factory.CreateDbContext();
@@ -307,10 +428,29 @@ public class QuotaEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestF
             PeriodMonth = period.Month,
             AllocatedTokens = allocated,
             TokensUsed = tokensUsed,
+            IsHardStopped = isHardStopped,
             ResolvedLevelType = allocated is null ? QuotaLevelType.UserUnlimited : QuotaLevelType.UserOverride,
-            TierProductId = allocated is null ? GatewayTiers.Unlimited : GatewayTiers.Standard,
+            TierProductId = tierProductId ?? (allocated is null ? GatewayTiers.Unlimited : GatewayTiers.Standard),
         });
         await dbContext.SaveChangesAsync();
+    }
+
+    /// <summary>Every allocation the filtered list returned, across every page (the class shares one database).</summary>
+    private static async Task<List<QuotaAllocationResponse>> ReadFilteredAsync(HttpClient client, string queryString)
+    {
+        var items = new List<QuotaAllocationResponse>();
+        for (var page = 1; ; page++)
+        {
+            var result = await client.GetFromJsonAsync<PagedResult<QuotaAllocationResponse>>(
+                new Uri($"{AllocationsPath}?{queryString}&page={page}&pageSize={PagedRequest.MaxPageSize}", UriKind.Relative),
+                JsonOptions);
+            Assert.NotNull(result);
+            items.AddRange(result.Items);
+            if (page >= result.TotalPages)
+            {
+                return items;
+            }
+        }
     }
 
     private async Task<int> CountPeriodRowsAsync(BillingPeriod period)

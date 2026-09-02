@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using FoundryGate.Domain.Common;
+using FoundryGate.Domain.Quota.Contracts;
 using FoundryGate.Domain.Requests;
 using FoundryGate.Domain.Requests.Contracts;
 using FoundryGate.Domain.Users.Contracts;
@@ -118,6 +119,46 @@ public class FoundryGateApiClientRouteTests
         var uri = Assert.Single(handler.Requests).RequestUri!.ToString();
         Assert.DoesNotContain("search=", uri, StringComparison.Ordinal);
         Assert.DoesNotContain("isActive=", uri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetQuotaAllocationsAsync_puts_every_filter_on_the_query_string()
+    {
+        var (client, handler) = CreateClient(Json(new PagedResult<QuotaAllocationResponse>([], 0, 1, 25)));
+
+        _ = await client.GetQuotaAllocationsAsync(
+            new QuotaAllocationQuery(IsHardStopped: true, IsOverBudget: false, Tier: "power", Search: "hopper", IsActive: true),
+            new PagedRequest(2, 50));
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("/api/v1/quota/allocations", request.RequestUri!.AbsolutePath);
+
+        var uri = request.RequestUri.ToString();
+        Assert.Contains("page=2", uri, StringComparison.Ordinal);
+        Assert.Contains("pageSize=50", uri, StringComparison.Ordinal);
+        Assert.Contains("isHardStopped=true", uri, StringComparison.Ordinal);
+        Assert.Contains("isOverBudget=false", uri, StringComparison.Ordinal);
+        Assert.Contains("tier=power", uri, StringComparison.Ordinal);
+        Assert.Contains("search=hopper", uri, StringComparison.Ordinal);
+        Assert.Contains("isActive=true", uri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetQuotaAllocationsAsync_omits_the_filters_that_were_not_set()
+    {
+        // An unfiltered query has to stay the plain list this endpoint has always served — sending
+        // `isHardStopped=` or `tier=` would be a filter, not the absence of one.
+        var (client, handler) = CreateClient(Json(new PagedResult<QuotaAllocationResponse>([], 0, 1, 25)));
+
+        _ = await client.GetQuotaAllocationsAsync(new QuotaAllocationQuery(null, null, null, null, null), new PagedRequest(1, 25));
+
+        var uri = Assert.Single(handler.Requests).RequestUri!.ToString();
+        Assert.DoesNotContain("isHardStopped", uri, StringComparison.Ordinal);
+        Assert.DoesNotContain("isOverBudget", uri, StringComparison.Ordinal);
+        Assert.DoesNotContain("tier=", uri, StringComparison.Ordinal);
+        Assert.DoesNotContain("search=", uri, StringComparison.Ordinal);
+        Assert.DoesNotContain("isActive", uri, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -46,6 +46,14 @@ namespace FoundryGate.Domain.Quota.Contracts;
 /// rather than at the number shown. Surfaced so admins can correct the value to a tier.
 /// </param>
 /// <param name="ResetDate">When this period's allocation row was last (re)computed by a monthly/manual reset; null for a row created on demand (first <c>/me</c> of the month).</param>
+/// <param name="EstimatedCost">
+/// <paramref name="TokensUsed"/> priced at the fork's configured <c>RateCard</c> blended rate
+/// (#177), or <see langword="null"/> when no rate card is configured. <b>An estimate</b>, and
+/// labelled one wherever it is rendered: one blended rate over one token total, because this row
+/// carries no prompt/completion split and no per-model split (#213 stores both), and the total is
+/// itself a floor (#84, #88). Appended at the end — this is a positional record the Web client
+/// deserializes.
+/// </param>
 public record QuotaAllocationResponse(
     int QuotaAllocationId,
     int UserId,
@@ -62,7 +70,46 @@ public record QuotaAllocationResponse(
     QuotaLevelType ResolvedLevelType,
     string TierProductId,
     bool IsGatewayCapped,
-    DateTimeOffset? ResetDate);
+    DateTimeOffset? ResetDate,
+    decimal? EstimatedCost);
+
+/// <summary>
+/// Filters for GET /quota/allocations (<c>[FromQuery]</c>, alongside <c>PagedRequest</c>) — issue
+/// #208. Every property is optional; <see langword="null"/> (and, for <paramref name="Search"/> and
+/// <paramref name="Tier"/>, blank) means "no filter", so an empty query string is the unfiltered
+/// list this endpoint has always returned.
+/// </summary>
+/// <remarks>
+/// These exist so the dashboard's counts are reachable as lists (#54, #190): the hard-stopped and
+/// over-budget cards link here rather than to the audit trail of the pipeline that produced the
+/// state, which was the closest honest destination before there was a page to send anyone to.
+/// <para>
+/// <paramref name="IsActive"/> is here for the same honesty: the dashboard counts <em>active</em>
+/// users only (a deactivated account is already off the gateway), so a card showing 2 has to link
+/// to a list of the same 2. Without it the link would land on every allocation ever hard-stopped,
+/// most of which belong to people who have left.
+/// </para>
+/// </remarks>
+/// <param name="IsHardStopped">Match allocations whose key the deprovision pipeline revoked (<c>true</c>), or only those it did not (<c>false</c>).</param>
+/// <param name="IsOverBudget">
+/// <c>true</c>: a finite budget that reconciled usage has reached or passed
+/// (<c>TokensUsed &gt;= AllocatedTokens</c>) — the gateway is already refusing these developers.
+/// <c>false</c>: everyone else, unlimited allocations included. Same <c>&gt;=</c> as the dashboard
+/// count, so the two can never disagree.
+/// </param>
+/// <param name="Tier">
+/// APIM tier product id (<see cref="Constants.GatewayTiers"/>), matched case-insensitively against
+/// the configured tiers. A value that names no configured tier is matched literally rather than
+/// refused — allocations can carry a legacy product id, and finding them is the point.
+/// </param>
+/// <param name="Search">Substring of the owning user's display name or email.</param>
+/// <param name="IsActive">Match allocations owned by active (<c>true</c>) or deactivated (<c>false</c>) users.</param>
+public record QuotaAllocationQuery(
+    bool? IsHardStopped,
+    bool? IsOverBudget,
+    string? Tier,
+    string? Search,
+    bool? IsActive);
 
 /// <summary>
 /// One configured budget tier — GET /quota/tiers (any authenticated user). The values an admin (or

@@ -114,6 +114,24 @@ public static class TierDisplay
     public static string FormatTokensExact(long? tokens) =>
         tokens?.ToString("N0", CultureInfo.CurrentCulture) ?? "Unlimited";
 
+    /// <summary>
+    /// What every estimated-cost figure is labelled with (#177). One blended rate over one token
+    /// total — the control plane stores no prompt/completion or per-model split — and the totals are
+    /// themselves a floor (interrupted streams undercount, #84; cache-token weighting is unverified,
+    /// #88). Every place a cost appears carries this, because a number without it reads as a bill.
+    /// </summary>
+    public const string CostEstimateTooltip =
+        "An estimate: tokens × the blended rate from your RateCard configuration, in whatever currency you priced it in. "
+        + "Usage carries no prompt/completion or per-model split and is a floor, not a total — see issue #177.";
+
+    /// <summary>
+    /// An estimated cost as a plain two-decimal number — no currency symbol, because the rate card is
+    /// priced in whatever currency the fork bills in and guessing one would be a lie in a fork that
+    /// bills in another. <see langword="null"/> (no rate card configured) reads as an em dash.
+    /// </summary>
+    public static string FormatCost(decimal? estimatedCost) =>
+        estimatedCost?.ToString("N2", CultureInfo.CurrentCulture) ?? "—";
+
     /// <summary>Below this percentage of the monthly budget the gauge is green.</summary>
     public const double WarningThresholdPercent = 80;
 

@@ -17,11 +17,22 @@ public interface IQuotaAllocationService
     IReadOnlyList<QuotaTierResponse> ListTiers();
 
     /// <summary>
-    /// Admin: every allocation for the current period, ordered by user display name then <c>UserId</c>,
-    /// with the owning user's name/email projected in. Rows exist only for users who have been
-    /// resolved this period (first <c>/me</c> of the month or a reset) — this lists allocations, not users.
+    /// Admin: every allocation for the current period matching <paramref name="filter"/>, ordered by
+    /// user display name then <c>UserId</c>, with the owning user's name/email projected in. Rows
+    /// exist only for users who have been resolved this period (first <c>/me</c> of the month or a
+    /// reset) — this lists allocations, not users.
     /// </summary>
-    Task<PagedResult<QuotaAllocationResponse>> ListCurrentPeriodAsync(PagedRequest paging, CancellationToken cancellationToken);
+    /// <param name="filter">
+    /// Optional hard-stopped / over-budget / tier / search / active filters (#208). An all-null
+    /// filter is the unfiltered list. Over-budget is evaluated with the same <c>&gt;=</c> the
+    /// dashboard's count uses, so the card and the list it links to always agree.
+    /// </param>
+    /// <param name="paging">Page and size.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<PagedResult<QuotaAllocationResponse>> ListCurrentPeriodAsync(
+        QuotaAllocationQuery filter,
+        PagedRequest paging,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// The caller's own current-period allocation. If none exists yet it is resolved, created (with

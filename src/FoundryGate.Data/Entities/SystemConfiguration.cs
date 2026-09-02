@@ -86,6 +86,11 @@ public class SystemConfiguration : IModifiedDate, IReferenceDataEntity<SystemCon
         new() { Key = SystemConfigurationKeys.EntraGroupSyncEnabled, Value = "false" },
         new() { Key = SystemConfigurationKeys.ResetDayOfMonth, Value = "1" },
 
+        // An empty rate card (#177): a fork's prices are its own, and guessing them would put a
+        // wrong number on the dashboard rather than no number. Until an operator adds the "*" entry
+        // via /config, every estimated cost is null and nothing renders one.
+        new() { Key = SystemConfigurationKeys.RateCard, Value = "[]" },
+
         // System-managed (#171): seeded empty so the row exists from the first deploy, then written by
         // POST /users/sync itself. [DoNotUpdate] on Value means a re-seed never wipes a recorded run.
         new() { Key = SystemConfigurationKeys.LastUserSyncDate, Value = string.Empty },

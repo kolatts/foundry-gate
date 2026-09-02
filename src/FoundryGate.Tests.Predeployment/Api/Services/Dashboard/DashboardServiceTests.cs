@@ -19,6 +19,7 @@ public class DashboardServiceTests : InMemoryDatabaseTest
 
     private readonly MutableTimeProvider _timeProvider = new(Now);
     private readonly MemoryCache _cache = new(new MemoryCacheOptions());
+    private readonly FixedCostEstimator _costEstimator = new();
 
     [Fact]
     public async Task Empty_system_reports_zeroes_and_no_consumers()
@@ -140,6 +141,40 @@ public class DashboardServiceTests : InMemoryDatabaseTest
         Assert.Equal(1_500, summary.TotalTokensUsedThisPeriod);
     }
 
+    // -- Estimated cost (#177) --
+
+    [Fact]
+    public async Task No_rate_card_means_no_estimated_cost_anywhere()
+    {
+        var dev = await SeedUserAsync("Dev");
+        await SeedAllocationAsync(dev, tokensUsed: 1_000_000, allocatedTokens: 5_000_000);
+
+        var summary = await CreateService().GetSummaryAsync(fresh: true, CancellationToken.None);
+
+        // Null, not zero: a fork that has not priced its tokens has no cost to report, and a zero
+        // would render as "free".
+        Assert.Null(summary.EstimatedCostThisPeriod);
+        Assert.All(summary.TopConsumers, c => Assert.Null(c.EstimatedCostThisPeriod));
+    }
+
+    [Fact]
+    public async Task A_configured_rate_card_prices_the_period_total_and_every_consumer()
+    {
+        _costEstimator.RateCard = FixedCostEstimator.Blended(10m);
+        var heavy = await SeedUserAsync("Heavy");
+        var light = await SeedUserAsync("Light");
+        await SeedAllocationAsync(heavy, tokensUsed: 3_000_000, allocatedTokens: 5_000_000);
+        await SeedAllocationAsync(light, tokensUsed: 500_000, allocatedTokens: 5_000_000);
+
+        var summary = await CreateService().GetSummaryAsync(fresh: true, CancellationToken.None);
+
+        // 3.5M tokens at 10 per million. The consumers' figures must add up to the total, or the
+        // dashboard contradicts itself twice on the same screen.
+        Assert.Equal(35m, summary.EstimatedCostThisPeriod);
+        Assert.Equal(30m, summary.TopConsumers.Single(c => c.DisplayName == "Heavy").EstimatedCostThisPeriod);
+        Assert.Equal(5m, summary.TopConsumers.Single(c => c.DisplayName == "Light").EstimatedCostThisPeriod);
+    }
+
     [Fact]
     public async Task Top_consumers_are_the_ten_busiest_active_users_this_period()
     {
@@ -233,7 +268,7 @@ public class DashboardServiceTests : InMemoryDatabaseTest
         Assert.Empty(october.TopConsumers);
     }
 
-    private DashboardService CreateService() => new(Context, _cache, _timeProvider);
+    private DashboardService CreateService() => new(Context, _cache, _costEstimator, _timeProvider);
 
     private async Task<User> SeedUserAsync(string displayName, bool isActive = true, bool isUnlimited = false)
     {

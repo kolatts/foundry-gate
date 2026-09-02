@@ -1,4 +1,5 @@
 using System.Globalization;
+using FoundryGate.Api.Services.Cost;
 using FoundryGate.Core.Quota;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
@@ -78,8 +79,45 @@ public sealed class SystemConfigValidator(GatewayTierMapper tierMapper)
             SystemConfigurationKeys.EntraGroupSyncEnabled => NormalizeBoolean(key, trimmed),
             SystemConfigurationKeys.ApimResourceId or SystemConfigurationKeys.FoundryResourceId =>
                 NormalizeArmResourceId(key, trimmed),
+            SystemConfigurationKeys.RateCard => NormalizeRateCard(trimmed),
             _ => trimmed,
         };
+    }
+
+    /// <summary>
+    /// The cost rate card (#177). Parsed, checked for blank prefixes, negative prices and repeated
+    /// prefixes, and stored re-serialized so two admins pasting the same rates with different
+    /// whitespace leave the same row behind. A malformed card has to be a <c>400</c> at the edit:
+    /// the number it produces ends up next to a developer's name.
+    /// </summary>
+    private static string NormalizeRateCard(string value)
+    {
+        // An empty box means "no rate card", which is how a fork ships — not a parse failure.
+        if (value.Length == 0)
+        {
+            return "[]";
+        }
+
+        RateCard card;
+        try
+        {
+            card = RateCard.Parse(value);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ArgumentException($"{exception.Message} {RateCard.Describe()}", nameof(value), exception);
+        }
+
+        var stored = card.ToStoredValue();
+        if (stored.Length > ValidationConstants.ConfigValueMaxLength)
+        {
+            throw new ArgumentException(
+                $"The rate card is {stored.Length} characters once normalized, over the {ValidationConstants.ConfigValueMaxLength}-character "
+                + "limit for a configuration value. Use model prefixes rather than one entry per deployment.",
+                nameof(value));
+        }
+
+        return stored;
     }
 
     /// <summary>

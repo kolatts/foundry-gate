@@ -201,8 +201,11 @@ anything up. What it cannot recover is a request whose counts were never logged 
 stream the client interrupts can leave the token usage missing or inaccurate at the source.
 So reconciled usage is a floor. That is survivable precisely because nothing depends on it —
 the gateway's own counter, the one that returns `403`, is separate and authoritative.
-Per-developer cost estimates (tokens × rate card) build on these figures and are tracked
-separately.
+Per-developer **cost estimates** build on these figures: an operator fills in the `RateCard`
+configuration key with their own prices and the portal shows tokens × that blended rate on
+`/dashboard` and `/quota`, labelled an estimate everywhere — usage carries no
+prompt/completion or per-model split, so one rate covers everything, and the totals are a
+floor. Azure cannot answer the question directly: Claude bills as one aggregate meter.
 </Aside>
 
 <Aside type="note">

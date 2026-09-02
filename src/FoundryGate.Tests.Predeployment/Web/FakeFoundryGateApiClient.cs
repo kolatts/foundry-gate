@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FoundryGate.Domain.Audit.Contracts;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Config.Contracts;
@@ -30,7 +31,11 @@ namespace FoundryGate.Tests.Predeployment.Web;
 /// </remarks>
 public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
 {
-    private readonly Dictionary<string, int> _calls = new(StringComparer.Ordinal);
+    // Concurrent, not a plain Dictionary: a page's calls arrive on the renderer's thread (a
+    // debounced search, /dashboard's refresh timer) while WaitForAssertion reads the counts on the
+    // test's — see RecordedCalls<T> for the whole story (#203).
+    private readonly ConcurrentDictionary<string, int> _calls = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> _completedCalls = new(StringComparer.Ordinal);
 
     /// <summary>When set, every call awaits this before returning — release it to let the page finish.</summary>
     public TaskCompletionSource? Gate { get; set; }
@@ -125,47 +130,58 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     // -- Captured arguments ---------------------------------------------------------------------
 
-    public List<SubmitQuotaIncreaseRequest> SubmittedRequests { get; } = [];
+    public RecordedCalls<SubmitQuotaIncreaseRequest> SubmittedRequests { get; } = new();
 
-    public List<(string Key, string Value)> ConfigUpdates { get; } = [];
+    public RecordedCalls<(string Key, string Value)> ConfigUpdates { get; } = new();
 
-    public List<(AuditLogQuery Query, PagedRequest Paging)> AuditQueries { get; } = [];
+    public RecordedCalls<(AuditLogQuery Query, PagedRequest Paging)> AuditQueries { get; } = new();
 
     /// <summary>Every filtered <c>GET /requests</c> the pages made, in order.</summary>
-    public List<(QuotaRequestQuery Query, PagedRequest Paging)> RequestListCalls { get; } = [];
+    public RecordedCalls<(QuotaRequestQuery Query, PagedRequest Paging)> RequestListCalls { get; } = new();
 
-    public List<(PagedRequest Paging, string? Search)> GroupListCalls { get; } = [];
+    public RecordedCalls<(PagedRequest Paging, string? Search)> GroupListCalls { get; } = new();
 
-    public List<int> ActivatedUserIds { get; } = [];
+    /// <summary>Every filtered <c>GET /quota/allocations</c> the <c>/quota</c> page made, in order (#208).</summary>
+    public RecordedCalls<(QuotaAllocationQuery Query, PagedRequest Paging)> QuotaAllocationListCalls { get; } = new();
 
-    public List<int> DeactivatedUserIds { get; } = [];
+    public RecordedCalls<int> ActivatedUserIds { get; } = new();
 
-    public List<(int UserId, UpdateUserQuotaRequest Request)> QuotaUpdates { get; } = [];
+    public RecordedCalls<int> DeactivatedUserIds { get; } = new();
 
-    public List<CreateGroupRequest> CreatedGroups { get; } = [];
+    public RecordedCalls<(int UserId, UpdateUserQuotaRequest Request)> QuotaUpdates { get; } = new();
 
-    public List<(int GroupId, UpdateGroupRequest Request)> GroupUpdates { get; } = [];
+    public RecordedCalls<CreateGroupRequest> CreatedGroups { get; } = new();
 
-    public List<int> DeletedGroupIds { get; } = [];
+    public RecordedCalls<(int GroupId, UpdateGroupRequest Request)> GroupUpdates { get; } = new();
 
-    public List<(int GroupId, int UserId)> AddedGroupMembers { get; } = [];
+    public RecordedCalls<int> DeletedGroupIds { get; } = new();
 
-    public List<(int GroupId, int UserId)> RemovedGroupMembers { get; } = [];
+    public RecordedCalls<(int GroupId, int UserId)> AddedGroupMembers { get; } = new();
 
-    public List<int> EntraSyncedGroupIds { get; } = [];
+    public RecordedCalls<(int GroupId, int UserId)> RemovedGroupMembers { get; } = new();
 
-    public List<(int RequestId, ReviewQuotaIncreaseRequest Review)> ApprovedRequests { get; } = [];
+    public RecordedCalls<int> EntraSyncedGroupIds { get; } = new();
 
-    public List<(int RequestId, ReviewQuotaIncreaseRequest Review)> RejectedRequests { get; } = [];
+    public RecordedCalls<(int RequestId, ReviewQuotaIncreaseRequest Review)> ApprovedRequests { get; } = new();
 
-    public List<int> ProvisionedKeyUserIds { get; } = [];
+    public RecordedCalls<(int RequestId, ReviewQuotaIncreaseRequest Review)> RejectedRequests { get; } = new();
 
-    public List<int> RotatedKeyUserIds { get; } = [];
+    public RecordedCalls<int> ProvisionedKeyUserIds { get; } = new();
 
-    public List<int> RevokedKeyUserIds { get; } = [];
+    public RecordedCalls<int> RotatedKeyUserIds { get; } = new();
 
-    /// <summary>How many times the named method was called (method names, e.g. <c>GetDashboardAsync</c>).</summary>
+    public RecordedCalls<int> RevokedKeyUserIds { get; } = new();
+
+    /// <summary>How many times the named method was <em>entered</em> (method names, e.g. <c>GetDashboardAsync</c>).</summary>
     public int CallCount(string method) => _calls.TryGetValue(method, out var count) ? count : 0;
+
+    /// <summary>
+    /// How many times the named method has <em>returned</em>. Differs from <see cref="CallCount"/>
+    /// only while <see cref="Gate"/> is holding a call open — which is exactly when a test needs to
+    /// know that the reply has actually landed, without sleeping for a guessed number of
+    /// milliseconds and hoping (#203).
+    /// </summary>
+    public int CompletedCallCount(string method) => _completedCalls.TryGetValue(method, out var count) ? count : 0;
 
     // -- Fluent arrange helpers -----------------------------------------------------------------
 
@@ -178,6 +194,12 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
     public FakeFoundryGateApiClient ArrangeUsers(params UserResponse[] users)
     {
         UsersResult = ApiCallResult<PagedResult<UserResponse>>.Ok(WebTestData.Page(users));
+        return this;
+    }
+
+    public FakeFoundryGateApiClient ArrangeAllocations(params QuotaAllocationResponse[] allocations)
+    {
+        QuotaAllocationsResult = ApiCallResult<PagedResult<QuotaAllocationResponse>>.Ok(WebTestData.Page(allocations));
         return this;
     }
 
@@ -319,8 +341,14 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
     public Task<ApiCallResult<IReadOnlyList<QuotaTierResponse>>> GetQuotaTiersAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetQuotaTiersAsync), QuotaTiersResult);
 
-    public Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(PagedRequest paging, CancellationToken ct = default) =>
-        RespondAsync(nameof(GetQuotaAllocationsAsync), QuotaAllocationsResult);
+    public Task<ApiCallResult<PagedResult<QuotaAllocationResponse>>> GetQuotaAllocationsAsync(
+        QuotaAllocationQuery query,
+        PagedRequest paging,
+        CancellationToken ct = default)
+    {
+        QuotaAllocationListCalls.Add((query, paging));
+        return RespondAsync(nameof(GetQuotaAllocationsAsync), QuotaAllocationsResult);
+    }
 
     public Task<ApiCallResult<QuotaAllocationResponse>> GetMyQuotaAllocationAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetMyQuotaAllocationAsync), QuotaAllocationResult);
@@ -420,13 +448,14 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     private async Task<ApiCallResult<T>> RespondAsync<T>(string method, ApiCallResult<T> result)
     {
-        _calls[method] = CallCount(method) + 1;
+        _ = _calls.AddOrUpdate(method, 1, static (_, count) => count + 1);
 
         if (Gate is not null)
         {
             await Gate.Task;
         }
 
+        _ = _completedCalls.AddOrUpdate(method, 1, static (_, count) => count + 1);
         return result;
     }
 }

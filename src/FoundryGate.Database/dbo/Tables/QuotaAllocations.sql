@@ -27,7 +27,9 @@ CREATE UNIQUE NONCLUSTERED INDEX [IX_QuotaAllocations_UserId_PeriodYear_PeriodMo
 GO
 
 -- GET /quota/allocations filters every page on the current period; the unique index above leads
--- with UserId and cannot serve that seek.
-CREATE NONCLUSTERED INDEX [IX_QuotaAllocations_PeriodYear_PeriodMonth]
-    ON [dbo].[QuotaAllocations]([PeriodYear] ASC, [PeriodMonth] ASC);
+-- with UserId and cannot serve that seek. TierProductId and IsHardStopped trail it rather than
+-- getting indexes of their own (#208): every read here is period-scoped first, so the period
+-- columns must lead, and IsHardStopped alone (two distinct values) would never be chosen.
+CREATE NONCLUSTERED INDEX [IX_QuotaAllocations_PeriodYear_PeriodMonth_TierProductId_IsHardStopped]
+    ON [dbo].[QuotaAllocations]([PeriodYear] ASC, [PeriodMonth] ASC, [TierProductId] ASC, [IsHardStopped] ASC);
 GO

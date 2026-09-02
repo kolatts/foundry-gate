@@ -149,14 +149,19 @@ public class MePageTests : WebTestContext
     {
         var page = RenderPage<Me>();
 
-        page.Find("[data-testid='key-rotate']").Click();
+        // Every dialog interaction here waits for the render that produces it. MudDialog's
+        // Visible binding reaches the DialogProvider — a component beside the page, not inside it —
+        // so the buttons exist a render cycle or two after the click, and a bare Find() is a race
+        // the CI runner wins often enough to have been filed twice (#195, #203).
+        page.WaitForElement("[data-testid='key-rotate']").Click();
+        page.WaitForElement("[data-testid='key-rotate-cancel']");
         Assert.Equal(0, Api.CallCount("RotateMyKeyAsync"));
 
         page.Find("[data-testid='key-rotate-cancel']").Click();
         Assert.Equal(0, Api.CallCount("RotateMyKeyAsync"));
 
-        page.Find("[data-testid='key-rotate']").Click();
-        page.Find("[data-testid='key-rotate-confirm']").Click();
+        page.WaitForElement("[data-testid='key-rotate']").Click();
+        page.WaitForElement("[data-testid='key-rotate-confirm']").Click();
 
         // The dialog's result and the rotate call settle across render cycles, so this waits rather
         // than assuming the click drained them (#195).
@@ -171,8 +176,8 @@ public class MePageTests : WebTestContext
     public void The_rotated_mask_survives_the_next_render()
     {
         var page = RenderPage<Me>();
-        page.Find("[data-testid='key-rotate']").Click();
-        page.Find("[data-testid='key-rotate-confirm']").Click();
+        page.WaitForElement("[data-testid='key-rotate']").Click();
+        page.WaitForElement("[data-testid='key-rotate-confirm']").Click();
         page.WaitForElement("[data-testid='key-hide']").Click();
 
         // The component used to write the new value onto its own [Parameter], which the framework

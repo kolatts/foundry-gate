@@ -1,9 +1,9 @@
 using Bunit;
-using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Dashboard.Contracts;
 using FoundryGate.Web.Pages;
 using FoundryGate.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
+using MudBlazor;
 
 namespace FoundryGate.Tests.Predeployment.Web;
 
@@ -53,20 +53,42 @@ public class DashboardPageTests : WebTestContext
     }
 
     [Fact]
-    public void A_non_zero_hard_stopped_count_reads_as_an_alert_and_links_to_the_pipeline_that_set_it()
+    public void A_non_zero_hard_stopped_count_reads_as_an_alert_and_links_to_the_people_it_counts()
     {
-        // A hard stop is an outage for that developer, and the audit log is the only place that says
-        // who and when — so the number is a link into it, not a dead figure. It has to be the action
-        // that actually sets the flag: `user.deactivated` (whose details carry
-        // `allocationHardStopped`). `key.revoked` is also written by DELETE /keys/{userId}, which
-        // explicitly leaves the allocation alone, so linking there lands on mostly other people.
+        // A hard stop is an outage for that developer, so the number is a link, not a dead figure —
+        // and since #208 it goes to the people themselves rather than to `audit?action=user.deactivated`,
+        // the trail of the pipeline that sets the flag. Both filters matter: the count is scoped to
+        // active users, so the list has to be too, or the card says 1 and the page shows everyone
+        // who ever left.
         Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(hardStoppedUserCount: 1));
 
         var page = RenderPage<Dashboard>();
 
         var link = page.Find("[data-testid='stat-hard-stopped-link']");
-        Assert.Equal($"audit?action={AuditActions.UserDeactivated}", link.GetAttribute("href"));
+        Assert.Equal("quota?isHardStopped=true&isActive=true", link.GetAttribute("href"));
         Assert.Contains("mud-error-text", page.Find("[data-testid='stat-hard-stopped']").InnerHtml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_non_zero_over_budget_count_links_to_the_same_query_it_was_counted_with()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(overBudgetUserCount: 7));
+
+        var page = RenderPage<Dashboard>();
+
+        var link = page.Find("[data-testid='stat-over-budget-link']");
+        Assert.Equal("quota?isOverBudget=true&isActive=true", link.GetAttribute("href"));
+        Assert.Contains("7 over budget", link.TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Nobody_over_budget_offers_no_link_to_follow()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(overBudgetUserCount: 0));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Empty(page.FindAll("[data-testid='stat-over-budget-link']"));
     }
 
     [Fact]
@@ -98,6 +120,51 @@ public class DashboardPageTests : WebTestContext
         var page = RenderPage<Dashboard>();
 
         Assert.Contains("nobody over budget", page.Find("[data-testid='stat-over-budget']").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_estimated_cost_is_shown_once_the_fork_has_priced_its_tokens()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(
+            estimatedCostThisPeriod: 1_234.5m,
+            topConsumers: [WebTestData.Consumer("Heavy User", 4_900_000, 5_000_000, 98, estimatedCostThisPeriod: 49m)]));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Contains("1,234.50", page.Find("[data-testid='stat-estimated-cost']").TextContent, StringComparison.Ordinal);
+        Assert.Contains("49.00", page.Find("[data-testid='consumer-cost-9']").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_estimated_cost_is_labelled_an_estimate_wherever_it_appears()
+    {
+        // #177: one blended rate over a token total that is itself a floor. A number without that
+        // caveat reads as a bill, which is exactly what it is not.
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(estimatedCostThisPeriod: 10m));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Contains("estimated cost", page.Find("[data-testid='stat-estimated-cost']").TextContent, StringComparison.Ordinal);
+
+        // The caveat lives in a tooltip, which MudBlazor renders on hover rather than into the
+        // markup — so assert on the component that carries it.
+        Assert.Contains(
+            page.FindComponents<MudTooltip>(),
+            tooltip => tooltip.Instance.Text?.Contains("estimate", StringComparison.OrdinalIgnoreCase) == true
+                && tooltip.Instance.Text.Contains("#177", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void No_rate_card_means_no_cost_on_screen_rather_than_a_zero()
+    {
+        Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Ok(WebTestData.Dashboard(
+            estimatedCostThisPeriod: null,
+            topConsumers: [WebTestData.Consumer("Heavy User")]));
+
+        var page = RenderPage<Dashboard>();
+
+        Assert.Empty(page.FindAll("[data-testid='stat-estimated-cost']"));
+        Assert.Empty(page.FindAll("[data-testid='consumer-cost-9']"));
     }
 
     [Fact]
@@ -185,16 +252,21 @@ public class DashboardPageTests : WebTestContext
         // The real page waits a minute; the interval is a parameter purely so this test doesn't.
         var page = RenderPage<Dashboard>(("RefreshInterval", TimeSpan.FromMilliseconds(20)));
 
-        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3), TimeSpan.FromSeconds(5));
+        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3));
     }
 
     [Fact]
     public async Task Stops_refreshing_once_the_page_is_gone()
     {
         var page = RenderPage<Dashboard>(("RefreshInterval", TimeSpan.FromMilliseconds(20)));
-        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 2), TimeSpan.FromSeconds(5));
+        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 2));
 
-        await DisposeComponentsAsync();
+        // Disposed through the page's own DisposeAsync on the renderer's dispatcher, like the
+        // sibling test two methods down — not through bUnit's DisposeComponentsAsync(), which does
+        // not reach a component rendered inside a RenderFragment and so never asked this page to
+        // stop at all (#203; see WebTestContext.DisposeRenderedPagesAsync). This test was reporting
+        // a real defect: the loop was still running because nothing had disposed the page.
+        await DisposeRenderedPagesAsync();
 
         // A timer that outlives its page keeps hitting an admin-only endpoint forever. Asserting
         // that by sampling the count once and again a fixed delay later made this test a race with
@@ -204,23 +276,34 @@ public class DashboardPageTests : WebTestContext
         // was slower than 200 ms".
         var settled = await SettledCallCountAsync("GetDashboardAsync");
 
-        await Task.Delay(200);
+        // Deliberately longer than the settle window and 20x the tick: a loop that is still running
+        // makes ~20 more calls in here, so this is the assertion that the count stopped *climbing*,
+        // not merely that it paused.
+        await Task.Delay(StabilityWindow);
         Assert.Equal(settled, Api.CallCount("GetDashboardAsync"));
     }
 
+    /// <summary>How long the count has to stay still after settling before the loop counts as stopped. 20x the test's tick.</summary>
+    private static readonly TimeSpan StabilityWindow = TimeSpan.FromMilliseconds(400);
+
+    /// <summary>Consecutive identical samples that count as "the loop has stopped calling".</summary>
+    private const int SettledSampleCount = 5;
+
     /// <summary>
-    /// Polls until the named call count is the same twice running, and answers that count. Fails
-    /// the test rather than looping forever if it never settles — a count that never stops moving
-    /// is the bug this is here to catch.
+    /// Polls until the named call count has been the same for <see cref="SettledSampleCount"/>
+    /// samples running, and answers that count. Fails the test rather than looping forever if it
+    /// never settles — a count that never stops moving is the bug this is here to catch.
     /// </summary>
     private async Task<int> SettledCallCountAsync(string method)
     {
         var previous = -1;
+        var repeats = 0;
 
-        for (var attempt = 0; attempt < 40; attempt++)
+        for (var attempt = 0; attempt < 100; attempt++)
         {
             var current = Api.CallCount(method);
-            if (current == previous)
+            repeats = current == previous ? repeats + 1 : 0;
+            if (repeats >= SettledSampleCount - 1)
             {
                 return current;
             }
@@ -248,7 +331,14 @@ public class DashboardPageTests : WebTestContext
 
         await page.InvokeAsync(dashboard.Instance.Dispose);
         Api.Gate.SetResult();
-        await Task.Delay(50);
+
+        // Wait for the reply to have actually landed rather than sleeping for a guessed 50 ms:
+        // asserting the badge is still zero before the call has returned proves nothing, and the
+        // sleep was the only thing making it likely (#203). CompletedCallCount moves when
+        // RespondAsync returns, which is the moment the page's continuation can write to state.
+        await WaitUntilAsync(
+            () => Api.CompletedCallCount("GetDashboardAsync") == 1,
+            "the in-flight GET /dashboard released by the gate to return");
 
         Assert.Equal(0, Services.GetRequiredService<DashboardStateService>().PendingRequestCount);
     }
@@ -260,7 +350,7 @@ public class DashboardPageTests : WebTestContext
         page.WaitForElement("[data-testid='stat-total-users']");
 
         Api.DashboardResult = ApiCallResult<DashboardSummaryResponse>.Fail(ApiCallStatus.Unavailable, "Gone.");
-        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3), TimeSpan.FromSeconds(5));
+        page.WaitForAssertion(() => Assert.True(Api.CallCount("GetDashboardAsync") >= 3));
 
         Assert.NotNull(page.Find("[data-testid='stat-total-users']"));
         Assert.DoesNotContain(Snackbars, s => s.Message?.Contains("Gone.", StringComparison.Ordinal) == true);

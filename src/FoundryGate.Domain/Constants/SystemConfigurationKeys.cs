@@ -36,6 +36,21 @@ public static class SystemConfigurationKeys
     /// </summary>
     public const string LastUserSyncResult = nameof(LastUserSyncResult);
 
+    /// <summary>
+    /// What a token costs, as one JSON array of
+    /// <c>{ "modelPrefix", "inputPerMillion", "outputPerMillion" }</c> objects (#177) — the fork's
+    /// own prices, because Claude bills as a single aggregate Marketplace meter that Azure Cost
+    /// Management cannot break down per developer. Seeded as <c>[]</c>: until an operator fills it
+    /// in, no cost is estimated anywhere (which is the honest answer, not a zero).
+    /// </summary>
+    /// <remarks>
+    /// One key rather than one per model: the whole card is edited as a unit, and a per-model key
+    /// would need the key name itself to carry a model name — something a fixed <see cref="All"/>
+    /// list cannot express. Validated on <c>PUT /config/{key}</c> so a malformed card is a 400
+    /// rather than a wrong invoice.
+    /// </remarks>
+    public const string RateCard = nameof(RateCard);
+
     /// <summary>All seeded keys, for iteration in seeders and completeness tests.</summary>
     public static readonly IReadOnlyList<string> All =
     [
@@ -46,6 +61,7 @@ public static class SystemConfigurationKeys
         ResetDayOfMonth,
         LastUserSyncDate,
         LastUserSyncResult,
+        RateCard,
     ];
 
     /// <summary>
