@@ -121,20 +121,36 @@ public sealed class ApimKeyService(
             keys = created.Keys;
         }
 
+        // Past the commit point (CONVENTIONS.md "External side effects have a commit point"): APIM has
+        // minted the key, so nothing below may be abandoned because the client hung up — everything
+        // from here runs on CancellationToken.None. Every refusal happened above.
         var issuedDate = timeProvider.GetUtcNow();
-        await StoreKeyAsync(user, subscription.ResourceId, keys.PrimaryKey, issuedDate, cancellationToken);
-
-        await audit.LogAsync(
-            AuditActions.KeyProvisioned,
-            AuditTargetTypes.ApiKey,
-            TargetId(user),
-            new { apimSubscriptionId = subscription.ResourceId, subscriptionName, productId, reusedOrphan },
-            cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        if (transaction is not null)
+        try
         {
-            await transaction.CommitAsync(cancellationToken);
+            await StoreKeyAsync(user, subscription.ResourceId, keys.PrimaryKey, issuedDate, CancellationToken.None);
+
+            await audit.LogAsync(
+                AuditActions.KeyProvisioned,
+                AuditTargetTypes.ApiKey,
+                TargetId(user),
+                new { apimSubscriptionId = subscription.ResourceId, subscriptionName, productId, reusedOrphan },
+                CancellationToken.None);
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(CancellationToken.None);
+            }
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "APIM minted subscription {SubscriptionName} for user {UserId} under product {ProductId} but the row could not be saved; the subscription is now an orphan that the next provision will adopt by name.",
+                subscriptionName,
+                user.UserId,
+                productId);
+            throw;
         }
 
         logger.LogInformation(
@@ -215,7 +231,8 @@ public sealed class ApimKeyService(
 
         return await RevokeCoreAsync(
             user,
-            details => audit.LogAsync(AuditActions.KeyRevoked, AuditTargetTypes.ApiKey, TargetId(user), new { details.apimSubscriptionId, details.subscriptionName, details.existedInApim }, cancellationToken),
+            // CancellationToken.None: this row is written after APIM has already deleted the subscription.
+            details => audit.LogAsync(AuditActions.KeyRevoked, AuditTargetTypes.ApiKey, TargetId(user), new { details.apimSubscriptionId, details.subscriptionName, details.existedInApim }, CancellationToken.None),
             cancellationToken);
     }
 
@@ -262,13 +279,17 @@ public sealed class ApimKeyService(
             throw SubscriptionMissing(user, exception);
         }
 
+        // Added, not saved (#156 review): this method is called from inside quota resolution, which runs
+        // in the middle of its caller's unit of work. Saving here would commit that caller's
+        // half-finished mutation — a quota written to the database with no audit row describing it — so
+        // the row joins the caller's change tracker and commits with everything else. CancellationToken.None
+        // because APIM has already been re-scoped; the caller's save must run on None for the same reason.
         await audit.LogAsync(
             AuditActions.KeyTierChanged,
             AuditTargetTypes.ApiKey,
             TargetId(user),
             new { apimSubscriptionId = user.ApimSubscriptionId, subscriptionName, before = current.ProductId, after = productId },
-            cancellationToken);
-        await dbContext.SaveChangesAsync(cancellationToken);
+            CancellationToken.None);
 
         logger.LogInformation("Moved APIM subscription {SubscriptionName} for user {UserId} from product {Before} to {After}.", subscriptionName, user.UserId, current.ProductId, productId);
     }
@@ -323,19 +344,6 @@ public sealed class ApimKeyService(
         await RotateAsync(await GetActiveCallerAsync(cancellationToken), cancellationToken);
 
     /// <inheritdoc />
-    public async Task<ApiKeyRevealResponse> ProvisionForUserAsync(int userId, string tierProductId, CancellationToken cancellationToken)
-    {
-        var user = await FindUserAsync(userId, cancellationToken);
-
-        if (!user.IsActive)
-        {
-            throw new ConflictException($"User {userId} is deactivated. Re-activate them (POST /users/{userId}/activate) to issue a key; provisioning alone would leave an inactive user holding a working key.");
-        }
-
-        return await ProvisionAsync(user, tierProductId, cancellationToken);
-    }
-
-    /// <inheritdoc />
     public async Task<ApiKeyRevealResponse> RotateForUserAsync(int userId, CancellationToken cancellationToken) =>
         await RotateAsync(await FindUserAsync(userId, cancellationToken), cancellationToken);
 
@@ -354,13 +362,29 @@ public sealed class ApimKeyService(
 
         var existedInApim = await apim.DeleteSubscriptionAsync(subscriptionName, cancellationToken);
 
-        user.ApimSubscriptionId = string.Empty;
-        user.ApimSubscriptionKey = string.Empty;
-        user.ApimSubscriptionKeyHint = string.Empty;
-        user.ApimKeyIssuedDate = null;
+        // Past the commit point, and this one cannot be undone: the subscription is gone from the
+        // gateway and the developer's key is dead whatever happens next. Clearing the row and writing
+        // the audit trail therefore runs on CancellationToken.None — a client that hangs up must not
+        // leave a live-looking key ciphertext behind an already-deleted subscription, unaudited.
+        try
+        {
+            user.ApimSubscriptionId = string.Empty;
+            user.ApimSubscriptionKey = string.Empty;
+            user.ApimSubscriptionKeyHint = string.Empty;
+            user.ApimKeyIssuedDate = null;
 
-        _ = await addAudit((apimSubscriptionId, subscriptionName, existedInApim));
-        await dbContext.SaveChangesAsync(cancellationToken);
+            _ = await addAudit((apimSubscriptionId, subscriptionName, existedInApim));
+            await dbContext.SaveChangesAsync(CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "APIM deleted subscription {SubscriptionName} for user {UserId} but the row still carries the dead key; re-run the revocation (it is idempotent on a missing subscription) to clear it.",
+                subscriptionName,
+                user.UserId);
+            throw;
+        }
 
         logger.LogInformation(
             "Revoked APIM subscription {SubscriptionName} for user {UserId} (existed in APIM: {ExistedInApim}); user remains {ActiveState}.",

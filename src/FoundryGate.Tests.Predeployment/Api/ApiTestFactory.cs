@@ -45,6 +45,9 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     /// <summary>The host's pool-member Foundry account (<c>Gateway:FoundryAccountNames:1</c>).</summary>
     public const string SecondaryFoundryAccount = "fgtest-swc";
 
+    /// <summary>The host's gateway origin (<c>Gateway:ApimGatewayUrl</c>) — what <c>GET /users/me</c> returns as <c>cliConfig.gatewayBaseUrl</c>.</summary>
+    public const string GatewayUrl = "https://apim-foundrygate-test.azure-api.net";
+
     private readonly SqliteConnection _connection;
 
     public ApiTestFactory()
@@ -181,6 +184,9 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             // APIM addressing (#36/#37) — served by the fake IApimManagementClient below, never by ARM;
             // the local-only key protector (#95) keeps Key Vault out of the tests.
             ["Gateway:ApimName"] = "apim-foundrygate-test",
+            // The origin GET /users/me hands developers as cliConfig.gatewayBaseUrl (#28). Nothing in
+            // the tests calls it; it only has to be a well-formed https origin.
+            ["Gateway:ApimGatewayUrl"] = GatewayUrl,
             ["KeyProtection:Provider"] = "DataProtection",
         };
         foreach (var (key, value) in settings)

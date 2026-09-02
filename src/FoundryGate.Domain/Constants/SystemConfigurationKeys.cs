@@ -14,7 +14,14 @@ public static class SystemConfigurationKeys
     /// <summary>ARM resource ID of the APIM instance.</summary>
     public const string ApimResourceId = nameof(ApimResourceId);
 
-    /// <summary>APIM gateway base URL shown to developers on <c>/me</c> (see <see cref="Config.Contracts.GatewayConnectionInfo"/>).</summary>
+    /// <summary>
+    /// <b>Legacy (superseded by configuration).</b> The gateway base URL shown to developers on
+    /// <c>/me</c> now comes from <c>Gateway:ApimGatewayUrl</c>, which infra sets on the container from
+    /// the APIM module's own output (<c>Gateway__ApimGatewayUrl</c>) — so the address can never drift
+    /// from the gateway that was actually deployed. Nothing reads this row; it is kept because the
+    /// reference-data seed references it, and the admin config editor treats it as read-only (#161).
+    /// Do not remove without a migration.
+    /// </summary>
     public const string ApimGatewayUrl = nameof(ApimGatewayUrl);
 
     /// <summary>

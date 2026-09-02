@@ -105,9 +105,18 @@ public interface IApimKeyService
     /// <summary>
     /// Moves the subscription to another quota-tier product (#82: tier change = re-scope). Keys are
     /// unchanged; the gateway's monthly counter is per subscription-within-product, so the developer's
-    /// used-so-far restarts under the new tier. Audits <c>key.tier-changed</c> with before/after
+    /// used-so-far restarts under the new tier. Adds a <c>key.tier-changed</c> row with before/after
     /// product ids. Called by the quota wave when a user's resolved tier changes (#118).
     /// </summary>
+    /// <remarks>
+    /// <b>Does not save</b> (unlike every other building block here). Quota resolution calls this in the
+    /// middle of its caller's unit of work — after the caller has already mutated a quota and before it
+    /// has written its own audit row — so a save here would commit that half-finished change. The
+    /// <c>key.tier-changed</c> row goes on the shared change tracker and commits with the caller's own
+    /// <c>SaveChangesAsync</c>, which (because APIM has already been re-scoped by then) must run on
+    /// <see cref="CancellationToken.None"/>. A caller that does not save is a bug: the gateway would be
+    /// enforcing a tier the audit trail never recorded.
+    /// </remarks>
     /// <exception cref="KeyNotFoundException"><paramref name="user"/> has no key → 404.</exception>
     /// <exception cref="ArgumentException"><paramref name="tierProductId"/> is not a <c>GatewayTiers</c> value → 400.</exception>
     /// <exception cref="ConflictException">The APIM subscription behind the key no longer exists → 409.</exception>
@@ -140,10 +149,9 @@ public interface IApimKeyService
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row, or is deactivated → 403.</exception>
     Task<ApiKeyRevealResponse> RotateMineAsync(CancellationToken cancellationToken);
 
-    /// <summary><c>POST /keys/{userId}/provision</c> (admin): <see cref="ProvisionAsync"/> for <paramref name="userId"/>.</summary>
-    /// <exception cref="KeyNotFoundException">No such user → 404.</exception>
-    /// <exception cref="ConflictException">The user is deactivated (re-activate them instead — plan 21 Trigger C) or already has a key → 409.</exception>
-    Task<ApiKeyRevealResponse> ProvisionForUserAsync(int userId, string tierProductId, CancellationToken cancellationToken);
+    // POST /keys/{userId}/provision has no entry point here on purpose: the tier a key is minted under
+    // is the user's *resolved* tier, and resolution lives above this service (IUserLifecycleService,
+    // #64/#118). The endpoint calls IUserLifecycleService.ProvisionKeyForUserAsync instead.
 
     /// <summary><c>POST /keys/{userId}/rotate</c> (admin): <see cref="RotateAsync"/> for <paramref name="userId"/>.</summary>
     /// <exception cref="KeyNotFoundException">No such user, or the user has no key → 404.</exception>

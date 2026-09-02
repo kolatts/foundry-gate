@@ -37,6 +37,14 @@ public interface IQuotaAllocationService
     Task<QuotaAllocationResponse> GetUserAllocationAsync(int userId, CancellationToken cancellationToken);
 
     /// <summary>
+    /// One user's current-period allocation, or <see langword="null"/> when they have none yet — the
+    /// same read as <see cref="GetUserAllocationAsync"/> without the 404, for composite views
+    /// (<c>GET /users/{id}</c>) where "no allocation this month" is a field, not a failed request.
+    /// Read-only: never creates a row, never checks that the user exists.
+    /// </summary>
+    Task<QuotaAllocationResponse?> FindUserAllocationAsync(int userId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Admin, idempotent: re-resolves every active user's allocation for the current UTC calendar
     /// month in one unit of work. New rows start at <c>TokensUsed = 0</c>; existing rows are re-resolved
     /// but keep their reconciled <c>TokensUsed</c> (the gateway's monthly window resets itself — #10

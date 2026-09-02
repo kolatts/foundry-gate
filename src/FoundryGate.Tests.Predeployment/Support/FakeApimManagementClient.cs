@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using Azure;
 using FoundryGate.Api.Services.Keys;
 
 namespace FoundryGate.Tests.Predeployment.Support;
@@ -37,6 +38,22 @@ public sealed class FakeApimManagementClient : IApimManagementClient
 
     /// <summary>When set, <see cref="ListSecretsAsync"/> throws it — simulates ARM failing between "keys regenerated" and "new key read".</summary>
     public Exception? ThrowOnListSecrets { get; set; }
+
+    /// <summary>When set, <see cref="DeleteSubscriptionAsync"/> throws it instead of deleting — simulates ARM refusing a deprovision.</summary>
+    public Exception? ThrowOnDelete { get; set; }
+
+    /// <summary>
+    /// Subscription names whose <see cref="DeleteSubscriptionAsync"/> throws a <c>429</c> — for asserting
+    /// that one failed deprovision in a batch does not take the successful ones down with it.
+    /// </summary>
+    public HashSet<string> FailDeleteFor { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Runs immediately after APIM has accepted a mutation and before the caller gets control back. The
+    /// hook for the "client disconnects the instant the external system said yes" probe: everything the
+    /// caller does after this point must survive a cancelled token (CONVENTIONS.md commit point).
+    /// </summary>
+    public Action? AfterMutation { get; set; }
 
     /// <summary>Changes a subscription's state behind the key service's back (e.g. <c>"suspended"</c> for a hand-made orphan).</summary>
     public void SetState(string subscriptionName, string state)
@@ -120,6 +137,7 @@ public sealed class FakeApimManagementClient : IApimManagementClient
                 entry.ProductId = productId;
             }
 
+            AfterMutation?.Invoke();
             return Task.FromResult(new ApimSubscriptionWithKeys(Map(subscriptionName, entry), new ApimSubscriptionKeys(entry.PrimaryKey, entry.SecondaryKey)));
         }
     }
@@ -189,7 +207,20 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         lock (_gate)
         {
             _calls.Add($"Delete:{subscriptionName}");
-            return Task.FromResult(_subscriptions.Remove(subscriptionName));
+
+            if (ThrowOnDelete is { } exception)
+            {
+                throw exception;
+            }
+
+            if (FailDeleteFor.Contains(subscriptionName))
+            {
+                throw new RequestFailedException(429, $"Too many requests deleting {subscriptionName}.");
+            }
+
+            var removed = _subscriptions.Remove(subscriptionName);
+            AfterMutation?.Invoke();
+            return Task.FromResult(removed);
         }
     }
 
