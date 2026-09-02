@@ -12,9 +12,23 @@
 #   - runs as the image's non-root `app` user
 #   - ASPNETCORE_ENVIRONMENT is NOT set here: the Container App sets it (qa | prod) together
 #     with every other setting (docs reference/infrastructure "What the hosts are told").
+#
+# BASE IMAGES ARE PINNED BY DIGEST (#157). A floating `:10.0` tag means two builds of the same
+# commit can produce different images — the thing a container image is supposed to make
+# impossible. The tag is kept in the comment beside each digest so a human can still see which
+# one it is. Digests are the multi-arch manifest LIST digests, so linux/amd64 and linux/arm64
+# builds both resolve correctly from the same reference.
+#
+# TO REFRESH (do it deliberately, in its own PR, when a .NET patch ships):
+#   docker buildx imagetools inspect mcr.microsoft.com/dotnet/sdk:10.0    --format '{{.Manifest.Digest}}'
+#   docker buildx imagetools inspect mcr.microsoft.com/dotnet/aspnet:10.0 --format '{{.Manifest.Digest}}'
+# paste both below, and let api-deploy.yml's PR image build prove /health still answers 200.
+# (MCR is not on Docker Hub, so Renovate/Dependabot need the `custom.regex`/docker datasource
+# pointed at mcr.microsoft.com — not wired up yet.)
 
 # ---- build -------------------------------------------------------------------------------
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# mcr.microsoft.com/dotnet/sdk:10.0 (resolved 2026-09-02)
+FROM mcr.microsoft.com/dotnet/sdk@sha256:e1ffd2a92ae84c1291bc1b6887501f8af98e6331e7af6d4c8d37168c5e87a64c AS build
 ARG VERSION=0.0.1-local
 ARG ASSEMBLY_VERSION=0.0.1
 WORKDIR /src
@@ -42,7 +56,8 @@ RUN dotnet publish src/FoundryGate.Api/FoundryGate.Api.csproj \
     -p:FileVersion=${ASSEMBLY_VERSION}
 
 # ---- runtime -----------------------------------------------------------------------------
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+# mcr.microsoft.com/dotnet/aspnet:10.0 (resolved 2026-09-02)
+FROM mcr.microsoft.com/dotnet/aspnet@sha256:a4556ed033fa96f984bb7a8d348851cb2d36b1281dd2420070045f664fbb5f94 AS final
 WORKDIR /app
 ENV ASPNETCORE_HTTP_PORTS=8080
 EXPOSE 8080
