@@ -411,10 +411,11 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
     }
 
     [Fact]
-    public async Task A_reset_that_moves_nothing_at_the_gateway_still_honours_the_callers_cancellation()
+    public async Task An_abandoned_reset_that_never_reached_the_gateway_writes_nothing()
     {
-        // The other half of the rule: "we called resolution" is not a commit point. With no subscription
-        // to move, an abandoned reset is just an abandoned request and must not write.
+        // The other half of the rule (CommitTokenTests states it directly): an abandoned request that
+        // has changed nothing outside the database should stop, not push on to a save. Nothing is
+        // resolved, nothing is moved and no allocation row appears.
         await SeedReferenceDataAsync();
         var admin = await SeedUserAsync("Ada Admin");
         _ = await SeedUserAsync("No Gateway Key", u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
@@ -425,6 +426,9 @@ public class QuotaAllocationServiceTests : InMemoryDatabaseTest
         _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CreateService(admin.EntraObjectId).ResetAsync(cts.Token));
 
         Assert.Empty(_tierSync.Calls);
+        Context.ChangeTracker.Clear();
+        Assert.Empty(await Context.QuotaAllocations.AsNoTracking().ToListAsync());
+        Assert.Empty(await Context.AuditLogs.AsNoTracking().Where(a => a.Action == AuditActions.QuotaAllocationReset).ToListAsync());
     }
 
     // -- Helpers --
