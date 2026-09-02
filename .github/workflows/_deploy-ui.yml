@@ -8,10 +8,12 @@ name: Deploy UI (Reusable)
 # `az staticwebapp secrets list` under the OIDC identity and masked.
 #
 # Static Web Apps PR previews used to live here (`action: upload` on a pull_request event, plus
-# a `close` path). They were removed with the `dev` Environment lockdown: a preview needs the SWA
-# deployment token under an identity that can write to dev, and a `pull_request` run executes the
-# PR branch's own copy of these files. The PR track now gets Azure feedback only from the
-# read-only `dev-plan` Bicep what-if. Restoring previews behind a safe design is #155.
+# a `close` path) and were removed with the `dev` Environment lockdown. They now live in
+# `ui-deploy.yml` instead (#155), under a dedicated `ui-preview` Environment whose identity holds
+# only the custom `FoundryGate SWA Preview Publisher` role (infra/modules/swa-preview-role.bicep),
+# assignable on the dev Static Web App alone. They stay OUT of this file on
+# purpose: this is the production deploy path, it runs under an identity with subscription
+# access, and a `pull_request` run executes the PR branch's own copy of whatever it reaches.
 
 on:
   workflow_call:

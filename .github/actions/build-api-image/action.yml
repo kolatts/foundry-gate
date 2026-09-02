@@ -52,6 +52,27 @@ runs:
           .
         echo "image=${image}" >> "$GITHUB_OUTPUT"
 
+    # `.dockerignore` is the only thing stopping developer configuration reaching the image,
+    # and its patterns are case-sensitive: `**/appsettings.Local.json` silently matched
+    # nothing while the repo's real file was `appsettings.local.json`, so every image shipped
+    # `/app/appsettings.local.json` with a SQL password in it. Never loaded at
+    # ASPNETCORE_ENVIRONMENT=qa|prod, but it is exactly what that ignore line exists to stop
+    # and any image scanner will flag it. A pattern that matches nothing fails silently by
+    # nature, so the check belongs on the artefact, not on the pattern list.
+    - name: Verify the image ships no local configuration
+      shell: bash
+      env:
+        IMAGE: ${{ steps.build.outputs.image }}
+      run: |
+        set -uo pipefail
+        contents="$(docker run --rm --entrypoint ls "$IMAGE" -1 /app)"
+        leaked="$(grep -iE '^(appsettings\.(local|development|secrets)\.json|local\.settings\.json)$' <<<"$contents" || true)"
+        if [ -n "$leaked" ]; then
+          echo "::error::${IMAGE} ships developer configuration that .dockerignore should have excluded: $(tr '\n' ' ' <<<"$leaked"). Add the exact filename (dockerignore patterns are case-sensitive) to .dockerignore."
+          exit 1
+        fi
+        echo "No local configuration files in /app."
+
     - name: Smoke-test /health
       shell: bash
       env:
@@ -62,7 +83,23 @@ runs:
         container="api-smoke-$$"
         cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
         trap cleanup EXIT
-        docker run -d --name "$container" -p 8080:8080 -e ASPNETCORE_ENVIRONMENT=local "$IMAGE"
+        # Configuration comes from the environment, exactly as it does on Container Apps
+        # (infra/modules/control-plane.bicep sets the same keys). It used to come from
+        # `appsettings.local.json` leaking into the image past a mis-cased .dockerignore
+        # pattern — so this smoke test passed only because of the bug the step above now
+        # catches. Program.cs validates these at startup and the host exits without them;
+        # /health itself is hermetic, so placeholder values are the point.
+        # KeyProtection__Provider=DataProtection is the documented local-only substitute for a
+        # Key Vault wrapping key (the real one is Gateway__KeyEncryptionKeyUri, an infra output).
+        docker run -d --name "$container" -p 8080:8080 \
+          -e 'KeyProtection__Provider=DataProtection' \
+          -e 'AzureAd__Instance=https://login.microsoftonline.com/' \
+          -e ASPNETCORE_ENVIRONMENT=local \
+          -e 'ConnectionStrings__FoundryGate=Server=localhost;Database=FoundryGate;Integrated Security=true;TrustServerCertificate=True' \
+          -e 'AzureAd__TenantId=00000000-0000-0000-0000-000000000000' \
+          -e 'AzureAd__ClientId=00000000-0000-0000-0000-000000000000' \
+          -e 'AzureAd__Audience=api://00000000-0000-0000-0000-000000000000' \
+          "$IMAGE"
         for i in $(seq 1 "$TIMEOUT"); do
           code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || true)"
           if [ "$code" = "200" ]; then

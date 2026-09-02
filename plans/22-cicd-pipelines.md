@@ -286,11 +286,25 @@ written against the real infra contract from PR #111 (`docs-site/.../reference/i
 - **`functions` and `ui` need `api`.** On a day-0 run the api stage re-runs the whole
   subscription deployment to swap the bootstrap placeholder; an infra re-run restarting the
   Function App mid-upload is a real flake. GitHub Actions has no conditional `needs:`.
-- **Nothing on `pull_request` can mutate Azure or read a token.** `dev` is restricted to
-  protected branches; the PR what-if runs under the new read-only `dev-plan` Environment; the
-  Static Web Apps PR previews were removed (#155 tracks restoring them behind a narrower
-  identity). `azure-oidc-login` soft-skips with a notice on any `pull_request` event, id-token
-  branch included, so forks stay green.
+- **Nothing on `pull_request` reaches an identity with subscription access.** `dev` is
+  restricted to protected branches; the PR what-if runs under the read-only `dev-plan`
+  Environment; the Static Web Apps PR preview runs under `ui-preview`, whose identity is meant
+  to hold only the custom `FoundryGate SWA Preview Publisher` role
+  (`infra/modules/swa-preview-role.bicep`), assignable on `stapp-foundrygate-dev` alone — there
+  is no built-in role for this, no built-in grants any `Microsoft.Web/staticSites` action (#155).
+  The SWA deployment token it fetches is app-scoped, not slot-scoped, so the accepted worst case
+  is overwriting the dev site; production is a different resource this identity cannot reach.
+  The preview jobs
+  resolve nothing from the deployment outputs — SWA name, resource group and API base URL are
+  `ui-preview` variables — precisely so that a one-resource identity is enough.
+  `azure-oidc-login` soft-skips with a notice on any `pull_request` event, id-token branch
+  included, so forks stay green.
+- **Production asks for six approvals and keeps them** (#141 / D-019): GitHub approves pending
+  jobs, not runs, and collapsing them means running the deploy against an ungated Environment.
+  The count comes from the job graph — one gated job each in `_deploy-infra.yml` (`deploy`;
+  `validate` is ungated), `_prepare-database.yml`, `_deploy-database.yml` and `_deploy-api.yml`
+  (two until #198 merged them), then `functions`+`ui` pending together, then the tests.
+  `deploy-all.yml` opens with an ungated `plan` job that prints the sequence into the summary.
 - **No `RESOURCE_GROUP` / `ACR_LOGIN_SERVER` / `CONTAINER_APP_NAME` / `FUNCTION_APP_NAME` variables.**
   Every code deploy reads `az deployment sub show -n foundrygate-{dev|prod}` outputs
   (`.github/scripts/infra/export-outputs.sh`). Variables are only the OIDC ids, the Entra client
@@ -303,7 +317,8 @@ written against the real infra contract from PR #111 (`docs-site/.../reference/i
 - The first API deploy detects the bootstrap placeholder and replaces it with an infra re-run (port
   8080 + probes flip together with the image) instead of `az containerapp update`.
 - Reusable children: `_deploy-infra.yml`, `_prepare-database.yml` (dacpac + CLI artifacts, SQL names
-  from outputs, OIDC-id bridge for `_deploy-database.yml` — #137), `_deploy-database.yml`,
+  and identity client ids from outputs), `_deploy-database.yml` (no `secrets:` — it reads
+  `vars.AZURE_*` from the Environment its job targets, #137),
   `_deploy-api.yml`, `_deploy-functions.yml`, `_deploy-ui.yml`, `_postdeployment-tests.yml`.
   `docs.yml` became `docs-deploy.yml`. Shared helpers: `.github/actions/azure-oidc-login`,
   `.github/actions/version` (GitVersion 6 trunk-based, `GitVersion.yml`).
@@ -324,6 +339,9 @@ written against the real infra contract from PR #111 (`docs-site/.../reference/i
 - [x] `resolve-api-image.sh` fails the job on every non-bootstrap error — 11 offline cases in `resolve-api-image.test.sh`
 - [x] Every job in every workflow has a `timeout-minutes`
 - [x] `dev` is restricted to protected branches; the PR what-if runs under the unprotected, Reader-only `dev-plan`
+- [x] Static Web Apps PR previews restored under `ui-preview` (#155) — no subscription-scope call in the PR jobs; skips cleanly when the Environment is unconfigured
+- [x] Production approval count decided and documented — per stage, with a `plan` summary job (#141 / D-019)
+- [ ] `ui-preview`'s federated credential + `FoundryGate SWA Preview Publisher` role assignment — owner action (#109)
 - [ ] `infra-deploy.yml` what-if posts a PR comment with the diff — needs a live subscription (#105/#109)
 - [ ] A production dispatch stops at the reviewer approval — needs a live run (#105)
 - [ ] A merge to `main` runs the whole `deploy-all.yml` chain against dev — needs a live run (#105)

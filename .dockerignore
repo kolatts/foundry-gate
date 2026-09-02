@@ -1,5 +1,12 @@
 # Docker build context for src/FoundryGate.Api/Dockerfile (built from the repo root).
 # Keep the context small: only the projects the API references are COPYed anyway.
+#
+# The image COPYs exactly four projects — Domain, Data, Core, Api — plus the four root files
+# every build needs (global.json, Directory.Build.props, Directory.Packages.props,
+# NuGet.config) and .editorconfig, because warnings are errors and the analyzer config comes
+# from it. Everything else in the repo is excluded below; anything added here that the
+# Dockerfile does COPY fails the build loudly rather than silently, so this list is safe to
+# keep tight (#157).
 .git
 .github
 .claude
@@ -15,9 +22,30 @@ plans/
 scripts/
 *.md
 *.png
+# Projects the API image never COPYs — the UI, the Functions host, the CLI, the SQL project
+# and both test projects. Excluding them is what actually shrinks the context (the Blazor
+# project alone drags in a wwwroot).
+src/FoundryGate.Web/
+src/FoundryGate.Functions/
+src/FoundryGate.Cli/
+src/FoundryGate.Database/
+src/FoundryGate.Tests.Predeployment/
+src/FoundryGate.Tests.Postdeployment/
+FoundryGate.sln
+GitVersion.yml
 docker-compose.yml
 .azurite/
+# Local developer configuration must never reach an image. dockerignore patterns are
+# CASE-SENSITIVE, and the repo's real file is `src/FoundryGate.Api/appsettings.local.json`
+# (lowercase l) — the `appsettings.Local.json` line below matched nothing, so the image
+# shipped it, connection string and all. Both casings are listed for each name rather than
+# renaming the file, because the next one somebody adds will pick a casing at random.
+# `verify-no-local-config.sh` is the check that stops this regressing.
 **/appsettings.Development.json
+**/appsettings.development.json
 **/appsettings.Local.json
+**/appsettings.local.json
 **/appsettings.Secrets.json
+**/appsettings.secrets.json
 **/local.settings.json
+**/Local.settings.json
