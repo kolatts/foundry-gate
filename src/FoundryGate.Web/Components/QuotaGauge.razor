@@ -2,7 +2,7 @@
 
 @* The developer's monthly budget, as a bar (#49). Since D-013 the budget IS a gateway tier, so
    the tier name sits next to the number: the number is what the control plane reconciled, the
-   tier is what the gateway actually enforces. Colour thresholds live in QuotaDisplay so they are
+   tier is what the gateway actually enforces. Colour thresholds live in TierDisplay so they are
    testable without reading CSS classes. *@
 
 <div data-testid="quota-gauge">
@@ -14,7 +14,7 @@
                  Color="@(Allocation.IsUnlimited ? Color.Success : Color.Primary)"
                  Icon="@(Allocation.IsUnlimited ? Icons.Material.Filled.AllInclusive : Icons.Material.Filled.Workspaces)"
                  data-testid="quota-tier-chip">
-            @QuotaDisplay.TierDisplayName(Allocation.TierProductId)
+            @TierDisplay.TierDisplayName(Allocation.TierProductId)
         </MudChip>
     </div>
 
@@ -22,13 +22,13 @@
     {
         <MudAlert Severity="Severity.Success" Dense="true" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.AllInclusive" data-testid="quota-unlimited">
             No monthly budget — the gateway smooths bursts but never stops you for the month.
-            You've used @QuotaDisplay.FormatTokens(Allocation.TokensUsed) tokens so far.
+            You've used @TierDisplay.FormatTokensExact(Allocation.TokensUsed) tokens so far.
         </MudAlert>
     }
     else
     {
-        <MudProgressLinear Color="@QuotaDisplay.GaugeColor(Allocation.PercentUsed)"
-                           Value="@QuotaDisplay.GaugeValue(Allocation.PercentUsed)"
+        <MudProgressLinear Color="@TierDisplay.GaugeColor(Allocation.PercentUsed)"
+                           Value="@TierDisplay.GaugeValue(Allocation.PercentUsed)"
                            Size="Size.Large"
                            Rounded="true"
                            Class="my-2"
@@ -36,17 +36,17 @@
 
         <div class="d-flex align-center justify-space-between">
             <MudText Typo="Typo.body2" Class="fg-mono" data-testid="quota-numbers">
-                @QuotaDisplay.FormatTokens(Allocation.TokensUsed) / @QuotaDisplay.FormatTokens(Allocation.AllocatedTokens) tokens
+                @TierDisplay.FormatTokensExact(Allocation.TokensUsed) / @TierDisplay.FormatTokensExact(Allocation.AllocatedTokens) tokens
             </MudText>
             <MudText Typo="Typo.body2" Class="fg-mono mud-text-secondary" data-testid="quota-percent">
-                @($"{QuotaDisplay.GaugeValue(Allocation.PercentUsed):0.#}%")
+                @($"{TierDisplay.GaugeValue(Allocation.PercentUsed):0.#}%")
             </MudText>
         </div>
     }
 
     <MudText Typo="Typo.caption" Class="mud-text-secondary d-block mt-2">
         Period @Allocation.PeriodYear-@Allocation.PeriodMonth.ToString("00", System.Globalization.CultureInfo.InvariantCulture),
-        resolved from @QuotaDisplay.LevelSentence(Allocation.ResolvedLevelType). Usage is reconciled from gateway
+        resolved from @TierDisplay.LevelSentence(Allocation.ResolvedLevelType). Usage is reconciled from gateway
         logs, so it can trail your last few requests; the gateway itself enforces in real time.
     </MudText>
 
@@ -54,7 +54,7 @@
     {
         <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3" Icon="@Icons.Material.Filled.ReportProblem" data-testid="quota-gateway-capped">
             The number above doesn't match any configured tier, so the gateway is enforcing the
-            next tier up (@QuotaDisplay.TierDisplayName(Allocation.TierProductId)) instead. Ask an
+            next tier up (@TierDisplay.TierDisplayName(Allocation.TierProductId)) instead. Ask an
             admin to move you onto a tier so the two agree.
         </MudAlert>
     }

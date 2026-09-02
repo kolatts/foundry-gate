@@ -74,9 +74,14 @@ public class SchemaParityTests
 {
     /// <summary>
     /// A parenthesised expression with arbitrarily nested parens (.NET balancing groups), e.g. the
-    /// <c>((1))</c> or <c>(getutcdate())</c> DacFx emits for default constraints.
+    /// <c>((1))</c> or <c>(getutcdate())</c> DacFx emits for default constraints. Shared with
+    /// <c>FoundryGate.Cli.Commands.Db.Compare.SqlTableFileNormalizer</c> (via the
+    /// <c>FoundryGate.Cli</c> <c>ProjectReference</c> this test project already has) rather than
+    /// duplicated by hand — both solve the same "match a nested-paren SQL clause" problem, and
+    /// <c>db compare --apply</c>'s output is exactly what this test parses, so the two must never
+    /// silently disagree about what one looks like.
     /// </summary>
-    private const string BalancedParens = @"\((?>[^()]+|\((?<depth>)|\)(?<-depth>))*(?(depth)(?!))\)";
+    private const string BalancedParens = FoundryGate.Cli.Commands.Db.Compare.SqlPatterns.BalancedParens;
 
     /// <summary>Optional named <c>CONSTRAINT [DF_x]</c> prefix, then <c>DEFAULT (expr)</c>.</summary>
     private const string DefaultClause = @"(?:CONSTRAINT \[[A-Za-z0-9_]+\]\s+)?DEFAULT\s*" + BalancedParens;

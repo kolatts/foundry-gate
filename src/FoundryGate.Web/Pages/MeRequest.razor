@@ -44,14 +44,14 @@ else
             {
                 <MudAlert Severity="Severity.Info" Class="mb-4" Icon="@Icons.Material.Filled.AllInclusive" data-testid="request-no-tiers">
                     You're already on the most generous tier this gateway offers
-                    (@QuotaDisplay.TierDisplayName(_currentTierProductId)), so there's nothing bigger
+                    (@TierDisplay.TierDisplayName(_currentTierProductId)), so there's nothing bigger
                     to ask for.
                 </MudAlert>
             }
 
             <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
-                You're on <strong>@QuotaDisplay.TierDisplayName(_currentTierProductId)</strong>
-                (@QuotaDisplay.FormatTokens(_currentQuota) tokens a month). Pick the tier you need and
+                You're on <strong>@TierDisplay.TierDisplayName(_currentTierProductId)</strong>
+                (@TierDisplay.FormatTokensExact(_currentQuota) tokens a month). Pick the tier you need and
                 say why — an administrator reviews every request.
             </MudText>
 
@@ -68,7 +68,7 @@ else
                     @foreach (var tier in _availableTiers)
                     {
                         <MudSelectItem T="string" Value="@tier.ProductId">
-                            @tier.DisplayName — @QuotaDisplay.FormatTokens(tier.MonthlyTokenQuota) tokens/month
+                            @tier.DisplayName — @TierDisplay.FormatTokensExact(tier.MonthlyTokenQuota) tokens/month
                         </MudSelectItem>
                     }
                 </MudSelect>

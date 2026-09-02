@@ -134,8 +134,11 @@ const ariaLabel =
     width: 2rem;
     height: 2rem;
     border-radius: 50%;
+    /* azure-dim is a constant dark chip in both themes (#114) — fixed light text keeps
+       it legible instead of pairing with --fg-azure-neon, which is theme-aware and
+       gets too dark against this background in light mode. */
     background: var(--fg-azure-dim, #0558A0);
-    color: var(--fg-azure-neon, #4DCFFF);
+    color: #EAF6FF;
     font-size: 0.8rem;
     font-weight: 700;
     display: flex;

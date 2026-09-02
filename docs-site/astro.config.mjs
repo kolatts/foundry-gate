@@ -8,9 +8,10 @@ export default defineConfig({
     starlight({
       title: 'Foundry Gate',
       components: {
-        ThemeSelect:   './src/components/ThemeSelect.astro',
-        ThemeProvider: './src/components/ThemeProvider.astro',
-        PageFrame:     './src/components/PageFrame.astro',
+        // ThemeSelect/ThemeProvider intentionally NOT overridden (#114): Starlight's
+        // own theme select + data-theme mechanism (localStorage "starlight-theme",
+        // defaulting to system preference) drives the toggle in the header.
+        PageFrame: './src/components/PageFrame.astro',
       },
       logo: {
         src: './src/assets/logo-cropped.png',

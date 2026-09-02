@@ -1,6 +1,220 @@
 @page "/groups"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
+@inject NavigationManager Navigation
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
 
 <PageTitle>Groups — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Groups" />
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <div class="d-flex align-center justify-space-between mb-4">
+        <MudText Typo="Typo.h4">Groups</MudText>
+        <MudButton Variant="Variant.Outlined"
+                   Color="Color.Info"
+                   StartIcon="@Icons.Material.Filled.CloudSync"
+                   Disabled="@_syncing"
+                   OnClick="@SyncAllFromEntraAsync"
+                   data-testid="groups-sync-all">
+            @(_syncing ? "Syncing…" : "Sync all Entra-linked groups")
+        </MudButton>
+    </div>
+
+    <MudDataGrid @ref="_grid"
+                 T="GroupResponse"
+                 ServerData="@LoadAsync"
+                 Loading="@_loading"
+                 Hover="true"
+                 Dense="true"
+                 Elevation="1"
+                 RowClick="@OnRowClick"
+                 data-testid="groups-grid">
+        <ToolBarContent>
+            <MudTextField T="string"
+                          Value="@_search"
+                          ValueChanged="@OnSearchChangedAsync"
+                          Immediate="true"
+                          DebounceInterval="300"
+                          Placeholder="Search name or description"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Clearable="true"
+                          Class="mt-0"
+                          Style="max-width: 22rem;"
+                          data-testid="groups-search" />
+        </ToolBarContent>
+        <Columns>
+            <PropertyColumn Property="@(g => g.Name)" Title="Name" Sortable="false" />
+            <TemplateColumn Title="Members" Sortable="false">
+                <CellTemplate>@context.Item.MemberCount</CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Monthly budget" Sortable="false">
+                <CellTemplate>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@(context.Item.IsUnlimited ? Color.Info : Color.Default)">
+                        @TierDisplay.Describe(context.Item.IsUnlimited, context.Item.MonthlyTokenQuota, _tiers)
+                    </MudChip>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="" Sortable="false">
+                <CellTemplate>
+                    @* RowClick is a mouse-only affordance — a <tr> takes no focus and carries no
+                       role — so every row also has a real control that keyboard and screen-reader
+                       users can reach. *@
+                    <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                   Size="Size.Small"
+                                   Href="@($"groups/{context.Item.GroupId}")"
+                                   aria-label="@($"Open {context.Item.Name}")"
+                                   data-testid="@($"groups-open-{context.Item.GroupId}")" />
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Roster" Sortable="false">
+                <CellTemplate>
+                    @if (context.Item.IsEntraSynced)
+                    {
+                        <MudTooltip Text="@($"Managed by Entra group {context.Item.EntraGroupId}")">
+                            <div class="d-flex align-center ga-1">
+                                <MudIcon Icon="@Icons.Material.Filled.CloudSync" Color="Color.Info" Size="Size.Small" />
+                                <MudText Typo="Typo.body2">Entra</MudText>
+                            </div>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">Manual</MudText>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+        </Columns>
+        <NoRecordsContent>
+            <MudText Class="pa-6 mud-text-secondary" data-testid="groups-empty">
+                @(string.IsNullOrWhiteSpace(_search)
+                    ? "No groups yet. Create one to give a team a shared monthly budget."
+                    : "No groups match that search.")
+            </MudText>
+        </NoRecordsContent>
+        <PagerContent>
+            <MudDataGridPager T="GroupResponse" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+        </PagerContent>
+    </MudDataGrid>
+
+    <MudFab Color="Color.Primary"
+            StartIcon="@Icons.Material.Filled.Add"
+            Label="New group"
+            Href="groups/new"
+            Class="mt-6"
+            data-testid="groups-new" />
+}
+
+@code {
+    private MudDataGrid<GroupResponse>? _grid;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+    private string? _search;
+    private bool _loading;
+    private bool _syncing;
+    private bool _accessDenied;
+
+    /// <summary>
+    /// Names for the groups on the page, so the sync summary can say "Platform" instead of
+    /// "Group #7". The run covers every linked group, including ones not on this page, so this is
+    /// a courtesy rather than a lookup the dialog can rely on.
+    /// </summary>
+    private readonly Dictionary<int, string> _groupNames = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _tiers = await Tiers.GetAsync();
+    }
+
+    private async Task<GridData<GroupResponse>> LoadAsync(GridState<GroupResponse> state, CancellationToken cancellationToken)
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.GetGroupsAsync(new PagedRequest(state.Page + 1, state.PageSize), _search, cancellationToken);
+
+            if (result.IsSuccess && result.Value is not null)
+            {
+                foreach (var group in result.Value.Items)
+                {
+                    _groupNames[group.GroupId] = group.Name;
+                }
+            }
+
+            return result.ToGridData(OnForbidden, Snackbar, "Couldn't load groups.");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task OnSearchChangedAsync(string? search)
+    {
+        _search = search;
+        return _grid?.ReloadFromFirstPageAsync() ?? Task.CompletedTask;
+    }
+
+    private void OnForbidden()
+    {
+        _accessDenied = true;
+        StateHasChanged();
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<GroupResponse> args) =>
+        Navigation.NavigateTo($"groups/{args.Item.GroupId}");
+
+    /// <summary>
+    /// <c>POST /groups/sync-entra</c> — reconciles every Entra-linked group in one run. Confirmed
+    /// first, because it adds and removes people across groups they can't all be seen from here,
+    /// and each removal costs someone that group's budget.
+    /// </summary>
+    private async Task SyncAllFromEntraAsync()
+    {
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Sync all groups from Entra",
+            message: "Reconcile every Entra-linked group now?",
+            detail: "Each linked group's roster is replaced by what Entra says it is — members are added and removed accordingly, and anyone removed loses that group's budget from their next allocation. Groups with no Entra link are untouched.",
+            confirmText: "Sync all",
+            confirmColor: Color.Info);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _syncing = true;
+        try
+        {
+            var result = await Api.SyncGroupsFromEntraAsync();
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "The Entra sync didn't run.", Severity.Error);
+                return;
+            }
+
+            if (_grid is not null)
+            {
+                await _grid.ReloadServerData();
+            }
+
+            var parameters = new DialogParameters<GroupSyncSummaryDialog>
+            {
+                { x => x.Results, result.Value },
+                { x => x.GroupNames, _groupNames },
+            };
+            await DialogService.ShowAsync<GroupSyncSummaryDialog>("Synced from Entra", parameters);
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+}

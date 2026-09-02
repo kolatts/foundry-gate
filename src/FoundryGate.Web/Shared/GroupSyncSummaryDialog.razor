@@ -1,0 +1,130 @@
+@* Result of POST /groups/sync-entra — one row per Entra-linked group (#52). Unlike the
+   single-group route, a failure here is not the HTTP status: the run keeps going, so the summary
+   carries a Succeeded flag per group and the whole call is still a 200. A dialog that rendered
+   every row the same way would hide the only rows worth reading. *@
+
+<MudDialog>
+    <DialogContent>
+        @if (Results.Count == 0)
+        {
+            <MudText Class="mud-text-secondary" data-testid="sync-all-none">
+                No Entra-linked groups to sync. A group syncs from Entra only once it carries an
+                Entra group id, which is set when it's created.
+            </MudText>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3" data-testid="sync-all-summary">
+                @SucceededCount of @Results.Count group(s) reconciled.
+            </MudText>
+
+            <MudSimpleTable Dense="true" Hover="false" Elevation="0" Style="background: transparent;">
+                <thead>
+                    <tr><th>Group</th><th>Added</th><th>Removed</th><th>Skipped</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var result in Results)
+                    {
+                        <tr data-testid="@($"sync-all-row-{result.GroupId}")">
+                            <td>
+                                <MudLink Href="@($"groups/{result.GroupId}")">@GroupName(result.GroupId)</MudLink>
+                            </td>
+                            @if (result.Succeeded)
+                            {
+                                <td>@result.AddedCount</td>
+                                <td>@result.RemovedCount</td>
+                                <td>@result.SkippedUnknownUserCount</td>
+                                <td><MudIcon Icon="@Icons.Material.Filled.Check" Color="Color.Success" Size="Size.Small" /></td>
+                            }
+                            else
+                            {
+                                <td colspan="3">
+                                    <MudText Typo="Typo.body2" Color="@FailureColor(result.ErrorType)" data-testid="@($"sync-all-error-{result.GroupId}")">
+                                        @FailureHeadline(result.ErrorType)
+                                    </MudText>
+                                    @if (!string.IsNullOrWhiteSpace(result.Error))
+                                    {
+                                        <MudText Typo="Typo.caption" Class="mud-text-secondary">@result.Error</MudText>
+                                    }
+                                </td>
+                                <td>
+                                    <MudIcon Icon="@(result.ErrorType == GroupSyncErrorType.PostCommit ? Icons.Material.Filled.PriorityHigh : Icons.Material.Filled.Close)"
+                                             Color="@FailureColor(result.ErrorType)"
+                                             Size="Size.Small" />
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+
+            @if (Results.Any(r => r.ErrorType == GroupSyncErrorType.GraphRead))
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-4" data-testid="sync-all-graph-read">
+                    Nothing was applied for those groups and nothing is half-done — Graph refused the
+                    read, or the group no longer exists. Grant the API's identity
+                    <code>GroupMember.ReadBasic.All</code> (or unassign the deleted group) and run this
+                    again; re-running is safe.
+                </MudAlert>
+            }
+
+            @if (Results.Any(r => r.ErrorType == GroupSyncErrorType.PostCommit))
+            {
+                <MudAlert Severity="Severity.Error" Dense="true" Class="mt-3" data-testid="sync-all-post-commit">
+                    <MudText Typo="Typo.subtitle2" Class="mb-1">Needs a person, not a retry</MudText>
+                    For those groups the gateway <em>accepted</em> a tier move that the database then
+                    failed to record, so a member is on a product their allocation doesn't name. Running
+                    the sync again does converge it — resolution is idempotent — but until someone
+                    confirms that, this group's reported state isn't to be trusted. The API logged it at
+                    Error with the group's full identity.
+                </MudAlert>
+            }
+
+            @if (Results.Any(r => r.Succeeded && r.SkippedUnknownUserCount > 0))
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3" data-testid="sync-all-skipped">
+                    "Skipped" is people in the Entra group who have no Foundry Gate account yet. They
+                    join once they exist here — run <MudLink Href="users/sync">Sync Entra users</MudLink>,
+                    or wait for their first sign-in, then sync again.
+                </MudAlert>
+            }
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@Close" data-testid="sync-all-close">Close</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Instance { get; set; } = default!;
+
+    /// <summary>One entry per Entra-linked group, in the order the API returned them.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<GroupSyncResult> Results { get; set; } = [];
+
+    /// <summary>
+    /// Names for the group ids in <see cref="Results"/>, as far as the caller knows them — the
+    /// summary carries ids only, and the run covers every linked group rather than only the page
+    /// on screen. An unknown id falls back to "Group #n", which still links.
+    /// </summary>
+    [Parameter]
+    public IReadOnlyDictionary<int, string> GroupNames { get; set; } = new Dictionary<int, string>();
+
+    private int SucceededCount => Results.Count(r => r.Succeeded);
+
+    private string GroupName(int groupId) =>
+        GroupNames.TryGetValue(groupId, out var name) ? name : $"Group #{groupId}";
+
+    private static Color FailureColor(GroupSyncErrorType errorType) =>
+        errorType == GroupSyncErrorType.PostCommit ? Color.Error : Color.Warning;
+
+    private static string FailureHeadline(GroupSyncErrorType errorType) => errorType switch
+    {
+        GroupSyncErrorType.GraphRead => "Couldn't read this group from Entra — nothing was changed",
+        GroupSyncErrorType.PostCommit => "Gateway changed, database didn't — needs checking",
+        _ => "Failed",
+    };
+
+    private void Close() => Instance.Close(DialogResult.Ok(true));
+}

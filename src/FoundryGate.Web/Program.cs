@@ -32,6 +32,10 @@ builder.Services.AddScoped<DashboardStateService>();
 // be tested against another zone — /audit converts the date picker's wall-clock dates through this.
 builder.Services.AddSingleton(TimeProvider.System);
 
+// The budget tiers, fetched once per session rather than by each of the seven admin pages that
+// render a tier name. Scoped for the same reason DashboardStateService is.
+builder.Services.AddScoped<QuotaTierCatalog>();
+
 builder.Services.AddMudServices(config =>
 {
     config.SnackbarConfiguration.PositionClass = MudBlazor.Defaults.Classes.Position.BottomRight;

@@ -158,8 +158,13 @@ public class MePageTests : WebTestContext
         page.Find("[data-testid='key-rotate']").Click();
         page.Find("[data-testid='key-rotate-confirm']").Click();
 
-        Assert.Equal(1, Api.CallCount("RotateMyKeyAsync"));
-        Assert.Contains("rotated-key-value", page.Find("[data-testid='key-value']").GetAttribute("value"), StringComparison.Ordinal);
+        // The dialog's result and the rotate call settle across render cycles, so this waits rather
+        // than assuming the click drained them (#195).
+        page.WaitForAssertion(() =>
+        {
+            Assert.Equal(1, Api.CallCount("RotateMyKeyAsync"));
+            Assert.Contains("rotated-key-value", page.Find("[data-testid='key-value']").GetAttribute("value"), StringComparison.Ordinal);
+        });
     }
 
     [Fact]
@@ -168,11 +173,12 @@ public class MePageTests : WebTestContext
         var page = RenderPage<Me>();
         page.Find("[data-testid='key-rotate']").Click();
         page.Find("[data-testid='key-rotate-confirm']").Click();
-        page.Find("[data-testid='key-hide']").Click();
+        page.WaitForElement("[data-testid='key-hide']").Click();
 
         // The component used to write the new value onto its own [Parameter], which the framework
         // owns and overwrites — so any later render reverted the panel to the pre-rotation mask.
-        Assert.Equal(WebTestData.Reveal("rotated-key-value").MaskedKey, page.Find("[data-testid='key-value']").GetAttribute("value"));
+        page.WaitForAssertion(() =>
+            Assert.Equal(WebTestData.Reveal("rotated-key-value").MaskedKey, page.Find("[data-testid='key-value']").GetAttribute("value")));
     }
 
     [Fact]

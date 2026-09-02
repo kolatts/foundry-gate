@@ -44,6 +44,8 @@ const { hasSidebar } = Astro.locals.starlightRoute;
     border-radius: 50%;
     filter: blur(90px);
     will-change: transform;
+    /* Orbs were designed against a dark ground; dial them back in light mode (#114) */
+    opacity: var(--fg-ambient-orb-opacity, 1);
   }
 
   .fg-orb-1 {

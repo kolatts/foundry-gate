@@ -34,6 +34,40 @@ length/precision, `IDENTITY`, PK name/columns/clustering, FK columns/principal/`
 [#103](https://github.com/kolatts/foundry-gate/issues/103) rather than left as an inline TODO, per
 CLAUDE.md's "everything is a GitHub issue" rule.
 
+## Status update (2026-09-02, #103 implemented)
+
+`foundrygate db compare [--connection-string <cs>] [--apply] [--check]` — the developer-convenience
+counterpart to `SchemaParityTests` deferred above — is now implemented, Windows-only, under
+`src/FoundryGate.Cli/Commands/Db/Compare/`. It answered the "is there a live database to compare
+from" question the earlier status update raised: yes, once `local setup`'s `EnsureCreated` run
+exists, DacFx `SchemaComparison` can diff it against `FoundryGate.Database.sqlproj` directly — no
+`dotnet ef migrations` step needed, matching CONVENTIONS.md's EF-model-is-the-source-of-truth
+pipeline exactly. `LibGit2Sharp`/ordering-noise-discarding machinery was **not** added (as this
+plan's earlier status update predicted it might not be needed): `SchemaCompareOptions.Create()`
+sets DacFx's own `IgnoreColumnOrder`/`IgnoreWhitespace`/`IgnoreComments`, so pure reordering is
+never reported as a difference in the first place.
+
+Two real DacFx quirks surfaced only by live verification against docker SQL Server (not visible
+from reading the API), both fixed in `DacFxSchemaComparer`/`SqlTableFileNormalizer`:
+
+- `SchemaCompareProjectEndpoint`'s project reader does not understand
+  `FoundryGate.Database.sqlproj`'s SDK-style implicit `dbo/**/*.sql` globbing
+  (`Sdk="Microsoft.Build.Sql"`) — its script list has to be enumerated and passed in explicitly, and
+  its `<DSP>` MSBuild property read and passed as the endpoint's schema-provider argument, or it
+  silently compares against a zero-object target model (every table then reports as "Add", with no
+  error raised).
+- Regenerating a changed table's `CREATE TABLE` batch, DacFx declares the primary key inline and
+  leaves this repo's original separate `ALTER TABLE ... ADD CONSTRAINT [PK_x] PRIMARY KEY` batch
+  untouched below it — a duplicate constraint declaration that still parses (and still passes
+  `SchemaParityTests`' first-match regex) but fails at deploy time. `SqlTableFileNormalizer` strips
+  the redundant batch from every file `--apply` touches.
+
+Verified live end-to-end against docker SQL Server: (a) no drift on `main`'s schema → `--check`
+exits 0 with no file changes; (b) a deliberate `Users.DisplayName` length change → `--apply`
+regenerates `Users.sql`, `SchemaParityTests` passes against the new file, and a real `db deploy` of
+the rebuilt dacpac to a fresh database succeeds (not just parses) with the corrected column length
+and exactly one `PK_Users` constraint. See PR for #103 for the full command transcript.
+
 ## Overview
 Foundry Gate uses a hybrid schema management approach borrowed from imagile-app: EF Core migrations are the developer-facing workflow (fast iteration, `dotnet ef migrations add`), but the canonical schema artifact is a `.sqlproj` file that DacFx can build into a dacpac. A `FoundryGate.Cli` dotnet tool ties it together — `Foundry Gate db compare` runs a DacFx schema comparison between the local database (kept current by EF migrations) and the `.sqlproj` files, then publishes any delta back into the project's SQL files. CI builds the dacpac and the CLI deploys it. This gives the precision of dacpac-based deployments without abandoning EF's migration ergonomics.
 
@@ -248,11 +282,13 @@ A separate `db-deploy.yml` workflow (reusable, `workflow_call`) downloads the da
       paths" error, and `sys.foreign_keys` on the deployed database confirms the exact intended
       `CASCADE`/`NO_ACTION` split — directly resolves #94's ask; see PR body for the query output.
 - [x] `docker compose down` — torn back down after verification.
-- [ ] `Foundry Gate db compare` — **not implemented** (see the Status update note above): DacFx
-      schema-compare is Windows-only and there is no live-database-to-compare-from in the
-      EnsureCreated-based pipeline this repo actually uses. The `SchemaParityTests` Predeployment
-      test is the substitute drift check, and it runs cross-platform in CI. Tracked as a
-      developer-convenience follow-up in #103.
+- [x] `foundrygate db compare` — **implemented in #103** (see the 2026-09-02 Status update note
+      above): Windows-only DacFx `SchemaComparison` between the local docker database
+      (`EnsureCreated`) and `FoundryGate.Database.sqlproj`, table-scoped. Verified live: no drift on
+      `main` → `--check` exits 0, no files touched; a deliberate `Users.DisplayName` length change →
+      `--apply` regenerates `Users.sql`, `SchemaParityTests` passes, and a real `db deploy` of the
+      rebuilt dacpac succeeds against a fresh database. `SchemaParityTests` remains the cross-platform
+      CI backstop this command complements, never replaces.
 - [x] `SchemaParityTests` type-level parity (#100) — verified it bites, not just passes: injected
       five deliberate drifts at once (`Users.DisplayName` shrunk `NVARCHAR (200)` → `(50)`, a stray
       `IX_Users_Email` index, `IX_QuotaAllocations_*` columns reordered + one `DESC`, `IDENTITY`
