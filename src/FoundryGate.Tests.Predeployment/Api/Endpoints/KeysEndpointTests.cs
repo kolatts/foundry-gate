@@ -118,18 +118,26 @@ public class KeysEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestFa
     }
 
     [Fact]
-    public async Task Provision_honours_the_tier_query_parameter_and_rejects_an_unknown_one()
+    public async Task Provision_mints_under_the_users_resolved_tier_not_a_caller_supplied_one()
     {
+        // #156 review: ?tier= is gone. A budget IS a tier, so the product comes from the user's resolved
+        // quota — an admin who wants a different one sets the quota, which moves the gateway too.
         var (_, admin) = await CreateAdminAsync();
-        var developer = await factory.SeedUserAsync();
+        var developer = await factory.SeedUserAsync(configure: user => user.MonthlyTokenQuota = PowerCap);
 
-        var bad = await admin.PostAsync(new Uri($"{KeysPath}/{developer.UserId}/provision?tier=gold", UriKind.Relative), null);
-        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        // A stale ?tier= from an old client is ignored, not honoured and not a 400.
+        var response = await admin.PostAsync(new Uri($"{KeysPath}/{developer.UserId}/provision?tier=standard", UriKind.Relative), null);
 
-        var good = await admin.PostAsync(new Uri($"{KeysPath}/{developer.UserId}/provision?tier=power", UriKind.Relative), null);
-        Assert.Equal(HttpStatusCode.OK, good.StatusCode);
-        Assert.Equal("power", factory.Apim.ProductOf(ApimSubscriptionNames.ForUser(developer.UserId)));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(GatewayTiers.Power, factory.Apim.ProductOf(ApimSubscriptionNames.ForUser(developer.UserId)));
+
+        await using var dbContext = factory.CreateDbContext();
+        var allocation = await dbContext.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == developer.UserId);
+        Assert.Equal(GatewayTiers.Power, allocation.TierProductId);
     }
+
+    /// <summary>The Power tier's cap as shipped in <c>appsettings.json</c> (mirrored by <c>infra/main.bicep</c>).</summary>
+    private const long PowerCap = 20_000_000;
 
     [Fact]
     public async Task Second_provision_returns_409_and_unknown_or_inactive_users_return_404_or_409()

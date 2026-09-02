@@ -4,9 +4,11 @@ using FoundryGate.Api.Services.Foundry;
 using FoundryGate.Api.Services.Groups;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
+using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Api.Services.Quota;
 using FoundryGate.Api.Services.Requests;
 using FoundryGate.Api.Services.Security;
+using FoundryGate.Api.Services.Users;
 
 namespace FoundryGate.Api.Services;
 
@@ -34,6 +36,8 @@ public static class ApiServiceCollectionExtensions
         services.AddEntraServices();
         services.AddSecurityServices();
         services.AddKeysServices();
+        services.AddLifecycleServices();
+        services.AddUsersServices();
 
         return services;
     }

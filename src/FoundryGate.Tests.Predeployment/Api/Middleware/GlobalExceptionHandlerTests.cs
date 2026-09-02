@@ -19,6 +19,7 @@ public class GlobalExceptionHandlerTests
     [InlineData(typeof(ConflictException), StatusCodes.Status409Conflict)]
     [InlineData(typeof(UnauthorizedAccessException), StatusCodes.Status403Forbidden)]
     [InlineData(typeof(FeatureNotConfiguredException), StatusCodes.Status503ServiceUnavailable)]
+    [InlineData(typeof(UpstreamDependencyException), StatusCodes.Status502BadGateway)]
     public async Task TryHandleAsync_maps_known_exception_type_to_expected_status_code(Type exceptionType, int expectedStatusCode)
     {
         var handler = CreateHandler();

@@ -1,13 +1,21 @@
 using System.Security.Claims;
+using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Identity;
+using FoundryGate.Api.Services.Keys;
+using FoundryGate.Api.Services.Lifecycle;
+using FoundryGate.Api.Services.Quota;
+using FoundryGate.Api.Services.Requests;
+using FoundryGate.Api.Services.Security;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
+using FoundryGate.Domain.Keys;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,6 +36,9 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
 
     private readonly MutableTimeProvider _timeProvider = new(Now);
     private readonly FakeEntraDirectoryClient _directory = new();
+
+    /// <summary>The in-memory APIM the departure path's deprovision deletes subscriptions from.</summary>
+    protected FakeApimManagementClient Apim { get; } = new();
 
     [Fact]
     public async Task Adds_users_present_in_Entra_but_not_in_the_table_with_defaults_and_no_apim_key()
@@ -93,6 +104,93 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         Assert.False(saved.IsActive);
         Assert.Equal(Now, saved.LastSyncedDate);
         Assert.Equal("Test User", saved.DisplayName); // fields untouched: the directory has nothing newer
+    }
+
+    [Fact]
+    public async Task A_departure_runs_the_full_deprovision_pipeline_not_just_the_inactive_flag()
+    {
+        // #65: before this, a departed employee kept a working gateway key until someone noticed.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        var departed = await SeedUserAsync("oid-departed-with-key");
+        var subscriptionName = ApimSubscriptionNames.ForUser(departed.UserId);
+        _ = Apim.Seed(subscriptionName, GatewayTiers.Standard);
+        departed.ApimSubscriptionId = Apim.GetSubscriptionResourceId(subscriptionName);
+        departed.ApimSubscriptionKeyHint = "1a2b";
+        departed.ApimKeyIssuedDate = Now;
+        Context.QuotaAllocations.Add(new QuotaAllocation
+        {
+            UserId = departed.UserId,
+            PeriodYear = Now.Year,
+            PeriodMonth = Now.Month,
+            AllocatedTokens = TestGatewayTiers.StandardCap,
+            TierProductId = GatewayTiers.Standard,
+        });
+        _ = await Context.SaveChangesAsync();
+        _directory.AssignedUsers.Add(Present(admin));
+
+        var result = await CreateService(admin.EntraObjectId).SyncUsersAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.DeactivatedCount);
+
+        // The APIM subscription is gone and the key fields are cleared — not merely a flag flip.
+        Assert.False(Apim.Contains(subscriptionName));
+        var saved = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == departed.UserId);
+        Assert.False(saved.IsActive);
+        Assert.Empty(saved.ApimSubscriptionId);
+        Assert.Empty(saved.ApimSubscriptionKeyHint);
+        Assert.Null(saved.ApimKeyIssuedDate);
+
+        var allocation = await Context.QuotaAllocations.AsNoTracking().SingleAsync(a => a.UserId == departed.UserId);
+        Assert.True(allocation.IsHardStopped);
+
+        // The departure's own rows are system-attributed; the users.synced row still names the caller.
+        var targetId = departed.UserId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var deactivation = await Context.AuditLogs.AsNoTracking()
+            .SingleAsync(a => a.Action == AuditActions.UserDeactivated && a.TargetId == targetId);
+        Assert.Null(deactivation.ActorUserId);
+        Assert.Contains("EntraDeparture", deactivation.Details, StringComparison.Ordinal);
+
+        var revocation = await Context.AuditLogs.AsNoTracking()
+            .SingleAsync(a => a.Action == AuditActions.KeyRevoked && a.TargetId == targetId);
+        Assert.Null(revocation.ActorUserId);
+
+        var synced = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.UsersSynced);
+        Assert.Equal(admin.UserId, synced.ActorUserId);
+    }
+
+    [Fact]
+    public async Task One_departure_the_gateway_refuses_is_counted_and_does_not_undo_the_others()
+    {
+        // #156 Major 3: N serial ARM deletes used to share one transaction, so a 502 on the last one
+        // erased the database record of every earlier deletion. Each departure is now its own unit of work.
+        await SeedReferenceDataAsync();
+        var admin = await SeedCallerAsync();
+        var succeeds = await SeedDepartedWithKeyAsync("oid-departs-ok");
+        var fails = await SeedDepartedWithKeyAsync("oid-departs-badly");
+        Apim.FailDeleteFor.Add(ApimSubscriptionNames.ForUser(fails.UserId));
+        _directory.AssignedUsers.Add(Present(admin));
+
+        var result = await CreateService(admin.EntraObjectId).SyncUsersAsync(CancellationToken.None);
+
+        Assert.Equal(1, result.DeactivatedCount);
+        Assert.Equal(1, result.FailedCount);
+
+        // The one that worked is fully deprovisioned and stays that way.
+        Assert.False(Apim.Contains(ApimSubscriptionNames.ForUser(succeeds.UserId)));
+        var deprovisioned = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == succeeds.UserId);
+        Assert.False(deprovisioned.IsActive);
+        Assert.Empty(deprovisioned.ApimSubscriptionId);
+
+        // The one that failed is untouched — still active, still holding its key — so the next run retries it.
+        Assert.True(Apim.Contains(ApimSubscriptionNames.ForUser(fails.UserId)));
+        var untouched = await Context.Users.AsNoTracking().SingleAsync(u => u.UserId == fails.UserId);
+        Assert.True(untouched.IsActive);
+        Assert.NotEmpty(untouched.ApimSubscriptionId);
+
+        // And the run still landed its own record.
+        var synced = await Context.AuditLogs.AsNoTracking().SingleAsync(a => a.Action == AuditActions.UsersSynced);
+        Assert.Contains("\"failedCount\":1", synced.Details, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -302,6 +400,19 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
         Assert.Equal(0, await verification.AuditLogs.CountAsync());
     }
 
+    /// <summary>An active user with a real subscription in the fake APIM, ready to be departed.</summary>
+    private async Task<User> SeedDepartedWithKeyAsync(string entraObjectId)
+    {
+        var user = await SeedUserAsync(entraObjectId);
+        var subscriptionName = ApimSubscriptionNames.ForUser(user.UserId);
+        _ = Apim.Seed(subscriptionName, GatewayTiers.Standard);
+        user.ApimSubscriptionId = Apim.GetSubscriptionResourceId(subscriptionName);
+        user.ApimSubscriptionKeyHint = "1a2b";
+        user.ApimKeyIssuedDate = Now;
+        _ = await Context.SaveChangesAsync();
+        return user;
+    }
+
     private static EntraUser Present(User user) => new(user.EntraObjectId, user.DisplayName, user.Email, user.EmployeeId);
 
     /// <summary>Wires the real accessor + audit service over this test's context, as DI would per request.</summary>
@@ -314,9 +425,41 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
             roleType: ClaimConstants.Roles);
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
-        var audit = new AuditService(Context, new AuditWriter(Context, _timeProvider), accessor);
+        var writer = new AuditWriter(Context, _timeProvider);
+        var audit = new AuditService(Context, writer, accessor);
 
-        return new EntraUserSyncService(Context, _directory, audit, _timeProvider, NullLogger<EntraUserSyncService>.Instance);
+        // The real lifecycle orchestrator, not a stub: a departure must actually delete the APIM
+        // subscription and hard-stop the allocation (#65), and only the real pipeline proves it.
+        var keys = new ApimKeyService(
+            Context,
+            Apim,
+            new DataProtectionKeyProtector(new EphemeralDataProtectionProvider()),
+            audit,
+            writer,
+            accessor,
+            _timeProvider,
+            NullLogger<ApimKeyService>.Instance);
+        var tierMapper = TestGatewayTiers.Mapper();
+        var quotaResolution = new QuotaResolutionService(
+            Context,
+            tierMapper,
+            new NullGatewayTierSync(NullLogger<NullGatewayTierSync>.Instance),
+            NullLogger<QuotaResolutionService>.Instance);
+        var quotaRequests = new QuotaRequestService(Context, quotaResolution, tierMapper, accessor, audit, _timeProvider);
+        var lifecycle = new UserLifecycleService(
+            Context,
+            quotaResolution,
+            quotaRequests,
+            keys,
+            audit,
+            writer,
+            accessor,
+            _directory,
+            new AppSettings(),
+            _timeProvider,
+            NullLogger<UserLifecycleService>.Instance);
+
+        return new EntraUserSyncService(Context, _directory, lifecycle, audit, _timeProvider, NullLogger<EntraUserSyncService>.Instance);
     }
 
     /// <summary>A second context on the same database, so "nothing was saved" assertions cannot be fooled by the change tracker.</summary>

@@ -3,12 +3,12 @@ using FoundryGate.Data.Entities;
 namespace FoundryGate.Api.Services.Quota;
 
 /// <summary>
-/// Placeholder <see cref="IGatewayTierSync"/> that records the intended move at Debug and touches
-/// nothing. Registered until <c>ApimGatewayTierSync</c> (#118 — move the APIM subscription to the
-/// user's resolved tier product via the Management plane) replaces it in
-/// <see cref="QuotaServiceCollectionExtensions.AddQuotaServices"/>. While this is registered a quota
-/// change is recorded in <c>QuotaAllocation</c> but <b>not enforced</b> at the gateway beyond the
-/// tier the subscription was originally issued on.
+/// The <see cref="IGatewayTierSync"/> for a host with no gateway to talk to: records the intended move
+/// at Debug and touches nothing. Registered by
+/// <see cref="QuotaServiceCollectionExtensions.AddQuotaServices"/> when
+/// <c>GatewayOptions.IsApimConfigured</c> is false — the <c>local</c> shape, where
+/// <see cref="ApimGatewayTierSync"/> would have nothing to call. While this is registered a quota
+/// change is recorded in <c>QuotaAllocation</c> but <b>not enforced</b> at any gateway.
 /// </summary>
 public sealed class NullGatewayTierSync(ILogger<NullGatewayTierSync> logger) : IGatewayTierSync
 {
@@ -19,7 +19,7 @@ public sealed class NullGatewayTierSync(ILogger<NullGatewayTierSync> logger) : I
         ArgumentException.ThrowIfNullOrWhiteSpace(tierProductId);
 
         logger.LogDebug(
-            "Gateway tier sync is not implemented (#118): user {UserId} would move to tier product {TierProductId}.",
+            "No gateway is configured (Gateway:SubscriptionId/ResourceGroup/ApimName): user {UserId} would move to tier product {TierProductId}.",
             user.UserId,
             tierProductId);
 

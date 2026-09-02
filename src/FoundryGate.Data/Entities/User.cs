@@ -7,8 +7,18 @@ namespace FoundryGate.Data.Entities;
 /// <summary>
 /// A developer known to this fork of Foundry Gate, provisioned from Entra ID.
 /// </summary>
+/// <remarks>
+/// The two non-unique indexes serve <c>GET /users</c> (CONVENTIONS.md: "Index the columns your default
+/// ordering and filters use"). <c>DisplayName</c> alone covers the unfiltered list, which orders by it;
+/// <c>(IsActive, DisplayName)</c> covers the far more common <c>?isActive=</c> view, giving the filter
+/// and the ordering from one seek. <c>?search=</c> translates to <c>LIKE '%term%'</c>, which no B-tree
+/// can seek — it scans, and on a fork-sized user table that is the right trade rather than a full-text
+/// index nobody would maintain.
+/// </remarks>
 [Index(nameof(EntraObjectId), IsUnique = true)]
 [Index(nameof(UserUnique), IsUnique = true)]
+[Index(nameof(DisplayName))]
+[Index(nameof(IsActive), nameof(DisplayName))]
 public class User : ICreatedDate
 {
     public int UserId { get; set; }

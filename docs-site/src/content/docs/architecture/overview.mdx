@@ -108,12 +108,14 @@ Admins link a FoundryGate group to an Entra group id. `POST /groups/{id}/sync-en
 </Aside>
 
 <Aside type="caution">
-**Departures are hard**: a developer who loses their Entra assignment to the FoundryGate application is deactivated, and their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional, and it is a different thing from running out of budget: quota exhaustion never touches the subscription at all — it's a real-time `403` at the gateway that clears on reset or approval, while Entra departure permanently revokes. (Bulk user sync sets `IsActive = false` today; the subscription deletion and hard stop land with the user lifecycle work.)
+**Departures are hard**: a developer who loses their Entra assignment to the FoundryGate application is deactivated, and their APIM subscription is *deleted* — not just suspended. Their key stops working immediately. This is intentional, and it is a different thing from running out of budget: quota exhaustion never touches the subscription at all — it's a real-time `403` at the gateway that clears on reset or approval, while Entra departure permanently revokes. Bulk user sync runs the same deletion — it is the same pipeline the admin button calls.
 </Aside>
 
 ### Bulk user sync
 
-`POST /users/sync` pages through all users assigned to the FoundryGate service principal via Graph and upserts them. New users get a record with the default quota; departed users are deactivated. Useful for an initial import of your entire org before any developer has logged in.
+`POST /users/sync` pages through all users assigned to the FoundryGate service principal via Graph and upserts them. New users get a record with the default quota; departed users run the same deprovision pipeline an admin deactivation does — subscription deleted, allocation hard-stopped, pending requests rejected — so the sync and the admin button can never drift apart. Useful for an initial import of your entire org before any developer has logged in.
+
+Each departure is its own unit of work, deliberately: a subscription deletion cannot be rolled back, so batching several into one transaction would mean a single failed ARM call erasing the record of deletions that had already happened. A departure the gateway refuses is counted (`failedCount`), logged, and retried on the next run — the rest of the batch still lands.
 
 ---
 
