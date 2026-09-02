@@ -1,4 +1,5 @@
 using System.CommandLine;
+using FoundryGate.Cli.Commands.Ip.Cleanup;
 using FoundryGate.Cli.Commands.Ip.Setup;
 
 namespace FoundryGate.Cli.Commands.Ip;
@@ -9,5 +10,6 @@ internal sealed class IpCommand : Command
     public IpCommand() : base("ip", "Commands to manage Azure SQL Server firewall rules")
     {
         Add(new SetupCommand());
+        Add(new CleanupCommand());
     }
 }

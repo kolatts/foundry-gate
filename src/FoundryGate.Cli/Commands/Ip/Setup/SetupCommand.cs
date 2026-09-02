@@ -1,49 +1,90 @@
 using System.CommandLine;
+using FoundryGate.Cli.Helpers;
 
 namespace FoundryGate.Cli.Commands.Ip.Setup;
 
 /// <summary>
-/// STUB. Real implementation is blocked on the Azure SQL Server resource that doesn't exist in
-/// this repo yet (it lands with the Bicep infra modules, #43/#44) — see
-/// <see href="https://github.com/kolatts/foundry-gate/issues/96">#96</see> for the full plan
-/// (detect caller public IP, ArmClient + <c>SqlFirewallRuleResource</c> CreateOrUpdate, modeled on
-/// imagile-app's <c>Imagile.App.Cli\Commands\Ip\Setup\SetupCommand.cs</c>).
-/// <para>
-/// This stub exists purely so <c>.github/workflows/_deploy-database.yml</c> (#79) has the right
-/// command shape to call today; that workflow marks the calling step <c>continue-on-error: true</c>
-/// with a comment pointing at #96 until this is implemented for real.
-/// </para>
+/// <c>foundrygate ip setup --env &lt;env&gt; [--yes] [--name &lt;rule&gt;] [--ip &lt;addr&gt;] [--server &lt;name&gt;]
+/// [--resource-group &lt;rg&gt;] [--subscription &lt;id&gt;]</c> — whitelists the caller's public IP on the
+/// environment's Azure SQL Server (#96). Thin System.CommandLine shell around <see cref="IpSetupRunner"/>;
+/// the Azure/HTTP edges are the only things constructed here.
 /// </summary>
 internal sealed class SetupCommand : Command
 {
-    public SetupCommand() : base("setup", "STUB (see #96): whitelists the caller's public IP on the target environment's Azure SQL Server")
+    public SetupCommand() : base("setup", "Whitelists the caller's public IP on the target environment's Azure SQL Server firewall")
     {
         var envOption = new Option<string>("--env")
         {
-            Description = "Target environment (e.g. dev, prod)",
+            Description = "Target environment (dev, prod; GitHub Environment names like 'production' are accepted)",
             Required = true
         };
 
         var yesOption = new Option<bool>("--yes", "-y")
         {
-            Description = "Accepted for forward compatibility with the reusable deploy workflow; unused by this stub"
+            Description = "Skip the confirmation prompt (required when stdin is not a terminal, e.g. CI)"
+        };
+
+        var nameOption = new Option<string?>("--name")
+        {
+            Description = "Firewall rule name (default: gha-{run id}-{UTC minute} on GitHub Actions, fg-dev-{machine}-{user} otherwise)"
+        };
+
+        var ipOption = new Option<string?>("--ip")
+        {
+            Description = "IPv4 address to whitelist (default: detected via api.ipify.org / ifconfig.me)"
+        };
+
+        var serverOption = new Option<string?>("--server")
+        {
+            Description = "SQL server name (default: the single sql-foundrygate-{env}-* server in the resource group)"
+        };
+
+        var resourceGroupOption = new Option<string?>("--resource-group")
+        {
+            Description = "Resource group containing the server (default: rg-foundrygate-{env})"
+        };
+
+        var subscriptionOption = new Option<string?>("--subscription")
+        {
+            Description = "Azure subscription id (default: $AZURE_SUBSCRIPTION_ID, then the credential's default subscription)"
         };
 
         Add(envOption);
         Add(yesOption);
+        Add(nameOption);
+        Add(ipOption);
+        Add(serverOption);
+        Add(resourceGroupOption);
+        Add(subscriptionOption);
 
-        SetAction(context =>
+        SetAction(async (parseResult, cancellationToken) =>
         {
-            var environment = context.GetValue(envOption);
+            var request = new IpSetupRequest(
+                parseResult.GetValue(envOption)!,
+                parseResult.GetValue(serverOption),
+                parseResult.GetValue(resourceGroupOption),
+                parseResult.GetValue(nameOption),
+                parseResult.GetValue(ipOption),
+                parseResult.GetValue(yesOption));
 
-            Console.Error.WriteLine(
-                $"'ip setup' is not implemented yet for environment '{environment}'. It needs a real " +
-                "Azure SQL Server resource (Bicep infra, #43/#44) before a firewall rule can be " +
-                "created against it. See https://github.com/kolatts/foundry-gate/issues/96 for the " +
-                "full implementation plan (detect caller public IP -> SqlFirewallRuleResource " +
-                "CreateOrUpdate, modeled on imagile-app's Ip/Setup/SetupCommand.cs).");
+            using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var runner = new IpSetupRunner(
+                ArmAzureSqlServerClient.Create(parseResult.GetValue(subscriptionOption)),
+                new HttpPublicIpProvider(httpClient),
+                RunnerContext.FromEnvironment(),
+                TimeProvider.System,
+                Console.Out,
+                ConsolePrompts.Confirm);
 
-            return 1;
+            try
+            {
+                return await runner.RunAsync(request, cancellationToken);
+            }
+            catch (Exception ex) when (CliErrors.IsExpected(ex))
+            {
+                Console.Error.WriteLine($"ip setup failed: {CliErrors.Describe(ex)}");
+                return 1;
+            }
         });
     }
 }

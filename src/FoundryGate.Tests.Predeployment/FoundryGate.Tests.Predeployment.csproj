@@ -21,6 +21,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\FoundryGate.Api\FoundryGate.Api.csproj" />
+    <!-- Cli/*: the pure command logic (naming, firewall-rule idempotency, contained-user T-SQL) behind
+         the ARM/SQL interfaces — no live Azure in this suite. -->
+    <ProjectReference Include="..\FoundryGate.Cli\FoundryGate.Cli.csproj" />
     <ProjectReference Include="..\FoundryGate.Data\FoundryGate.Data.csproj" />
     <ProjectReference Include="..\FoundryGate.Domain\FoundryGate.Domain.csproj" />
     <ProjectReference Include="..\FoundryGate.Web\FoundryGate.Web.csproj" />

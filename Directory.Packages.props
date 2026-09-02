@@ -19,6 +19,9 @@
     <!-- Cli -->
     <PackageVersion Include="System.CommandLine" Version="2.0.0-rc.2.25502.107" />
     <PackageVersion Include="Microsoft.SqlServer.DacFx" Version="170.2.70" />
+    <!-- Cli `ip setup`/`ip cleanup`: Azure SQL firewall rules via ARM (#96) -->
+    <PackageVersion Include="Azure.ResourceManager" Version="1.14.0" />
+    <PackageVersion Include="Azure.ResourceManager.Sql" Version="1.4.0" />
 
     <!-- Web -->
     <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.8" />

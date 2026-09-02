@@ -96,14 +96,7 @@ internal sealed class DeployCommand : Command
             }
         };
 
-        var options = new DacDeployOptions
-        {
-            BlockOnPossibleDataLoss = !allowDataLoss,
-            GenerateSmartDefaults = true,
-            DropObjectsNotInSource = dropObjects,
-            ExcludeObjectTypes = [ObjectType.Users],
-            ScriptDatabaseCompatibility = true
-        };
+        var options = DacpacDeployOptions.Create(dropObjects, allowDataLoss);
 
         // Same 10-minute deploy ceiling imagile-app's DeployCommand uses, linked to the process's
         // own cancellation (Ctrl+C) so either one aborts the blocking DacServices.Deploy call.
@@ -117,4 +110,29 @@ internal sealed class DeployCommand : Command
 
         Console.WriteLine($"Deployed {databaseName} successfully.");
     }
+}
+
+/// <summary>
+/// The <see cref="DacDeployOptions"/> <c>db deploy</c> runs with, in one place so the exclusions are
+/// unit-testable rather than buried in an action body. The exclusions are the contract between the dacpac
+/// and <c>db grant-identities</c>: the API and Functions contained users, and their role memberships, are
+/// created by the CLI after the deploy (#106) and exist in no dacpac, so a <c>--drop-objects</c> run must
+/// leave both alone. DacFx models a role membership as its own object type, so excluding
+/// <see cref="ObjectType.Users"/> alone would keep the user and strip its <c>db_datareader</c> /
+/// <c>db_datawriter</c> grants — leaving the running API unprivileged until the later grant step catches up.
+/// </summary>
+public static class DacpacDeployOptions
+{
+    /// <summary>Object types the dacpac does not own and <c>--drop-objects</c> must never remove.</summary>
+    public static readonly IReadOnlyList<ObjectType> ExcludedObjectTypes = [ObjectType.Users, ObjectType.RoleMembership];
+
+    /// <summary>Builds the options for one deploy.</summary>
+    public static DacDeployOptions Create(bool dropObjects, bool allowDataLoss) => new()
+    {
+        BlockOnPossibleDataLoss = !allowDataLoss,
+        GenerateSmartDefaults = true,
+        DropObjectsNotInSource = dropObjects,
+        ExcludeObjectTypes = [.. ExcludedObjectTypes],
+        ScriptDatabaseCompatibility = true
+    };
 }
