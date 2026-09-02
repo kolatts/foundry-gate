@@ -117,9 +117,9 @@ Admins link a FoundryGate group to an Entra group id. `POST /groups/{id}/sync-en
 
 Each departure is its own unit of work, deliberately: a subscription deletion cannot be rolled back, so batching several into one transaction would mean a single failed ARM call erasing the record of deletions that had already happened. A departure the gateway refuses is counted (`failedCount`), logged, and retried on the next run — the rest of the batch still lands.
 
-Neither sync waits for an admin to remember it: `EntraSyncFunction` runs both **nightly at 02:00 UTC**, users first and then every linked group, so joiners have accounts and leavers have lost their keys by morning. It is the same code, with the audit row attributed to no one instead of to an admin.
-
 Assignments granted to a **group** count as assignments to its people: each one is flattened to the group's transitive members (nested groups included) and merged with the directly assigned users, so assigning `SG_AI_Developers` to the enterprise application is a fully supported setup rather than a partial one. The one case that changes behaviour is a group the API cannot read — that run has an incomplete picture of who is assigned, so it adds and updates but deactivates nobody and says so (`skippedGroupAssignmentCount`).
+
+Neither sync waits for an admin to remember it: `EntraSyncFunction` runs both **nightly at 02:00 UTC**, users first and then every linked group, so joiners have accounts and leavers have lost their keys by morning. The scheduled jobs are described in full further down.
 
 ---
 
