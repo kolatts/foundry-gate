@@ -5,10 +5,12 @@ namespace FoundryGate.Cli.Commands.Db.GrantIdentities;
 /// <summary>An Entra principal (managed identity) that needs a contained database user.</summary>
 /// <param name="Name">Display name of the identity — the database user name, e.g. <c>id-foundrygate-api-dev</c>.</param>
 /// <param name="ClientId">
-/// The identity's client (application) id. When supplied the user is created <c>WITH SID = ..., TYPE = E</c>
-/// from that id, which needs no directory lookup; when <see langword="null"/> the user is created
-/// <c>FROM EXTERNAL PROVIDER</c>, which asks Entra to resolve the name and therefore requires the SQL
-/// server (or the executing principal) to hold Directory Readers — see #106.
+/// The identity's client (application) id, and the expected input: the user is then created
+/// <c>WITH SID = ..., TYPE = E</c> from that id, which needs no directory lookup. When
+/// <see langword="null"/> the user can only be created <c>FROM EXTERNAL PROVIDER</c>, which asks Azure SQL
+/// to resolve the name in Entra and therefore requires the logical server's own managed identity to hold
+/// the Directory Readers role - which <c>infra/modules/sql.bicep</c> does not grant, so
+/// <see cref="GrantIdentitiesRunner"/> refuses it without <c>--allow-external-provider</c> (#106, #142).
 /// </param>
 public sealed record ContainedUserGrant(string Name, Guid? ClientId);
 
@@ -29,8 +31,8 @@ public static class ContainedUserSql
     /// <summary>
     /// One self-contained batch for <paramref name="grant"/>: create the user if it does not exist, then add it
     /// to each role it is not yet in. Re-running against a fully provisioned database executes no DDL. The
-    /// principal name is bound once to a <c>sysname</c> variable and only ever reaches DDL through
-    /// <c>QUOTENAME</c>, so a name containing <c>]</c> or <c>'</c> cannot break out of its identifier.
+    /// principal name — and every role name — is bound to a <c>sysname</c> variable and only ever reaches
+    /// DDL through <c>QUOTENAME</c>, so a name containing <c>]</c> or <c>'</c> cannot break out of its identifier.
     /// </summary>
     public static string Build(ContainedUserGrant grant)
     {
@@ -44,6 +46,8 @@ public static class ContainedUserSql
         // SQL Server 2022: "Incorrect syntax near 'QUOTENAME'"), so QUOTENAME is evaluated once into a
         // variable and each statement is assembled into @sql before sp_executesql runs it.
         sql.AppendLine("DECLARE @quoted nvarchar(258) = QUOTENAME(@principal);");
+        sql.AppendLine("DECLARE @role sysname;");
+        sql.AppendLine("DECLARE @quotedRole nvarchar(258);");
         sql.AppendLine("DECLARE @sql nvarchar(max);");
 
         if (grant.ClientId is { } clientId)
@@ -66,11 +70,16 @@ public static class ContainedUserSql
             sql.AppendLine("END;");
         }
 
+        // The role names are a private const list today, but they reach DDL the same way the principal
+        // name does — bound to a sysname variable and quoted by QUOTENAME — so making them configurable
+        // later cannot open an injection point in the one file whose whole argument is that it never does that.
         foreach (var role in Roles)
         {
-            sql.AppendLine($"IF ISNULL(IS_ROLEMEMBER(N'{role}', @principal), 0) = 0");
+            sql.AppendLine($"SET @role = {ToUnicodeLiteral(role)};");
+            sql.AppendLine("SET @quotedRole = QUOTENAME(@role);");
+            sql.AppendLine("IF ISNULL(IS_ROLEMEMBER(@role, @principal), 0) = 0");
             sql.AppendLine("BEGIN");
-            sql.AppendLine($"    SET @sql = N'ALTER ROLE [{role}] ADD MEMBER ' + @quoted + N';';");
+            sql.AppendLine("    SET @sql = N'ALTER ROLE ' + @quotedRole + N' ADD MEMBER ' + @quoted + N';';");
             sql.AppendLine("    EXEC sp_executesql @sql;");
             sql.AppendLine("END;");
         }

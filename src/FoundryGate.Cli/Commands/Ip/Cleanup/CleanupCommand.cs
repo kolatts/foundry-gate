@@ -75,9 +75,9 @@ internal sealed class CleanupCommand : Command
                 _ = await runner.RunAsync(request, cancellationToken);
                 return 0;
             }
-            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or Azure.RequestFailedException)
+            catch (Exception ex) when (CliErrors.IsExpected(ex))
             {
-                Console.Error.WriteLine($"ip cleanup failed: {ex.Message}");
+                Console.Error.WriteLine($"ip cleanup failed: {CliErrors.Describe(ex)}");
                 return 1;
             }
         });

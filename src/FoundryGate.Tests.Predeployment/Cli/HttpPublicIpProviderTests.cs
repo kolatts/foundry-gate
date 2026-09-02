@@ -32,6 +32,22 @@ public class HttpPublicIpProviderTests
     }
 
     [Fact]
+    public async Task Never_returns_the_allow_all_Azure_sentinel_from_a_bad_endpoint_body()
+    {
+        // A captive portal or a broken endpoint answering 0.0.0.0 would otherwise become a gha-* rule
+        // that allows every Azure service — the same thing sql.bicep's "magic 0.0.0.0 rule" declares.
+        var handler = new ScriptedHandler
+        {
+            ["https://api.ipify.org/"] = _ => Text("0.0.0.0"),
+            ["https://ifconfig.me/ip"] = _ => Text("198.51.100.7")
+        };
+
+        var address = await new HttpPublicIpProvider(new HttpClient(handler)).GetPublicIpAsync(CancellationToken.None);
+
+        Assert.Equal(IPAddress.Parse("198.51.100.7"), address);
+    }
+
+    [Fact]
     public async Task Reports_every_endpoint_failure_and_points_at_the_ip_override()
     {
         var handler = new ScriptedHandler
@@ -49,7 +65,8 @@ public class HttpPublicIpProviderTests
 
     [Theory]
     [InlineData("203.0.113.10", true)]
-    [InlineData("0.0.0.0", true)]
+    // 0.0.0.0 is Azure's allow-all-Azure-services sentinel, never a host address — see TryParseIpv4.
+    [InlineData("0.0.0.0", false)]
     [InlineData("2001:db8::1", false)]
     [InlineData("::ffff:203.0.113.10", false)]
     [InlineData("example.com", false)]

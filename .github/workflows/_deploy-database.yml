@@ -23,10 +23,18 @@ name: Deploy Database (Reusable)
 #   - Membership of the SQL server's Entra admin group (#109) — `db deploy`, the seeders and
 #     `db grant-identities` all connect with Authentication=Active Directory Default; there is no
 #     password fallback by design.
-#   - For `CREATE USER ... FROM EXTERNAL PROVIDER` issued BY a service principal, Azure SQL must be able
-#     to look the identity up in Entra: either the server has a managed identity with Directory Readers,
-#     or the caller passes the identities' client ids (api-identity-client-id / functions-identity-client-id,
-#     both `az deployment sub show` outputs) so the users are created WITH SID and no lookup happens.
+#
+# CALLER CONTRACT — the identity client ids are effectively REQUIRED:
+#   `db grant-identities` creates each contained user WITH SID = <client id>, TYPE = E, which asks Entra
+#   for nothing. The alternative, `CREATE USER ... FROM EXTERNAL PROVIDER`, makes Azure SQL resolve the
+#   identity's NAME in Entra, and that requires the LOGICAL SERVER's own managed identity to hold the
+#   Directory Readers directory role — `infra/modules/sql.bicep` declares no server identity at all, so
+#   that path fails against FoundryGate's infrastructure as deployed (#106/#142).
+#   Callers must therefore pass `api-identity-client-id` / `functions-identity-client-id` from the
+#   deployment outputs `apiIdentityClientId` / `functionsIdentityClientId` (`az deployment sub show`,
+#   exported by the deploy orchestration in #144). The grant step fails fast with that message when they
+#   are empty rather than silently falling back. A fork that HAS granted its server Directory Readers can
+#   set `allow-external-provider: true` to take the name-resolution path deliberately.
 #
 # OIDC permissions: a reusable workflow cannot grant itself `id-token: write` — GitHub only issues
 # the ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN that azure/login@v2 needs when the CALLING workflow (or
@@ -85,7 +93,7 @@ on:
         type: string
         default: ""
       api-identity-client-id:
-        description: "API identity client id (deployment output apiIdentityClientId). When set the user is created WITH SID, which needs no Directory Readers permission on the SQL server; empty = CREATE USER ... FROM EXTERNAL PROVIDER."
+        description: "API identity client id (deployment output apiIdentityClientId). The contained user is created WITH SID from it, which needs no Directory Readers permission on the SQL server. Required in practice: the grant step fails when it is empty unless allow-external-provider is true."
         required: false
         type: string
         default: ""
@@ -94,6 +102,11 @@ on:
         required: false
         type: string
         default: ""
+      allow-external-provider:
+        description: "Escape hatch for a fork whose SQL logical server HAS a managed identity holding the Entra Directory Readers role: creates the contained users with CREATE USER ... FROM EXTERNAL PROVIDER instead of requiring the client ids. FoundryGate's own infra/modules/sql.bicep declares no server identity, so the default is false."
+        required: false
+        type: boolean
+        default: false
       firewall-rule-max-age-hours:
         description: "gha-* firewall rules older than this are removed by the final `ip cleanup` step (this run's own rules are always removed)."
         required: false
@@ -249,15 +262,30 @@ jobs:
 
       # Idempotent T-SQL (IF NOT EXISTS ... CREATE USER; IS_ROLEMEMBER-guarded ALTER ROLE ... ADD MEMBER
       # for db_datareader + db_datawriter) over the same Entra connection the deploy used. The dacpac
-      # excludes Users (ExcludeObjectTypes) so `--drop-objects` never removes what this step creates.
+      # excludes both Users and RoleMembership (DacpacDeployOptions.ExcludedObjectTypes, unit-tested), so
+      # `--drop-objects` removes neither the users this step creates nor their role memberships.
+      #
+      # The client ids are the deployment outputs apiIdentityClientId / functionsIdentityClientId — see the
+      # CALLER CONTRACT in this file's header. Without them the CLI would have to use CREATE USER ... FROM
+      # EXTERNAL PROVIDER, which needs Directory Readers on a server identity FoundryGate's Bicep does not
+      # declare, so we stop here with an actionable message instead of failing deep inside the CLI.
       - name: Grant database access to the API and Functions identities
         env:
           API_IDENTITY_NAME: ${{ inputs.api-identity-name }}
           FUNCTIONS_IDENTITY_NAME: ${{ inputs.functions-identity-name }}
           API_IDENTITY_CLIENT_ID: ${{ inputs.api-identity-client-id }}
           FUNCTIONS_IDENTITY_CLIENT_ID: ${{ inputs.functions-identity-client-id }}
+          ALLOW_EXTERNAL_PROVIDER: ${{ inputs.allow-external-provider }}
         run: |
           ARGS=()
+          if [ "${ALLOW_EXTERNAL_PROVIDER}" = "true" ]; then
+            echo "::warning::allow-external-provider is set — contained users will be created with CREATE USER ... FROM EXTERNAL PROVIDER, which requires this SQL logical server's managed identity to hold the Entra Directory Readers role."
+            ARGS+=(--allow-external-provider)
+          elif [ -z "${API_IDENTITY_CLIENT_ID}" ] || [ -z "${FUNCTIONS_IDENTITY_CLIENT_ID}" ]; then
+            echo "::error::api-identity-client-id and functions-identity-client-id are required. Pass the deployment outputs apiIdentityClientId / functionsIdentityClientId to _deploy-database.yml so the contained users are created WITH SID; without them the only option is CREATE USER ... FROM EXTERNAL PROVIDER, which needs the Entra Directory Readers role on a SQL server identity infra/modules/sql.bicep does not declare (#106/#142). If your fork's server identity does have Directory Readers, set allow-external-provider: true."
+            exit 1
+          fi
+
           [ -n "${API_IDENTITY_NAME}" ] && ARGS+=(--api-identity "${API_IDENTITY_NAME}")
           [ -n "${FUNCTIONS_IDENTITY_NAME}" ] && ARGS+=(--functions-identity "${FUNCTIONS_IDENTITY_NAME}")
           [ -n "${API_IDENTITY_CLIENT_ID}" ] && ARGS+=(--api-identity-client-id "${API_IDENTITY_CLIENT_ID}")

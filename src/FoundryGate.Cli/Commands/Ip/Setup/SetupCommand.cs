@@ -80,9 +80,9 @@ internal sealed class SetupCommand : Command
             {
                 return await runner.RunAsync(request, cancellationToken);
             }
-            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or Azure.RequestFailedException)
+            catch (Exception ex) when (CliErrors.IsExpected(ex))
             {
-                Console.Error.WriteLine($"ip setup failed: {ex.Message}");
+                Console.Error.WriteLine($"ip setup failed: {CliErrors.Describe(ex)}");
                 return 1;
             }
         });

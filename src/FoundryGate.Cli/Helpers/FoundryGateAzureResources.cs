@@ -25,20 +25,36 @@ public static partial class FoundryGateAzureResources
 
     /// <summary>
     /// Maps a user/workflow-supplied environment to the lowercase Bicep <c>environmentName</c>
-    /// (<c>test</c>, <c>dev</c>, <c>prod</c>, ...) every resource name embeds. Throws for values that
-    /// cannot be part of an Azure resource name, so a typo fails here rather than as a confusing ARM 404.
+    /// (<c>test</c>, <c>dev</c>, <c>prod</c>, ...) every resource name embeds — trim, alias, lowercase, and
+    /// nothing else. It deliberately does <em>not</em> validate: the workflow passes the GitHub Environment
+    /// name through <c>--env</c> even on the paths that never derive a resource name from it (both <c>ip</c>
+    /// commands take an explicit <c>--server</c>/<c>--resource-group</c>), so a fork whose Environment is
+    /// called <c>pre-prod-eu</c> must not fail on a value nothing was going to read. The shape rules live
+    /// where they matter, in the name builders below.
     /// </summary>
     public static string NormalizeEnvironment(string environment)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(environment);
 
         var trimmed = environment.Trim();
-        var normalized = EnvironmentAliases.TryGetValue(trimmed, out var alias) ? alias : trimmed.ToLowerInvariant();
+        return EnvironmentAliases.TryGetValue(trimmed, out var alias) ? alias : trimmed.ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// <see cref="NormalizeEnvironment"/> plus the check that the result can actually be embedded in an
+    /// Azure resource name, so a typo fails here with a printable message rather than as a confusing
+    /// ARM 404. Applied only by the name builders, and only after alias mapping.
+    /// </summary>
+    public static string ValidatedEnvironment(string environment)
+    {
+        var normalized = NormalizeEnvironment(environment);
 
         if (!EnvironmentNamePattern().IsMatch(normalized))
         {
             throw new ArgumentException(
-                $"Environment '{environment}' is not a valid FoundryGate environment name: expected 1-10 lowercase letters/digits (e.g. dev, prod).",
+                $"Environment '{environment}' cannot be used to derive FoundryGate resource names: expected 1-24 lowercase " +
+                "letters, digits and inner hyphens (e.g. dev, prod, pre-prod). Pass --server/--resource-group to address " +
+                "resources whose names do not follow the convention.",
                 nameof(environment));
         }
 
@@ -46,22 +62,22 @@ public static partial class FoundryGateAzureResources
     }
 
     /// <summary><c>rg-foundrygate-{env}</c> — every resource of an environment lives in one group.</summary>
-    public static string ResourceGroupName(string environment) => $"rg-foundrygate-{NormalizeEnvironment(environment)}";
+    public static string ResourceGroupName(string environment) => $"rg-foundrygate-{ValidatedEnvironment(environment)}";
 
     /// <summary>
     /// <c>sql-foundrygate-{env}-</c> — the server name ends in the deployment's <c>nameSuffix</c> (a global
     /// DNS label), so callers list the resource group's SQL servers and match on this prefix.
     /// </summary>
-    public static string SqlServerNamePrefix(string environment) => $"sql-foundrygate-{NormalizeEnvironment(environment)}-";
+    public static string SqlServerNamePrefix(string environment) => $"sql-foundrygate-{ValidatedEnvironment(environment)}-";
 
     /// <summary><c>sqldb-foundrygate-{env}</c> — the single FoundryGate database.</summary>
-    public static string SqlDatabaseName(string environment) => $"sqldb-foundrygate-{NormalizeEnvironment(environment)}";
+    public static string SqlDatabaseName(string environment) => $"sqldb-foundrygate-{ValidatedEnvironment(environment)}";
 
     /// <summary><c>id-foundrygate-api-{env}</c> — the API's user-assigned managed identity.</summary>
-    public static string ApiIdentityName(string environment) => $"id-foundrygate-api-{NormalizeEnvironment(environment)}";
+    public static string ApiIdentityName(string environment) => $"id-foundrygate-api-{ValidatedEnvironment(environment)}";
 
     /// <summary><c>id-foundrygate-func-{env}</c> — the Functions host's user-assigned managed identity.</summary>
-    public static string FunctionsIdentityName(string environment) => $"id-foundrygate-func-{NormalizeEnvironment(environment)}";
+    public static string FunctionsIdentityName(string environment) => $"id-foundrygate-func-{ValidatedEnvironment(environment)}";
 
     /// <summary>
     /// The Entra-auth connection string shape <c>infra/modules/sql.bicep</c> outputs and
@@ -76,6 +92,8 @@ public static partial class FoundryGateAzureResources
         return $"Server=tcp:{serverFqdn},1433;Database={databaseName};Authentication=Active Directory Default;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;";
     }
 
-    [GeneratedRegex("^[a-z0-9]{1,10}$")]
+    // Lowercase letters/digits with inner hyphens, 1-24 characters: wide enough for a fork's `pre-prod`
+    // GitHub Environment, narrow enough that the derived rg-/sql-/id- names stay legal Azure names.
+    [GeneratedRegex("^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")]
     private static partial Regex EnvironmentNamePattern();
 }

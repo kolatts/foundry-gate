@@ -26,12 +26,39 @@ public class FoundryGateAzureResourcesTests
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("dev-2")]
-    [InlineData("rg-foundrygate-dev")]
-    [InlineData("averyverylongenv")]
-    public void NormalizeEnvironment_rejects_values_that_cannot_be_part_of_a_resource_name(string input)
+    public void NormalizeEnvironment_rejects_a_missing_value(string input)
     {
         Assert.ThrowsAny<ArgumentException>(() => FoundryGateAzureResources.NormalizeEnvironment(input));
+    }
+
+    [Theory]
+    [InlineData("pre-prod", "pre-prod")]
+    [InlineData("Pre-Prod", "pre-prod")]
+    [InlineData("integration-eu", "integration-eu")]
+    public void A_hyphenated_GitHub_Environment_name_normalizes_and_derives_names(string input, string expected)
+    {
+        // A fork whose GitHub Environment is 'pre-prod' passes that straight through --env; nothing about
+        // it is invalid, and both `ip` commands are handed an explicit --server/--resource-group anyway.
+        Assert.Equal(expected, FoundryGateAzureResources.NormalizeEnvironment(input));
+        Assert.Equal($"rg-foundrygate-{expected}", FoundryGateAzureResources.ResourceGroupName(input));
+        Assert.Equal($"sqldb-foundrygate-{expected}", FoundryGateAzureResources.SqlDatabaseName(input));
+        Assert.Equal($"id-foundrygate-api-{expected}", FoundryGateAzureResources.ApiIdentityName(input));
+    }
+
+    [Theory]
+    [InlineData("-dev")]
+    [InlineData("dev-")]
+    [InlineData("dev_2")]
+    [InlineData("dev env")]
+    [InlineData("averyveryverylongenvironmentname")]
+    public void Name_derivation_rejects_values_that_cannot_be_part_of_a_resource_name(string input)
+    {
+        // The check lives on the name builders, not on NormalizeEnvironment: a value nothing derives a
+        // name from is nobody's problem (the reviewer's point on #143).
+        _ = FoundryGateAzureResources.NormalizeEnvironment(input);
+        Assert.ThrowsAny<ArgumentException>(() => FoundryGateAzureResources.ResourceGroupName(input));
+        Assert.ThrowsAny<ArgumentException>(() => FoundryGateAzureResources.SqlServerNamePrefix(input));
+        Assert.ThrowsAny<ArgumentException>(() => FoundryGateAzureResources.ApiIdentityName(input));
     }
 
     [Fact]

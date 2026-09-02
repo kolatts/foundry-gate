@@ -21,20 +21,26 @@ public class ContainedUserSqlTests
             """
             DECLARE @principal sysname = N'id-foundrygate-api-dev';
             DECLARE @quoted nvarchar(258) = QUOTENAME(@principal);
+            DECLARE @role sysname;
+            DECLARE @quotedRole nvarchar(258);
             DECLARE @sql nvarchar(max);
             IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @principal)
             BEGIN
                 SET @sql = N'CREATE USER ' + @quoted + N' FROM EXTERNAL PROVIDER;';
                 EXEC sp_executesql @sql;
             END;
-            IF ISNULL(IS_ROLEMEMBER(N'db_datareader', @principal), 0) = 0
+            SET @role = N'db_datareader';
+            SET @quotedRole = QUOTENAME(@role);
+            IF ISNULL(IS_ROLEMEMBER(@role, @principal), 0) = 0
             BEGIN
-                SET @sql = N'ALTER ROLE [db_datareader] ADD MEMBER ' + @quoted + N';';
+                SET @sql = N'ALTER ROLE ' + @quotedRole + N' ADD MEMBER ' + @quoted + N';';
                 EXEC sp_executesql @sql;
             END;
-            IF ISNULL(IS_ROLEMEMBER(N'db_datawriter', @principal), 0) = 0
+            SET @role = N'db_datawriter';
+            SET @quotedRole = QUOTENAME(@role);
+            IF ISNULL(IS_ROLEMEMBER(@role, @principal), 0) = 0
             BEGIN
-                SET @sql = N'ALTER ROLE [db_datawriter] ADD MEMBER ' + @quoted + N';';
+                SET @sql = N'ALTER ROLE ' + @quotedRole + N' ADD MEMBER ' + @quoted + N';';
                 EXEC sp_executesql @sql;
             END;
 
@@ -53,8 +59,23 @@ public class ContainedUserSqlTests
         Assert.Contains("SET @sql = N'CREATE USER ' + @quoted + N' WITH SID = ' + CONVERT(nvarchar(34), @sid, 1) + N', TYPE = E;';", sql);
         Assert.DoesNotContain("FROM EXTERNAL PROVIDER", sql);
         Assert.Contains("IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @principal)", sql);
-        Assert.Contains("ALTER ROLE [db_datareader] ADD MEMBER", sql);
-        Assert.Contains("ALTER ROLE [db_datawriter] ADD MEMBER", sql);
+        Assert.Contains("SET @role = N'db_datareader';", sql);
+        Assert.Contains("SET @role = N'db_datawriter';", sql);
+        Assert.Contains("SET @sql = N'ALTER ROLE ' + @quotedRole + N' ADD MEMBER ' + @quoted + N';';", sql);
+    }
+
+    [Fact]
+    public void Role_names_reach_DDL_through_QUOTENAME_too_never_by_raw_interpolation()
+    {
+        var sql = ContainedUserSql.Build(new ContainedUserGrant("id-foundrygate-api-dev", null));
+
+        foreach (var role in ContainedUserSql.Roles)
+        {
+            Assert.Contains($"SET @role = N'{role}';", sql);
+            Assert.DoesNotContain($"[{role}]", sql);
+        }
+
+        Assert.Equal(ContainedUserSql.Roles.Count, CountOccurrences(sql, "SET @quotedRole = QUOTENAME(@role);"));
     }
 
     [Fact]

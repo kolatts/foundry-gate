@@ -7,11 +7,18 @@ namespace FoundryGate.Cli.Commands.Db.GrantIdentities;
 /// <summary>
 /// <c>foundrygate db grant-identities --env &lt;env&gt; [--api-identity &lt;name&gt;] [--functions-identity &lt;name&gt;]
 /// [--api-identity-client-id &lt;guid&gt;] [--functions-identity-client-id &lt;guid&gt;] [--connection-string &lt;cs&gt;]
-/// [--dry-run] [--server &lt;name&gt;] [--resource-group &lt;rg&gt;] [--subscription &lt;id&gt;]</c> — creates the
+/// [--allow-external-provider] [--dry-run] [--server &lt;name&gt;] [--resource-group &lt;rg&gt;] [--subscription &lt;id&gt;]</c> — creates the
 /// contained database users for the API and Functions managed identities after the dacpac deploy (#106).
 /// A managed identity cannot be granted database access through ARM; this is the T-SQL step Bicep cannot
 /// express (<c>infra/modules/sql.bicep</c> header). Runs under the same Entra-authenticated connection the
 /// deploy already uses, so the executing principal must be in the SQL Entra admin group (#109).
+/// <para>
+/// The client ids are effectively required: with them the users are created <c>WITH SID = ..., TYPE = E</c>,
+/// which needs no directory lookup. Without them the only way to create the user is
+/// <c>FROM EXTERNAL PROVIDER</c>, which requires the SQL logical server's own managed identity to hold the
+/// Entra Directory Readers role - <c>infra/modules/sql.bicep</c> declares no server identity, so the command
+/// refuses that path unless <c>--allow-external-provider</c> says the operator granted it anyway (#142).
+/// </para>
 /// </summary>
 internal sealed class GrantIdentitiesCommand : Command
 {
@@ -35,12 +42,17 @@ internal sealed class GrantIdentitiesCommand : Command
 
         var apiClientIdOption = new Option<Guid?>("--api-identity-client-id")
         {
-            Description = "API identity client id; when set the user is created WITH SID (no Directory Readers needed) instead of FROM EXTERNAL PROVIDER"
+            Description = "API identity client id (deployment output apiIdentityClientId); the user is created WITH SID, which needs no Directory Readers permission"
         };
 
         var functionsClientIdOption = new Option<Guid?>("--functions-identity-client-id")
         {
-            Description = "Functions identity client id; when set the user is created WITH SID (no Directory Readers needed) instead of FROM EXTERNAL PROVIDER"
+            Description = "Functions identity client id (deployment output functionsIdentityClientId); the user is created WITH SID, which needs no Directory Readers permission"
+        };
+
+        var allowExternalProviderOption = new Option<bool>("--allow-external-provider")
+        {
+            Description = "Permit CREATE USER ... FROM EXTERNAL PROVIDER for identities with no client id. Only for servers whose managed identity holds the Entra Directory Readers role — FoundryGate's own sql.bicep declares no server identity, so the default is to refuse"
         };
 
         var connectionStringOption = new Option<string?>("--connection-string")
@@ -73,6 +85,7 @@ internal sealed class GrantIdentitiesCommand : Command
         Add(functionsIdentityOption);
         Add(apiClientIdOption);
         Add(functionsClientIdOption);
+        Add(allowExternalProviderOption);
         Add(connectionStringOption);
         Add(dryRunOption);
         Add(serverOption);
@@ -91,8 +104,14 @@ internal sealed class GrantIdentitiesCommand : Command
                     parseResult.GetValue(functionsIdentityOption),
                     parseResult.GetValue(functionsClientIdOption));
 
-                var dryRun = parseResult.GetValue(dryRunOption);
-                var connectionString = dryRun
+                var request = new GrantIdentitiesRequest(
+                    grants,
+                    parseResult.GetValue(dryRunOption),
+                    parseResult.GetValue(allowExternalProviderOption));
+
+                // A dry run never opens a connection, so it never resolves a server either — that keeps
+                // `--dry-run` usable without an Azure session, and is why the executor is optional.
+                var connectionString = request.DryRun
                     ? null
                     : await ResolveConnectionStringAsync(
                         environment,
@@ -102,16 +121,14 @@ internal sealed class GrantIdentitiesCommand : Command
                         parseResult.GetValue(subscriptionOption),
                         cancellationToken);
 
-                ISqlBatchExecutor executor = connectionString is null
-                    ? new NoOpSqlBatchExecutor()
-                    : new SqlClientBatchExecutor(connectionString);
+                var executor = connectionString is null ? null : new SqlClientBatchExecutor(connectionString);
 
-                _ = await new GrantIdentitiesRunner(executor, Console.Out).RunAsync(grants, dryRun, cancellationToken);
+                _ = await new GrantIdentitiesRunner(executor, Console.Out).RunAsync(request, cancellationToken);
                 return 0;
             }
-            catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or SqlException or Azure.RequestFailedException)
+            catch (Exception ex) when (CliErrors.IsExpected(ex) || ex is SqlException)
             {
-                Console.Error.WriteLine($"db grant-identities failed: {ex.Message}");
+                Console.Error.WriteLine($"db grant-identities failed: {CliErrors.Describe(ex)}");
                 return 1;
             }
         });
@@ -155,11 +172,5 @@ internal sealed class GrantIdentitiesCommand : Command
         Console.WriteLine($"Target database: {server.Fqdn}/{databaseName} (Entra auth)");
 
         return FoundryGateAzureResources.EntraConnectionString(server.Fqdn, databaseName);
-    }
-
-    /// <summary>Stands in for the database during <c>--dry-run</c>; the runner prints instead of executing.</summary>
-    private sealed class NoOpSqlBatchExecutor : ISqlBatchExecutor
-    {
-        public Task ExecuteAsync(string sql, CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

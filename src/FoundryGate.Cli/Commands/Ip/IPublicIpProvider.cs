@@ -53,10 +53,17 @@ public sealed class HttpPublicIpProvider(HttpClient httpClient) : IPublicIpProvi
             "Check internet connectivity or pass --ip <address> explicitly.");
     }
 
-    /// <summary>Parses a dotted-quad IPv4 literal only — IPv6 and hostnames are rejected.</summary>
+    /// <summary>
+    /// Parses a dotted-quad IPv4 literal only — IPv6 and hostnames are rejected, and so is
+    /// <c>0.0.0.0</c>: a rule with start == end == <c>0.0.0.0</c> is Azure's allow-all-Azure-services
+    /// sentinel (<c>infra/modules/sql.bicep</c>'s "magic 0.0.0.0 rule"), not a host address, so a
+    /// typo'd <c>--ip</c> or a captive-portal response body must never become one under a <c>gha-*</c> name.
+    /// </summary>
     public static bool TryParseIpv4(string? value, out IPAddress address)
     {
-        if (IPAddress.TryParse(value, out var parsed) && parsed.AddressFamily == AddressFamily.InterNetwork)
+        if (IPAddress.TryParse(value, out var parsed)
+            && parsed.AddressFamily == AddressFamily.InterNetwork
+            && !parsed.Equals(IPAddress.Any))
         {
             address = parsed;
             return true;

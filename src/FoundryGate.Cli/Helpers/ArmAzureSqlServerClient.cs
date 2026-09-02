@@ -100,28 +100,53 @@ public sealed class ArmAzureSqlServerClient(ArmClient armClient, string? subscri
         _ = await response.Value!.DeleteAsync(WaitUntil.Completed, cancellationToken);
     }
 
-    private async Task<ResourceGroupResource> GetResourceGroupAsync(string resourceGroupName, CancellationToken cancellationToken)
+    // One CLI invocation targets one subscription and one resource group, and both handles are immutable
+    // for the lifetime of this client, so each is fetched at most once. Without this, `ip setup` paid a
+    // subscription + resource-group GET for every one of its three operations and `ip cleanup` paid two
+    // more per rule inside its delete loop. Commands are single-threaded, hence plain fields.
+    private SubscriptionResource? _subscription;
+    private ResourceGroupResource? _resourceGroup;
+
+    private async Task<SubscriptionResource> GetSubscriptionAsync(CancellationToken cancellationToken)
     {
-        SubscriptionResource subscription;
-        if (string.IsNullOrWhiteSpace(subscriptionId))
+        if (_subscription is not null)
         {
-            subscription = await _armClient.GetDefaultSubscriptionAsync(cancellationToken);
-        }
-        else
-        {
-            subscription = _armClient.GetSubscriptionResource(SubscriptionResource.CreateResourceIdentifier(subscriptionId));
+            return _subscription;
         }
 
-        return await subscription.GetResourceGroupAsync(resourceGroupName, cancellationToken);
+        _subscription = string.IsNullOrWhiteSpace(subscriptionId)
+            ? await _armClient.GetDefaultSubscriptionAsync(cancellationToken)
+            : _armClient.GetSubscriptionResource(SubscriptionResource.CreateResourceIdentifier(subscriptionId));
+
+        return _subscription;
     }
 
+    private async Task<ResourceGroupResource> GetResourceGroupAsync(string resourceGroupName, CancellationToken cancellationToken)
+    {
+        if (_resourceGroup is not null && string.Equals(_resourceGroup.Id.Name, resourceGroupName, StringComparison.OrdinalIgnoreCase))
+        {
+            return _resourceGroup;
+        }
+
+        var subscription = await GetSubscriptionAsync(cancellationToken);
+        _resourceGroup = await subscription.GetResourceGroupAsync(resourceGroupName, cancellationToken);
+        return _resourceGroup;
+    }
+
+    /// <summary>
+    /// A handle on the server, built from its resource id rather than fetched: every caller here only needs
+    /// somewhere to hang a firewall-rule operation, and <c>ArmClient.GetSqlServerResource</c> costs no
+    /// round-trip at all. A server that does not exist surfaces as a 404 on the operation itself, which is
+    /// where it belongs — <see cref="AzureSqlServerResolver"/> has already established the server by name.
+    /// </summary>
     private async Task<SqlServerResource> GetServerResourceAsync(string resourceGroupName, string serverName, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(resourceGroupName);
         ArgumentException.ThrowIfNullOrWhiteSpace(serverName);
 
-        var resourceGroup = await GetResourceGroupAsync(resourceGroupName, cancellationToken);
-        return await resourceGroup.GetSqlServers().GetAsync(serverName, cancellationToken: cancellationToken);
+        var subscription = await GetSubscriptionAsync(cancellationToken);
+        return _armClient.GetSqlServerResource(
+            SqlServerResource.CreateResourceIdentifier(subscription.Id.SubscriptionId!, resourceGroupName, serverName));
     }
 
     private static AzureSqlServerInfo ToInfo(SqlServerResource server) =>
