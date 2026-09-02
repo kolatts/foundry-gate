@@ -38,7 +38,12 @@ namespace FoundryGate.Api.Extensions;
 /// </remarks>
 public static class RateLimiterExtensions
 {
-    /// <summary>The window both policies count within.</summary>
+    /// <summary>
+    /// The window both policies count within. Constants rather than configuration for now — #181 moves
+    /// them to the options pattern so a fork can retune them without recompiling — and a limiter is only
+    /// half the answer: a patient drain stays inside the cap, which is what the reveal anomaly signal in
+    /// #180 is for.
+    /// </summary>
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
 
     /// <summary>

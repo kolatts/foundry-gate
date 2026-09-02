@@ -53,7 +53,7 @@ profile with a `200`** — the developer never sees the race. Only the unique-in
 absorbed: any other failed save still surfaces, and calling the first-login provision for an identity
 that already had a row remains a `409`, because that one is a programming error rather than a race.
 The loser does still wait out the winner's gateway round trip, because the provision pipeline holds
-its transaction across it.
+its transaction across it ([#179](https://github.com/kolatts/foundry-gate/issues/179)).
 
 Errors: `403` when the caller's account is deactivated, `502` when the gateway or Graph failed, `503`
 when APIM key management is not configured on the host.

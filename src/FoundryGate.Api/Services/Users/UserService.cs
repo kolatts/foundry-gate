@@ -292,8 +292,8 @@ public sealed class UserService(
     /// Only the conflict is absorbed, not the latency: the loser still waits out the winner's ARM round
     /// trip on the unique index, because the provision pipeline holds its transaction across that call
     /// (measured in #154's comment). Shortening that window means committing the <c>User</c> row before
-    /// APIM is touched, which trades away "a failed first login leaves no row" — tracked separately
-    /// rather than changed in passing.
+    /// APIM is touched, which trades away "a failed first login leaves no row" — a deliberate change to
+    /// the pipeline's failure shape, tracked as #179 rather than made in passing.
     /// </para>
     /// </remarks>
     private async Task<User> ProvisionFirstLoginAsync(CancellationToken cancellationToken)
