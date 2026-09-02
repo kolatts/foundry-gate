@@ -20,8 +20,15 @@ public class TestDataSeederTests : InMemoryDatabaseTest
         Assert.All(Context.Groups.ToList(), g => Assert.Contains(g.MonthlyTokenQuota, new long?[] { Support.TestGatewayTiers.StandardCap, Support.TestGatewayTiers.PowerCap, null }));
         Assert.All(Context.QuotaAllocations.ToList(), a => Assert.False(a.IsGatewayCapped));
         Assert.Equal(8, Context.QuotaAllocations.Count());
-        Assert.Single(Context.QuotaIncreaseRequests);
         Assert.True(Context.GroupMembers.Any());
+
+        // The demo request must be one POST /requests would actually have accepted (#34): a tier cap
+        // asked for by a developer on a smaller finite tier — never an unlimited user (nothing larger
+        // to ask for) and never a value that is not a tier.
+        var increaseRequest = Assert.Single(Context.QuotaIncreaseRequests);
+        Assert.Equal(Support.TestGatewayTiers.PowerCap, increaseRequest.RequestedQuota);
+        Assert.Equal(Support.TestGatewayTiers.StandardCap, increaseRequest.CurrentQuota);
+        Assert.False(users.Single(u => u.UserId == increaseRequest.UserId).IsUnlimited);
     }
 
     [Fact]
