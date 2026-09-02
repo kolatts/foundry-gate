@@ -1,6 +1,110 @@
 @page "/users/sync"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject ISnackbar Snackbar
 
 <PageTitle>Sync Entra Users — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Sync Entra Users" />
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" Href="users" Class="mb-2">All users</MudButton>
+    <MudText Typo="Typo.h4" Class="mb-2">Sync users from Entra</MudText>
+    <MudText Typo="Typo.body1" Class="mud-text-secondary mb-6" Style="max-width: 44rem;">
+        Reconciles the user list against the people assigned to the Foundry Gate application in
+        Entra. New assignees are added without a key, existing people have their name, email and
+        employee id refreshed, and people no longer assigned are deprovisioned — their gateway key
+        deleted and their account deactivated. Nothing is ever deleted, and nobody is re-activated
+        automatically. Running it twice does nothing the second time.
+    </MudText>
+
+    <MudButton Variant="Variant.Filled"
+               Color="Color.Primary"
+               Size="Size.Large"
+               StartIcon="@Icons.Material.Filled.Sync"
+               Disabled="@_running"
+               OnClick="@RunAsync"
+               data-testid="run-sync">
+        @(_running ? "Syncing…" : "Run Entra sync")
+    </MudButton>
+
+    @if (_running)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mt-4" Style="max-width: 44rem;" data-testid="sync-progress" />
+    }
+
+    @if (_result is { } result)
+    {
+        <MudAlert Severity="@(result.SkippedGroupAssignmentCount > 0 ? Severity.Warning : Severity.Success)"
+                  Class="mt-6"
+                  Style="max-width: 44rem;"
+                  data-testid="sync-result">
+            <MudText Typo="Typo.subtitle2" Class="mb-2">Sync finished</MudText>
+            <ul class="ml-4">
+                <li data-testid="sync-added">@result.AddedCount added</li>
+                <li data-testid="sync-updated">@result.UpdatedCount updated</li>
+                <li data-testid="sync-deactivated">@result.DeactivatedCount deactivated</li>
+                <li data-testid="sync-skipped">@result.SkippedGroupAssignmentCount group assignments skipped</li>
+            </ul>
+        </MudAlert>
+
+        @if (result.SkippedGroupAssignmentCount > 0)
+        {
+            <MudAlert Severity="Severity.Info" Class="mt-3" Style="max-width: 44rem;" data-testid="sync-skipped-explainer">
+                <MudText Typo="Typo.subtitle2" Class="mb-1">Nobody was deactivated on this run</MudText>
+                Access granted to the application through an Entra <em>group</em> isn't expanded to its
+                members yet, so people who get in that way are invisible to this sync. "Not in the
+                list" therefore can't mean "has left", and departure detection stays switched off for
+                any run that sees group assignments — additions and updates still applied.
+                Assign developers to the application individually if you need departures caught, or
+                follow
+                <MudLink Href="https://github.com/kolatts/foundry-gate/issues/121" Target="_blank">#121</MudLink>.
+            </MudAlert>
+        }
+    }
+
+    <MudAlert Severity="Severity.Normal" Class="mt-6" Style="max-width: 44rem;" data-testid="sync-history-note">
+        Only this session's run is shown. Foundry Gate doesn't yet keep the time and result of the
+        last sync anywhere durable — see
+        <MudLink Href="https://github.com/kolatts/foundry-gate/issues/171" Target="_blank">#171</MudLink>.
+        Every run does write an audit row, so
+        <MudLink Href="audit">the audit log</MudLink> has the history in the meantime.
+    </MudAlert>
+}
+
+@code {
+    private UserSyncResult? _result;
+    private bool _running;
+    private bool _accessDenied;
+
+    private async Task RunAsync()
+    {
+        _running = true;
+        try
+        {
+            var result = await Api.SyncUsersAsync();
+
+            if (result.Status == ApiCallStatus.Forbidden)
+            {
+                _accessDenied = true;
+                return;
+            }
+
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "The Entra sync didn't run.", Severity.Error);
+                return;
+            }
+
+            _result = result.Value;
+            Snackbar.Add("Entra sync finished.", Severity.Success);
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+}

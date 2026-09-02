@@ -1,6 +1,147 @@
 @page "/groups"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
 
 <PageTitle>Groups — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Groups" />
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <MudText Typo="Typo.h4" Class="mb-4">Groups</MudText>
+
+    <MudDataGrid @ref="_grid"
+                 T="GroupResponse"
+                 ServerData="@LoadAsync"
+                 Loading="@_loading"
+                 Hover="true"
+                 Dense="true"
+                 Elevation="1"
+                 RowClick="@OnRowClick"
+                 data-testid="groups-grid">
+        <ToolBarContent>
+            <MudTextField T="string"
+                          Value="@_search"
+                          ValueChanged="@OnSearchChangedAsync"
+                          Immediate="true"
+                          DebounceInterval="300"
+                          Placeholder="Search name or description"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search"
+                          Variant="Variant.Outlined"
+                          Margin="Margin.Dense"
+                          Clearable="true"
+                          Class="mt-0"
+                          Style="max-width: 22rem;"
+                          data-testid="groups-search" />
+        </ToolBarContent>
+        <Columns>
+            <PropertyColumn Property="@(g => g.Name)" Title="Name" Sortable="false" />
+            <TemplateColumn Title="Members" Sortable="false">
+                <CellTemplate>@context.Item.MemberCount</CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Monthly budget" Sortable="false">
+                <CellTemplate>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@(context.Item.IsUnlimited ? Color.Info : Color.Default)">
+                        @TierDisplay.Describe(context.Item.IsUnlimited, context.Item.MonthlyTokenQuota, _tiers)
+                    </MudChip>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Roster" Sortable="false">
+                <CellTemplate>
+                    @if (context.Item.IsEntraSynced)
+                    {
+                        <MudTooltip Text="@($"Managed by Entra group {context.Item.EntraGroupId}")">
+                            <div class="d-flex align-center ga-1">
+                                <MudIcon Icon="@Icons.Material.Filled.CloudSync" Color="Color.Info" Size="Size.Small" />
+                                <MudText Typo="Typo.body2">Entra</MudText>
+                            </div>
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.body2" Class="mud-text-secondary">Manual</MudText>
+                    }
+                </CellTemplate>
+            </TemplateColumn>
+        </Columns>
+        <NoRecordsContent>
+            <MudText Class="pa-6 mud-text-secondary" data-testid="groups-empty">
+                @(string.IsNullOrWhiteSpace(_search)
+                    ? "No groups yet. Create one to give a team a shared monthly budget."
+                    : "No groups match that search.")
+            </MudText>
+        </NoRecordsContent>
+        <PagerContent>
+            <MudDataGridPager T="GroupResponse" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+        </PagerContent>
+    </MudDataGrid>
+
+    <MudFab Color="Color.Primary"
+            StartIcon="@Icons.Material.Filled.Add"
+            Label="New group"
+            Href="groups/new"
+            Class="mt-6"
+            data-testid="groups-new" />
+}
+
+@code {
+    private MudDataGrid<GroupResponse>? _grid;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+    private string? _search;
+    private bool _loading;
+    private bool _accessDenied;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var tiers = await Api.GetQuotaTiersAsync();
+        if (tiers.IsSuccess && tiers.Value is not null)
+        {
+            _tiers = tiers.Value;
+        }
+    }
+
+    private async Task<GridData<GroupResponse>> LoadAsync(GridState<GroupResponse> state, CancellationToken cancellationToken)
+    {
+        _loading = true;
+        try
+        {
+            var result = await Api.GetGroupsAsync(new PagedRequest(state.Page + 1, state.PageSize), _search, cancellationToken);
+
+            if (result.Status == ApiCallStatus.Forbidden)
+            {
+                _accessDenied = true;
+                return new GridData<GroupResponse> { Items = [], TotalItems = 0 };
+            }
+
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "Couldn't load groups.", Severity.Error);
+                return new GridData<GroupResponse> { Items = [], TotalItems = 0 };
+            }
+
+            return new GridData<GroupResponse> { Items = result.Value.Items, TotalItems = result.Value.TotalCount };
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchChangedAsync(string? search)
+    {
+        _search = search;
+        if (_grid is not null)
+        {
+            _grid.NavigateTo(Page.First);
+            await _grid.ReloadServerData();
+        }
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<GroupResponse> args) =>
+        Navigation.NavigateTo($"groups/{args.Item.GroupId}");
+}

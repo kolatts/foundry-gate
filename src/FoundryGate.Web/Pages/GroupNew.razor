@@ -1,6 +1,129 @@
 @page "/groups/new"
 @attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject NavigationManager Navigation
+@inject ISnackbar Snackbar
 
 <PageTitle>New Group — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="New Group" />
+<MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" Href="groups" Class="mb-2">All groups</MudButton>
+<MudText Typo="Typo.h4" Class="mb-4">New group</MudText>
+
+<MudPaper Elevation="1" Class="pa-6" Style="max-width: 40rem;">
+    <MudForm @ref="_form" data-testid="group-form">
+        <MudTextField @bind-Value="_name"
+                      Label="Name"
+                      Variant="Variant.Outlined"
+                      Required="true"
+                      RequiredError="A group needs a name."
+                      MaxLength="@ValidationConstants.GroupNameMaxLength"
+                      Immediate="true"
+                      data-testid="group-name" />
+
+        <MudTextField @bind-Value="_description"
+                      Label="Description"
+                      Variant="Variant.Outlined"
+                      Class="mt-4"
+                      Lines="2"
+                      MaxLength="@ValidationConstants.DescriptionMaxLength"
+                      data-testid="group-description" />
+
+        <MudTextField @bind-Value="_entraGroupId"
+                      Label="Entra group id (optional)"
+                      Variant="Variant.Outlined"
+                      Class="mt-4"
+                      Validation="@(new Func<string?, string?>(ValidateEntraGroupId))"
+                      HelperText="Link this to an Entra security group and its roster is synced from there. Leave blank to manage members by hand — the link can't be changed later."
+                      data-testid="group-entra-id" />
+
+        <MudDivider Class="my-6" />
+
+        <QuotaTierPicker Tiers="@_tiers"
+                         IsUnlimited="@_isUnlimited"
+                         IsUnlimitedChanged="@(value => _isUnlimited = value)"
+                         MonthlyTokenQuota="@_monthlyTokenQuota"
+                         MonthlyTokenQuotaChanged="@(value => _monthlyTokenQuota = value)"
+                         TestId="group-quota"
+                         HelperText="Members get the highest budget of any group they belong to, unless they have an override of their own." />
+
+        <div class="d-flex ga-2 mt-6">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Disabled="@_saving"
+                       OnClick="@CreateAsync"
+                       data-testid="group-create">Create group</MudButton>
+            <MudButton Variant="Variant.Text" Href="groups" Disabled="@_saving">Cancel</MudButton>
+        </div>
+    </MudForm>
+</MudPaper>
+
+@code {
+    private MudForm? _form;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+    private string _name = string.Empty;
+    private string? _description;
+    private string? _entraGroupId;
+    private bool _isUnlimited;
+    private long? _monthlyTokenQuota;
+    private bool _saving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var tiers = await Api.GetQuotaTiersAsync();
+        if (tiers.IsSuccess && tiers.Value is not null)
+        {
+            _tiers = tiers.Value;
+        }
+    }
+
+    /// <summary>
+    /// Mirrors <see cref="CreateGroupRequest"/>'s <c>[RegularExpression]</c> so a typo is caught
+    /// here rather than as a 400. The API validates it again regardless — this is the courtesy,
+    /// not the guarantee.
+    /// </summary>
+    private static string? ValidateEntraGroupId(string? value) =>
+        string.IsNullOrWhiteSpace(value) || Guid.TryParse(value, out _)
+            ? null
+            : "An Entra group id is a GUID — copy the group's object id from the Azure portal.";
+
+    private async Task CreateAsync()
+    {
+        if (_form is not null)
+        {
+            await _form.ValidateAsync();
+            if (!_form.IsValid)
+            {
+                return;
+            }
+        }
+
+        // CreateGroupRequest's properties are init-only (the repo's request-DTO convention), so
+        // the form binds to locals and the record is built once, here.
+        var request = new CreateGroupRequest
+        {
+            Name = _name.Trim(),
+            Description = string.IsNullOrWhiteSpace(_description) ? null : _description.Trim(),
+            EntraGroupId = string.IsNullOrWhiteSpace(_entraGroupId) ? null : _entraGroupId.Trim(),
+            IsUnlimited = _isUnlimited,
+            MonthlyTokenQuota = _monthlyTokenQuota,
+        };
+
+        _saving = true;
+        try
+        {
+            var result = await Api.CreateGroupAsync(request);
+            if (!result.IsSuccess || result.Value is null)
+            {
+                Snackbar.Add(result.Message ?? "Couldn't create the group.", Severity.Error);
+                return;
+            }
+
+            Snackbar.Add($"Group '{result.Value.Name}' created.", Severity.Success);
+            Navigation.NavigateTo($"groups/{result.Value.GroupId}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}
