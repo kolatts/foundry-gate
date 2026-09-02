@@ -124,6 +124,13 @@ public sealed class QuotaAllocationService(
     }
 
     /// <inheritdoc />
+    public async Task<QuotaAllocationResponse?> FindUserAllocationAsync(int userId, CancellationToken cancellationToken)
+    {
+        var row = await FindRowAsync(userId, BillingPeriod.Current(timeProvider), cancellationToken);
+        return row is null ? null : ToResponse(row);
+    }
+
+    /// <inheritdoc />
     public async Task<QuotaAllocationResponse> GetUserAllocationAsync(int userId, CancellationToken cancellationToken)
     {
         var period = BillingPeriod.Current(timeProvider);

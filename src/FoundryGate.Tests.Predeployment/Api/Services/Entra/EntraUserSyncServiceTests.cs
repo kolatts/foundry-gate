@@ -1,13 +1,19 @@
 using System.Security.Claims;
+using FoundryGate.Api.Configuration;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Identity;
+using FoundryGate.Api.Services.Keys;
+using FoundryGate.Api.Services.Lifecycle;
+using FoundryGate.Api.Services.Quota;
+using FoundryGate.Api.Services.Security;
 using FoundryGate.Data.Audit;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
 using FoundryGate.Tests.Predeployment.Data;
 using FoundryGate.Tests.Predeployment.Support;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,6 +34,9 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
 
     private readonly MutableTimeProvider _timeProvider = new(Now);
     private readonly FakeEntraDirectoryClient _directory = new();
+
+    /// <summary>The in-memory APIM the departure path's deprovision deletes subscriptions from.</summary>
+    protected FakeApimManagementClient Apim { get; } = new();
 
     [Fact]
     public async Task Adds_users_present_in_Entra_but_not_in_the_table_with_defaults_and_no_apim_key()
@@ -314,9 +323,38 @@ public class EntraUserSyncServiceTests : InMemoryDatabaseTest
             roleType: ClaimConstants.Roles);
         var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
         var accessor = new CurrentUserAccessor(new FixedHttpContextAccessor(httpContext), Context);
-        var audit = new AuditService(Context, new AuditWriter(Context, _timeProvider), accessor);
+        var writer = new AuditWriter(Context, _timeProvider);
+        var audit = new AuditService(Context, writer, accessor);
 
-        return new EntraUserSyncService(Context, _directory, audit, _timeProvider, NullLogger<EntraUserSyncService>.Instance);
+        // The real lifecycle orchestrator, not a stub: a departure must actually delete the APIM
+        // subscription and hard-stop the allocation (#65), and only the real pipeline proves it.
+        var keys = new ApimKeyService(
+            Context,
+            Apim,
+            new DataProtectionKeyProtector(new EphemeralDataProtectionProvider()),
+            audit,
+            writer,
+            accessor,
+            _timeProvider,
+            NullLogger<ApimKeyService>.Instance);
+        var quotaResolution = new QuotaResolutionService(
+            Context,
+            TestGatewayTiers.Mapper(),
+            new NullGatewayTierSync(NullLogger<NullGatewayTierSync>.Instance),
+            NullLogger<QuotaResolutionService>.Instance);
+        var lifecycle = new UserLifecycleService(
+            Context,
+            quotaResolution,
+            keys,
+            audit,
+            writer,
+            accessor,
+            _directory,
+            new AppSettings(),
+            _timeProvider,
+            NullLogger<UserLifecycleService>.Instance);
+
+        return new EntraUserSyncService(Context, _directory, lifecycle, audit, _timeProvider, NullLogger<EntraUserSyncService>.Instance);
     }
 
     /// <summary>A second context on the same database, so "nothing was saved" assertions cannot be fooled by the change tracker.</summary>

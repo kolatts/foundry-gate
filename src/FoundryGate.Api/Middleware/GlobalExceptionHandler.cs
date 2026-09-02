@@ -21,7 +21,9 @@ namespace FoundryGate.Api.Middleware;
 /// <see cref="ConflictException"/> → 409, <see cref="UnauthorizedAccessException"/> → 403,
 /// <see cref="FeatureNotConfiguredException"/> → 503 (an optional feature's configuration is
 /// absent or points at a missing Azure resource — the operator's problem, described on the wire
-/// so the UI can tell "not set up" from "broken").
+/// so the UI can tell "not set up" from "broken"), <see cref="UpstreamDependencyException"/> → 502
+/// (the feature <em>is</em> configured and the dependency behind it — APIM, Graph, ARM — refused or
+/// failed the call; usually transient, so the caller may retry).
 /// </remarks>
 public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logger) : IExceptionHandler
 {
@@ -44,6 +46,7 @@ public sealed class GlobalExceptionHandler(ILogger<GlobalExceptionHandler> logge
             ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request"),
             UnauthorizedAccessException => (StatusCodes.Status403Forbidden, "Forbidden"),
             FeatureNotConfiguredException => (StatusCodes.Status503ServiceUnavailable, "Service unavailable — feature not configured"),
+            UpstreamDependencyException => (StatusCodes.Status502BadGateway, "Upstream dependency failed"),
             _ => null,
         };
 

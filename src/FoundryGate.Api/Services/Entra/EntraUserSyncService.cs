@@ -1,4 +1,5 @@
 using FoundryGate.Api.Services.Audit;
+using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Data;
 using FoundryGate.Data.Entities;
 using FoundryGate.Domain.Constants;
@@ -11,12 +12,21 @@ namespace FoundryGate.Api.Services.Entra;
 /// <summary>
 /// Default <see cref="IEntraUserSyncService"/>. Loads the whole <c>Users</c> table once (tracked —
 /// it is mutated in place), asks <see cref="IEntraDirectoryClient"/> for the assigned users, and
-/// commits every insert/update/deactivation together with its audit row in a single
-/// <c>SaveChangesAsync</c>. Semantics are documented on the interface.
+/// commits every insert/update/deprovision together with its audit row. Semantics are documented on
+/// the interface.
 /// </summary>
+/// <remarks>
+/// The run is wrapped in one database transaction so a departure — which now runs the full
+/// deprovision pipeline (<see cref="IUserLifecycleService"/>, plan 21 Trigger B: delete the APIM
+/// subscription, hard-stop the allocation, reject pending requests) and saves as it goes — commits
+/// with the adds and updates rather than ahead of them. The orchestrator and the key service both join
+/// an already-open transaction instead of starting their own, so this is the only <c>BeginTransaction</c>
+/// in the path.
+/// </remarks>
 public sealed class EntraUserSyncService(
     AppDbContext dbContext,
     IEntraDirectoryClient directory,
+    IUserLifecycleService lifecycle,
     IAuditService audit,
     TimeProvider timeProvider,
     ILogger<EntraUserSyncService> logger) : IEntraUserSyncService
@@ -33,6 +43,13 @@ public sealed class EntraUserSyncService(
     public async Task<UserSyncResult> SyncUsersAsync(CancellationToken cancellationToken)
     {
         var now = timeProvider.GetUtcNow();
+
+        // One transaction for the whole run: the deprovision pipeline below saves per departed user, and
+        // those saves must not commit ahead of (or without) the adds, updates and the users.synced row.
+        // IUserLifecycleService and IApimKeyService both join an open transaction rather than nesting.
+        await using var transaction = dbContext.Database.CurrentTransaction is null
+            ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
         // Tracked on purpose: matched rows are updated in place and saved below. EntraObjectId is
         // unique, so the dictionary cannot collide. Case-insensitive because oids are GUID strings
@@ -101,10 +118,13 @@ public sealed class EntraUserSyncService(
             deactivated = activeAbsent;
             foreach (var user in deactivated)
             {
-                // Flag only — the full Entra-departure deprovision (APIM subscription deletion, hard
-                // stop, pending-request cancellation; plan #21 trigger B) is issue #65's IUserLifecycleService.
-                user.IsActive = false;
                 user.LastSyncedDate = now;
+
+                // Plan 21 deprovision Trigger B, in full (#65): the APIM subscription is deleted, the
+                // current allocation hard-stopped and pending increase requests rejected — not just a
+                // flag flip that would leave a departed employee holding a working gateway key. No HTTP
+                // caller is involved, so its audit rows are system-attributed.
+                await lifecycle.DeprovisionAsync(DeprovisionTrigger.EntraDeparture, user.UserId, cancellationToken);
             }
         }
 
@@ -131,6 +151,11 @@ public sealed class EntraUserSyncService(
             cancellationToken);
 
         _ = await dbContext.SaveChangesAsync(cancellationToken);
+
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
 
         logger.LogInformation(
             "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated, {SkippedGroups} group assignment(s) skipped.",

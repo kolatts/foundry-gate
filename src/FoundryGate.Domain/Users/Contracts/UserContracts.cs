@@ -52,6 +52,52 @@ public record UserProfileResponse(
     GatewayConnectionInfo CliConfig);
 
 /// <summary>
+/// One group a user belongs to, as shown on <see cref="UserDetailResponse"/>. Deliberately a
+/// user-side shape rather than <c>Groups.Contracts.GroupResponse</c>: the user detail view needs the
+/// group's identity and when the person joined, not the group's quota policy or member count.
+/// </summary>
+/// <param name="GroupId">The group's int PK.</param>
+/// <param name="GroupUnique">The group's externally-shared stable id.</param>
+/// <param name="Name">The group's display name.</param>
+/// <param name="AddedDate">When this membership was created.</param>
+public record UserGroupMembershipResponse(
+    int GroupId,
+    Guid GroupUnique,
+    string Name,
+    DateTimeOffset AddedDate);
+
+/// <summary>
+/// Admin detail for one user — GET /users/{id}. The list row (<see cref="User"/>) plus the three
+/// things an admin needs before changing anything: which groups feed this person's quota
+/// resolution, what they actually resolved to this period, and whether they hold a gateway key.
+/// </summary>
+/// <param name="User">The same shape GET /users returns.</param>
+/// <param name="CurrentAllocation">
+/// The user's allocation for the current UTC calendar month, or <see langword="null"/> when none has
+/// been resolved yet (nobody has called <c>GET /users/me</c> or <c>POST /quota/reset</c> for them this
+/// month). Read-only: this endpoint never creates one.
+/// </param>
+/// <param name="ApiKey">The masked view of their APIM subscription key (<c>isProvisioned = false</c> when they have none).</param>
+/// <param name="Groups">Every group the user belongs to, ordered by name.</param>
+public record UserDetailResponse(
+    UserResponse User,
+    QuotaAllocationResponse? CurrentAllocation,
+    ApiKeyResponse ApiKey,
+    IReadOnlyList<UserGroupMembershipResponse> Groups);
+
+/// <summary>
+/// Filter parameters for GET /users. Bind alongside <see cref="Common.PagedRequest"/> via a separate
+/// <c>[FromQuery]</c> parameter (the same shape <c>AuditLogQuery</c> uses).
+/// </summary>
+/// <param name="Search">
+/// Case-insensitive substring match against display name or email; <see langword="null"/> or blank
+/// matches everyone. Matching follows the database collation (SQL Server's default is
+/// case-insensitive).
+/// </param>
+/// <param name="IsActive">When set, keeps only active (<c>true</c>) or only deactivated (<c>false</c>) users.</param>
+public record UserListQuery(string? Search, bool? IsActive);
+
+/// <summary>
 /// PUT /users/{id}/quota body — admin sets a user's quota or unlimited flag.
 /// Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).
 /// </summary>
