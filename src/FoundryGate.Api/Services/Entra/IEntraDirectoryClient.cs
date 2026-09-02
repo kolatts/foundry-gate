@@ -25,14 +25,16 @@ public interface IEntraDirectoryClient
     Task<EntraUser?> GetUserAsync(string objectId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Every <em>user</em> that holds an app-role assignment on the FoundryGate service principal
+    /// Every <em>person</em> who holds an app-role assignment on the FoundryGate service principal
     /// (<c>GET /servicePrincipals/{id}/appRoleAssignedTo</c>, every page), resolved to their directory
-    /// fields, plus the assignments whose principal is a <em>group</em> — those are not expanded to
-    /// their members in this wave (issue #121) and are reported so the caller can refuse to treat
-    /// "not in the user list" as "departed". Service-principal assignees are dropped silently (they
-    /// are not people). The same user appears at most once even if they hold several role
-    /// assignments. Buffered rather than streamed: a fork's developer population is at most a few
-    /// thousand small records, and the caller needs the group list before it can act on the users.
+    /// fields — directly assigned users <em>and</em> the transitive user members of every group
+    /// assignee (#121), merged and de-duplicated, so a person assigned both ways appears once.
+    /// Service-principal assignees are dropped silently (they are not people).
+    /// <see cref="EntraAssignedUsers.SkippedGroupAssignments"/> carries only the groups whose expansion
+    /// <em>failed</em>, so the caller can refuse to treat "not in the user list" as "departed" on a
+    /// view it knows is partial; it is empty on a clean run. Buffered rather than streamed: a fork's
+    /// developer population is at most a few thousand small records, and the caller needs the group
+    /// list before it can act on the users.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<EntraAssignedUsers> ListAssignedUsersAsync(CancellationToken cancellationToken);

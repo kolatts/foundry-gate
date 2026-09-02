@@ -198,7 +198,7 @@ Check that the `foundrygate` product is published and your APIM subscription is 
 The API's managed identity (`id-foundrygate-api-{env}`) is missing one of the Graph application roles `Application.Read.All`, `User.Read.All`, `GroupMember.ReadBasic.All`. Grant them as app-role assignments on the Microsoft Graph service principal (see [#120](https://github.com/kolatts/foundry-gate/issues/120)); no restart is needed.
 
 **`POST /users/sync` returns `skippedGroupAssignmentCount > 0` and never deactivates anyone**  
-Your developers are assigned to the FoundryGate enterprise application through a group. Group assignments are not expanded yet ([#121](https://github.com/kolatts/foundry-gate/issues/121)), so departure detection is suspended; assign developers individually if you need it now.
+Group assignments *are* expanded to their members ([#121](https://github.com/kolatts/foundry-gate/issues/121)), so this count is `0` on a healthy tenant. Non-zero means the API could not read one of the assigned groups — usually a missing `GroupMember.ReadBasic.All`, sometimes a group that has been deleted. The run saw only part of your developer population, so it deliberately deactivates nobody; the group is named in the API log and in the `users.synced` audit row. Fix the role (or unassign the deleted group) and re-run.
 
 **Container App shows "no healthy upstream"**  
 The API is still starting or the migration hasn't run. Check the Container App log stream and verify the SQL connection string Key Vault reference resolved correctly.

@@ -185,8 +185,10 @@ Landed with #42 (the first `/api/v1` controller); every endpoint wave builds on 
   `DataAnnotationsValidator` read properties, so nothing validates). Responses are never
   bound by MVC, so they stay positional (`public record Y(int Id, string Name);`).
   `DomainArchitectureTests` fails the build for either broken placement;
-  `Api/Endpoints/RequestDtoBindingTests` posts each request record through the real pipeline
-  (via a test-only controller the factory registers) and asserts 400, never 500.
+  `Api/Endpoints/RequestDtoBindingTests` posts each request record to its own production endpoint
+  through the real pipeline and asserts 400, never 500. A record whose controller does not exist yet
+  needs a stand-in to be bound at all — the test-only application part #128 added for that is gone
+  (#145) now that every record has a route, so re-introduce one only for the same reason.
 - **Generated URLs are lowercase** (`RouteOptions.LowercaseUrls`, #129): `CreatedAtRoute`'s
   `Location` reads `/api/v1/foundry/...`, route values included — so anything a route value
   identifies must resolve case-insensitively (Foundry account and deployment names do).

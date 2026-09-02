@@ -1,6 +1,5 @@
 using FoundryGate.Api.Services.Config;
 using FoundryGate.Domain.Constants;
-using FoundryGate.Domain.Exceptions;
 using FoundryGate.Tests.Predeployment.Support;
 
 namespace FoundryGate.Tests.Predeployment.Api.Services.Config;
@@ -14,26 +13,17 @@ public class SystemConfigValidatorTests
     private readonly SystemConfigValidator _validator = new(TestGatewayTiers.Mapper());
 
     [Theory]
-    [InlineData(SystemConfigurationKeys.ApimProductId, "Gateway:Tiers")]
-    [InlineData(SystemConfigurationKeys.EntraTenantId, "Entra:Enabled")]
-    public void EnsureEditable_refuses_a_retired_key_and_names_its_replacement(string key, string replacementHint)
+    [InlineData("ApimGatewayUrl")]
+    [InlineData("ApimProductId")]
+    [InlineData("EntraTenantId")]
+    public void A_retired_key_has_no_rule_and_is_treated_as_free_text(string retiredKey)
     {
-        var exception = Assert.Throws<ConflictException>(() => SystemConfigValidator.EnsureEditable(key));
-
-        Assert.Contains(key, exception.Message, StringComparison.Ordinal);
-        Assert.Contains("read-only", exception.Message, StringComparison.Ordinal);
-        Assert.Contains(replacementHint, exception.Message, StringComparison.Ordinal);
+        // #164/#123 removed the read-only 409 branch along with the rows themselves: a retired key is
+        // simply unknown now, and PUT /config/{key} answers 404 before the validator is consulted at
+        // all. If one somehow reaches here it must not resurrect its old rule.
+        Assert.Contains(retiredKey, SystemConfigurationKeys.Retired);
+        Assert.Equal("anything", _validator.Normalize(retiredKey, "  anything  "));
     }
-
-    [Theory]
-    [InlineData(SystemConfigurationKeys.DefaultMonthlyTokenQuota)]
-    [InlineData(SystemConfigurationKeys.ApimResourceId)]
-    [InlineData(SystemConfigurationKeys.ApimGatewayUrl)]
-    [InlineData(SystemConfigurationKeys.FoundryResourceId)]
-    [InlineData(SystemConfigurationKeys.EntraGroupSyncEnabled)]
-    [InlineData(SystemConfigurationKeys.ResetDayOfMonth)]
-    public void EnsureEditable_allows_every_other_seeded_key(string key) =>
-        SystemConfigValidator.EnsureEditable(key);
 
     [Theory]
     [InlineData("5000000", "5000000")]
@@ -99,26 +89,6 @@ public class SystemConfigValidatorTests
     public void EntraGroupSyncEnabled_rejects_a_non_boolean(string value) =>
         Assert.Throws<ArgumentException>(
             () => _validator.Normalize(SystemConfigurationKeys.EntraGroupSyncEnabled, value));
-
-    [Theory]
-    [InlineData("", "")]
-    [InlineData("   ", "")]
-    [InlineData("https://ai.contoso.com", "https://ai.contoso.com")]
-    [InlineData("https://ai.contoso.com/", "https://ai.contoso.com")]
-    public void ApimGatewayUrl_accepts_an_absolute_https_url_or_empty(string value, string expected) =>
-        Assert.Equal(expected, _validator.Normalize(SystemConfigurationKeys.ApimGatewayUrl, value));
-
-    [Theory]
-    [InlineData("http://ai.contoso.com")]
-    [InlineData("ai.contoso.com")]
-    [InlineData("/anthropic")]
-    public void ApimGatewayUrl_rejects_anything_that_is_not_absolute_https(string value)
-    {
-        var exception = Assert.Throws<ArgumentException>(
-            () => _validator.Normalize(SystemConfigurationKeys.ApimGatewayUrl, value));
-
-        Assert.Contains("absolute https URL", exception.Message, StringComparison.Ordinal);
-    }
 
     [Theory]
     [InlineData(SystemConfigurationKeys.ApimResourceId)]

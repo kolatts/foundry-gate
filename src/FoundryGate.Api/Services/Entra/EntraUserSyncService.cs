@@ -77,12 +77,14 @@ public sealed class EntraUserSyncService(
         var failed = 0;
         if (skippedGroups.Count > 0)
         {
-            // Users assigned through a group are invisible until #121 expands group assignees, so an
-            // active user missing from the user list may simply be covered by one of these groups.
-            // Departure detection is suspended for the run rather than flipping everyone to inactive
-            // and deleting every APIM subscription — on a 200 with a clean audit row.
+            // Group assignees are expanded to their members now (#121), so this list is no longer "every
+            // group" — it is the groups whose expansion FAILED, which leaves a partial view of the
+            // population. An active user missing from the user list may simply be covered by one of
+            // them, so departure detection is suspended for the run rather than flipping everyone to
+            // inactive and deleting every APIM subscription — on a 200 with a clean audit row. Fix the
+            // Graph permission (or the deleted group) and the next run deactivates normally.
             logger.LogWarning(
-                "Entra user sync skipped departure detection: {GroupCount} app-role assignment(s) are granted to groups, which are not expanded yet (#121). {ActiveAbsentCount} active user(s) absent from the assigned-user list were left active. Groups: {Groups}",
+                "Entra user sync skipped departure detection: {GroupCount} group app-role assignment(s) could not be expanded to their members. {ActiveAbsentCount} active user(s) absent from the assigned-user list were left active. Groups: {Groups}",
                 skippedGroups.Count,
                 activeAbsent.Count,
                 string.Join("; ", skippedGroups.Select(g => $"{g.DisplayName} ({g.GroupObjectId})")));
@@ -177,7 +179,7 @@ public sealed class EntraUserSyncService(
         _ = await dbContext.SaveChangesAsync(cancellationToken);
 
         logger.LogInformation(
-            "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated, {Failed} failed, {SkippedGroups} group assignment(s) skipped.",
+            "Entra user sync complete: {Added} added, {Updated} updated, {Deactivated} deactivated, {Failed} failed, {SkippedGroups} group assignment(s) unexpanded.",
             result.AddedCount,
             result.UpdatedCount,
             result.DeactivatedCount,
