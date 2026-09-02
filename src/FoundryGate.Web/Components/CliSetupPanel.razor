@@ -1,0 +1,245 @@
+@using FoundryGate.Domain.Config.Contracts
+@using FoundryGate.Domain.Foundry.Contracts
+
+@* "Configure your AI CLI" (#49). Every instruction here is copied verbatim from
+   docs-site/src/content/docs/getting-started/cli-setup.mdx, which CLAUDE.md invariant 3 keeps to
+   empirically verified configuration only (wire-captured headers, tested env vars/config keys).
+   Do not invent a variable, header or config key here: change the doc first, with evidence, then
+   mirror it. *@
+
+<MudExpansionPanels MultiExpansion="true" data-testid="cli-setup">
+    <MudExpansionPanel Text="Configure your AI CLI" Icon="@Icons.Material.Filled.Terminal" Expanded="@Expanded">
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-3">
+            Claude Code and Codex CLI both talk to the gateway with their own official Azure/Foundry
+            support — no wrapper, no local proxy. Reveal your key above to have it filled in below.
+        </MudText>
+
+        <MudSimpleTable Dense="true" Bordered="false" Striped="true" Class="mb-4" data-testid="cli-facts">
+            <tbody>
+                <tr>
+                    <td><MudText Typo="Typo.caption" Class="fg-label">Gateway</MudText></td>
+                    <td class="fg-mono-raw" data-testid="cli-gateway-url">@GatewayOrigin</td>
+                </tr>
+                <tr>
+                    <td><MudText Typo="Typo.caption" Class="fg-label">Claude path</MudText></td>
+                    <td class="fg-mono-raw" data-testid="cli-anthropic-url">@AnthropicBaseUrl</td>
+                </tr>
+                <tr>
+                    <td><MudText Typo="Typo.caption" Class="fg-label">GPT / Codex path</MudText></td>
+                    <td class="fg-mono-raw" data-testid="cli-openai-url">@OpenAiBaseUrl</td>
+                </tr>
+                <tr>
+                    <td><MudText Typo="Typo.caption" Class="fg-label">Auth header</MudText></td>
+                    <td class="fg-mono-raw">
+                        <code>x-api-key</code> for the Claude path, <code>api-key</code> for the OpenAI path
+                    </td>
+                </tr>
+            </tbody>
+        </MudSimpleTable>
+
+        <MudText Typo="Typo.subtitle2" Class="fg-label mb-1">Models you can pin</MudText>
+        @if (Models.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" data-testid="cli-no-models">
+                No model deployments are visible yet. Ask an admin which deployment names this
+                gateway serves.
+            </MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Dense="true" Hover="true" data-testid="cli-models">
+                <thead>
+                    <tr>
+                        <th>Deployment name</th>
+                        <th>Model</th>
+                        <th>Format</th>
+                        <th>State</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var model in Models)
+                    {
+                        <tr>
+                            <td class="fg-mono-raw">@model.DeploymentName</td>
+                            <td>@model.ModelName@(model.ModelVersion is null ? string.Empty : $" ({model.ModelVersion})")</td>
+                            <td>@model.ModelFormat</td>
+                            <td>
+                                <MudChip T="string"
+                                         Size="Size.Small"
+                                         Variant="Variant.Text"
+                                         Color="@(IsServing(model) ? Color.Success : Color.Warning)">
+                                    @model.ProvisioningState
+                                </MudChip>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        @if (CliConfig.ModelAliases.Count > 0)
+        {
+            <MudText Typo="Typo.subtitle2" Class="fg-label mt-4 mb-1">Aliases (prefer these)</MudText>
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+                Pin your CLI to the alias, not the deployment name, so deployments can rotate
+                underneath without you editing env vars.
+            </MudText>
+            <MudSimpleTable Dense="true" Hover="true" data-testid="cli-aliases">
+                <thead>
+                    <tr>
+                        <th>Alias</th>
+                        <th>Resolves to</th>
+                        <th>Provider</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var alias in CliConfig.ModelAliases)
+                    {
+                        <tr>
+                            <td class="fg-mono-raw">@alias.Alias</td>
+                            <td class="fg-mono-raw">@alias.DeploymentName</td>
+                            <td>@alias.Provider</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        <MudDivider Class="my-4" />
+
+        <MudText Typo="Typo.subtitle1" Class="mb-1">Claude Code</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Claude Code has first-class Microsoft Foundry support. Set these in your shell profile,
+            or in <code>.claude/settings.json</code>'s <code>env</code> block. Pinning matters:
+            unpinned aliases resolve to defaults that may not exist as deployments on your gateway.
+        </MudText>
+        <CodeSnippet Label="Claude Code environment" Code="@ClaudeCodeSnippet" />
+
+        <MudText Typo="Typo.subtitle1" Class="mt-4 mb-1">Codex CLI</MudText>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Codex CLI reads <code>~/.codex/config.toml</code>. The
+            <code>env_http_headers</code> line is required — <code>env_key</code> alone sends
+            <code>Authorization: Bearer</code>, which the gateway rejects with <code>401</code>.
+        </MudText>
+        <CodeSnippet Label="~/.codex/config.toml" Code="@CodexConfigSnippet" />
+        <CodeSnippet Label="Then export the key the config references" Code="@CodexEnvSnippet" />
+
+        <MudText Typo="Typo.subtitle1" Class="mt-4 mb-1">Smoke-test it</MudText>
+        <CodeSnippet Label="curl — Claude path (Anthropic Messages API)" Code="@AnthropicCurlSnippet" />
+        <CodeSnippet Label="curl — OpenAI path (Responses API)" Code="@OpenAiCurlSnippet" />
+
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-4" Icon="@Icons.Material.Filled.Speed">
+            Every gateway response carries <code>x-fg-remaining-quota</code> (tokens left this month)
+            and <code>x-fg-remaining-tpm</code> (tokens left this minute). A <code>429</code> is your
+            per-minute cap — your CLI backs off by itself. A <code>403</code> means the month's budget
+            is spent; retrying never helps, so request an increase instead.
+        </MudAlert>
+    </MudExpansionPanel>
+</MudExpansionPanels>
+
+@code {
+    /// <summary>Gateway addressing from <c>GET /users/me</c>'s <c>cliConfig</c>.</summary>
+    [Parameter, EditorRequired]
+    public GatewayConnectionInfo CliConfig { get; set; } = null!;
+
+    /// <summary>Deployment names from <c>GET /foundry/models</c>.</summary>
+    [Parameter]
+    public IReadOnlyList<FoundryModelResponse> Models { get; set; } = [];
+
+    /// <summary>
+    /// The plaintext key while it is revealed on screen, so the snippets can be copied ready to
+    /// paste. Null (the normal state) leaves the documented <c>&lt;your-key&gt;</c> placeholder in
+    /// place — this component never fetches or stores the key itself.
+    /// </summary>
+    [Parameter]
+    public string? RevealedKey { get; set; }
+
+    /// <summary>Whether the panel starts open. Closed by default so <c>/me</c> leads with the gauge.</summary>
+    [Parameter]
+    public bool Expanded { get; set; }
+
+    private const string KeyPlaceholder = "<your-key>";
+
+    private string GatewayOrigin => CliConfig.GatewayBaseUrl.TrimEnd('/');
+
+    private string AnthropicBaseUrl => Combine(CliConfig.AnthropicBasePath);
+
+    private string OpenAiBaseUrl => Combine(CliConfig.OpenAiBasePath);
+
+    private string KeyValue => RevealedKey ?? KeyPlaceholder;
+
+    // The snippets below are raw interpolated strings in the $$ form: a single brace stays literal
+    // (the TOML table and the JSON payloads need real braces) and {{...}} is the interpolation
+    // hole. Their content is copied verbatim from getting-started/cli-setup.mdx — see this file's
+    // header comment before changing a variable name here.
+    private string ClaudeCodeSnippet =>
+        $$"""
+        export CLAUDE_CODE_USE_FOUNDRY=1
+        export ANTHROPIC_FOUNDRY_BASE_URL={{AnthropicBaseUrl}}
+        export ANTHROPIC_FOUNDRY_API_KEY={{KeyValue}}
+
+        # Pin models to your gateway's deployment names (listed above).
+        export ANTHROPIC_DEFAULT_SONNET_MODEL={{ModelFor("sonnet")}}
+        export ANTHROPIC_DEFAULT_OPUS_MODEL={{ModelFor("opus")}}
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL={{ModelFor("haiku")}}
+        """;
+
+    private string CodexConfigSnippet =>
+        $$"""
+        model = "{{ModelFor("codex")}}"     # the DEPLOYMENT name
+        model_provider = "azure"
+
+        [model_providers.azure]
+        name = "Azure via FoundryGate"
+        base_url = "{{OpenAiBaseUrl}}"
+        wire_api = "responses"
+        # REQUIRED: send the key as the api-key header. env_key alone sends
+        # "Authorization: Bearer", which the gateway rejects with 401.
+        env_http_headers = { "api-key" = "FOUNDRYGATE_API_KEY" }
+        """;
+
+    private string CodexEnvSnippet => $"export FOUNDRYGATE_API_KEY={KeyValue}";
+
+    private string AnthropicCurlSnippet =>
+        $$"""
+        curl {{AnthropicBaseUrl}}/v1/messages \
+          -H "x-api-key: {{KeyValue}}" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "content-type: application/json" \
+          -d '{"model":"{{ModelFor("sonnet")}}","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}'
+        """;
+
+    private string OpenAiCurlSnippet =>
+        $$"""
+        curl {{OpenAiBaseUrl}}/responses \
+          -H "api-key: {{KeyValue}}" \
+          -H "content-type: application/json" \
+          -d '{"model":"{{ModelFor("codex")}}","input":"ping"}'
+        """;
+
+    private string Combine(string basePath) =>
+        $"{GatewayOrigin}/{basePath.Trim('/')}";
+
+    /// <summary>
+    /// The best deployment name to show in a snippet for a model family: an alias whose name
+    /// contains the hint wins (aliases are the stable handle), then a deployment whose name does,
+    /// then the first deployment, then a documented placeholder.
+    /// </summary>
+    private string ModelFor(string hint)
+    {
+        var alias = CliConfig.ModelAliases
+            .FirstOrDefault(a => a.Alias.Contains(hint, StringComparison.OrdinalIgnoreCase));
+        if (alias is not null)
+        {
+            return alias.Alias;
+        }
+
+        var deployment = Models.FirstOrDefault(m => m.DeploymentName.Contains(hint, StringComparison.OrdinalIgnoreCase))
+            ?? Models.FirstOrDefault(m => m.ModelName.Contains(hint, StringComparison.OrdinalIgnoreCase));
+
+        return deployment?.DeploymentName ?? $"<{hint}-deployment-name>";
+    }
+
+    private static bool IsServing(FoundryModelResponse model) =>
+        string.Equals(model.ProvisioningState, "Succeeded", StringComparison.OrdinalIgnoreCase);
+}

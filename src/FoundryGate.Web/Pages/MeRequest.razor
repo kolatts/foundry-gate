@@ -1,6 +1,282 @@
 @page "/me/request"
 @attribute [Authorize]
+@using System.ComponentModel.DataAnnotations
+@using FoundryGate.Domain.Common
+@using FoundryGate.Domain.Quota.Contracts
+@using FoundryGate.Domain.Requests.Contracts
+@using FoundryGate.Domain.Users.Contracts
+@inject IFoundryGateApiClient ApiClient
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
+
+@* Ask for more budget (#50). Since D-013 a monthly budget IS a gateway tier, so this form asks
+   for a TIER, not a number: APIM's token-quota is a per-product literal, and a request for
+   "7,000,000 tokens" is a request the gateway could never enforce. The tiers offered are exactly
+   those strictly above the caller's current one. *@
 
 <PageTitle>Request Quota Increase — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Request Quota Increase" />
+<MudText Typo="Typo.h4" GutterBottom="true">Request a bigger budget</MudText>
+
+@if (_loading)
+{
+    <MudSkeleton Height="320px" Width="100%" SkeletonType="SkeletonType.Rectangle" data-testid="request-loading" />
+}
+else if (_loadError is not null)
+{
+    <MudAlert Severity="Severity.Error" Icon="@Icons.Material.Filled.CloudOff" data-testid="request-load-error">@_loadError</MudAlert>
+}
+else
+{
+    <MudCard Elevation="2" Style="max-width: 720px;">
+        <MudCardContent>
+            @if (_pendingRequest is not null)
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-4" Icon="@Icons.Material.Filled.HourglassTop" data-testid="request-pending">
+                    You already have a request waiting for review, submitted
+                    @_pendingRequest.CreatedDate.ToLocalTime().ToString("d MMM yyyy"). An admin has to
+                    approve or reject it before you can send another.
+                </MudAlert>
+            }
+            else if (_availableTiers.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Class="mb-4" Icon="@Icons.Material.Filled.AllInclusive" data-testid="request-no-tiers">
+                    You're already on the most generous tier this gateway offers
+                    (@QuotaDisplay.TierDisplayName(_currentTierProductId)), so there's nothing bigger
+                    to ask for.
+                </MudAlert>
+            }
+
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4">
+                You're on <strong>@QuotaDisplay.TierDisplayName(_currentTierProductId)</strong>
+                (@QuotaDisplay.FormatTokens(_currentQuota) tokens a month). Pick the tier you need and
+                say why — an administrator reviews every request.
+            </MudText>
+
+            <MudForm @ref="_form">
+                <MudSelect T="string"
+                           Label="Tier you're asking for"
+                           Value="@_selectedTierProductId"
+                           ValueChanged="OnTierChanged"
+                           Variant="Variant.Outlined"
+                           Disabled="@IsFormDisabled"
+                           Required="true"
+                           RequiredError="Pick the tier you need."
+                           data-testid="request-tier">
+                    @foreach (var tier in _availableTiers)
+                    {
+                        <MudSelectItem T="string" Value="@tier.ProductId">
+                            @tier.DisplayName — @QuotaDisplay.FormatTokens(tier.MonthlyTokenQuota) tokens/month
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudTextField T="string"
+                              Label="Why do you need it?"
+                              Value="@_model.Justification"
+                              ValueChanged="OnJustificationChanged"
+                              Lines="5"
+                              Immediate="true"
+                              Counter="@ValidationConstants.JustificationMaxLength"
+                              MaxLength="@ValidationConstants.JustificationMaxLength"
+                              Variant="Variant.Outlined"
+                              Class="mt-4"
+                              Disabled="@IsFormDisabled"
+                              Validation="@(new Func<string, IEnumerable<string>>(ValidateJustification))"
+                              HelperText="@($"At least {ValidationConstants.JustificationMinLength} characters — reviewers need something to evaluate.")"
+                              data-testid="request-justification" />
+            </MudForm>
+
+            <MudStack Row="true" Spacing="2" Class="mt-4">
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Send"
+                           Disabled="@(IsFormDisabled || _submitting)"
+                           OnClick="SubmitAsync"
+                           data-testid="request-submit">
+                    @(_submitting ? "Submitting…" : "Submit request")
+                </MudButton>
+                <MudButton Variant="Variant.Text" Href="me" Disabled="@_submitting" data-testid="request-cancel">Cancel</MudButton>
+            </MudStack>
+        </MudCardContent>
+    </MudCard>
+}
+
+@code {
+    private MudForm? _form;
+
+    // The Domain request record is the bound model so its DataAnnotations are the only source of
+    // truth for validation (ValidationConstants, issue #25). Its properties are init-only — MVC
+    // needs that for binding (#128) — so the form can't two-way bind to them directly; each field
+    // rebuilds the record with `with` instead, and validation reads the record's own attributes
+    // through Validator.TryValidateProperty rather than restating the rules here.
+    private SubmitQuotaIncreaseRequest _model = new();
+
+    private IReadOnlyList<QuotaTierResponse> _availableTiers = [];
+    private QuotaIncreaseRequestResponse? _pendingRequest;
+    private string? _selectedTierProductId;
+    private string _currentTierProductId = GatewayTiers.Default;
+    private long? _currentQuota;
+    private bool _currentIsUnlimited;
+    private bool _loading = true;
+    private bool _submitting;
+    private string? _loadError;
+
+    private bool IsFormDisabled => _pendingRequest is not null || _availableTiers.Count == 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var profileTask = ApiClient.GetMeAsync();
+        var tiersTask = ApiClient.GetQuotaTiersAsync();
+        var pendingTask = ApiClient.GetRequestsAsync(
+            new QuotaRequestQuery(QuotaRequestStatusType.Pending, UserId: null),
+            new PagedRequest(1, 1));
+
+        var profile = await profileTask;
+        var tiers = await tiersTask;
+        var pending = await pendingTask;
+
+        if (!profile.IsSuccess || profile.Value is null)
+        {
+            _loadError = profile.Message ?? "Couldn't load your current budget.";
+            _loading = false;
+            return;
+        }
+
+        if (!tiers.IsSuccess || tiers.Value is null)
+        {
+            _loadError = tiers.Message ?? "Couldn't load the available tiers.";
+            _loading = false;
+            return;
+        }
+
+        _currentTierProductId = profile.Value.Quota.TierProductId;
+        _currentQuota = profile.Value.Quota.AllocatedTokens;
+        _currentIsUnlimited = profile.Value.Quota.IsUnlimited;
+        _availableTiers = TiersAbove(tiers.Value, _currentQuota, _currentIsUnlimited);
+        _selectedTierProductId = _availableTiers.Count == 1 ? _availableTiers[0].ProductId : null;
+
+        if (pending.IsSuccess && pending.Value is not null)
+        {
+            _pendingRequest = pending.Value.Items.FirstOrDefault();
+        }
+        else
+        {
+            // A failed pending check must not silently unlock a second submission: the API's own
+            // 409 is still the backstop, and the snackbar says why the form looks unguarded.
+            Snackbar.Add(pending.Message ?? "Couldn't check for an existing request.", Severity.Warning);
+        }
+
+        _loading = false;
+    }
+
+    /// <summary>
+    /// The tiers a caller on <paramref name="currentQuota"/> may ask for: strictly larger caps, plus
+    /// any unlimited tier. An already-unlimited caller has nothing to ask for.
+    /// </summary>
+    internal static IReadOnlyList<QuotaTierResponse> TiersAbove(
+        IReadOnlyList<QuotaTierResponse> tiers,
+        long? currentQuota,
+        bool currentIsUnlimited)
+    {
+        ArgumentNullException.ThrowIfNull(tiers);
+
+        if (currentIsUnlimited)
+        {
+            return [];
+        }
+
+        return tiers
+            .Where(t => t.IsUnlimited || t.MonthlyTokenQuota > (currentQuota ?? 0))
+            .OrderBy(t => t.IsUnlimited)
+            .ThenBy(t => t.MonthlyTokenQuota ?? long.MaxValue)
+            .ToList();
+    }
+
+    private void OnTierChanged(string? productId)
+    {
+        _selectedTierProductId = productId;
+
+        var tier = _availableTiers.FirstOrDefault(t => t.ProductId == productId);
+        _model = _model with { RequestedQuota = tier?.MonthlyTokenQuota };
+    }
+
+    private void OnJustificationChanged(string? value) =>
+        _model = _model with { Justification = value ?? string.Empty };
+
+    /// <summary>
+    /// Field validation straight off <see cref="SubmitQuotaIncreaseRequest"/>'s own attributes, so
+    /// the form and the API can never disagree about the minimum length.
+    /// </summary>
+    private IEnumerable<string> ValidateJustification(string? value)
+    {
+        List<ValidationResult> results = [];
+        var context = new ValidationContext(_model) { MemberName = nameof(SubmitQuotaIncreaseRequest.Justification) };
+        _ = Validator.TryValidateProperty(value ?? string.Empty, context, results);
+        return results.Select(r => r.ErrorMessage ?? "Invalid value.");
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_submitting || IsFormDisabled)
+        {
+            return;
+        }
+
+        if (_selectedTierProductId is null)
+        {
+            Snackbar.Add("Pick the tier you need.", Severity.Warning);
+            return;
+        }
+
+        List<ValidationResult> results = [];
+        if (!Validator.TryValidateObject(_model, new ValidationContext(_model), results, validateAllProperties: true))
+        {
+            if (_form is not null)
+            {
+                await _form.ValidateAsync();
+            }
+
+            Snackbar.Add(results[0].ErrorMessage ?? "Please fix the highlighted fields.", Severity.Warning);
+            return;
+        }
+
+        _submitting = true;
+        var result = await ApiClient.SubmitRequestAsync(_model);
+        _submitting = false;
+
+        if (result.IsSuccess)
+        {
+            Snackbar.Add("Request submitted — an administrator will review it.", Severity.Success);
+            Navigation.NavigateTo("me");
+            return;
+        }
+
+        if (result.Status == ApiCallStatus.Error && result.Error?.Status == 409)
+        {
+            // The API is the authority on "one pending request at a time"; reflect its refusal
+            // without navigating away, and lock the form the way the pre-check would have.
+            Snackbar.Add(result.Message ?? "You already have a request waiting for review.", Severity.Warning);
+            _pendingRequest ??= new QuotaIncreaseRequestResponse(
+                QuotaIncreaseRequestId: 0,
+                QuotaIncreaseRequestUnique: Guid.Empty,
+                UserId: 0,
+                UserUnique: Guid.Empty,
+                UserDisplayName: string.Empty,
+                RequestedByUserId: 0,
+                PeriodYear: DateTimeOffset.UtcNow.Year,
+                PeriodMonth: DateTimeOffset.UtcNow.Month,
+                CurrentQuota: _currentQuota,
+                RequestedQuota: _model.RequestedQuota,
+                Justification: _model.Justification,
+                StatusType: QuotaRequestStatusType.Pending,
+                ReviewedByUserId: null,
+                ReviewedDate: null,
+                ReviewNotes: null,
+                CreatedDate: DateTimeOffset.UtcNow);
+            return;
+        }
+
+        Snackbar.Add(result.Message ?? "Couldn't submit your request.", Severity.Error);
+    }
+}
