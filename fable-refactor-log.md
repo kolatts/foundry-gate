@@ -515,6 +515,31 @@ both hosts yield it. The Graph client also had to stop reading `AzureAd:ClientId
 binds no `AzureAd` section — nothing there serves a request), so the app registration id travels on
 `Entra:ApplicationClientId`, set by infra on both hosts and defaulted from `AzureAd:ClientId` on the Api.
 
+### D-021: Session handoff — 2026-09-01/02 implementation pass summarised, nothing live yet
+**Date:** 2026-09-02
+**Decision:** Record the pass as done rather than keep expanding issue #101's comment thread.
+36 PRs merged, 153 issues closed since 2026-09-01 (26 open), taking the repo from
+docs-and-plans-only to an 11-project .NET 10 solution (`FoundryGate.Core` added mid-pass,
+D-014) — 9 API controllers, 3 timer Functions, 18 Blazor pages, a 16-module Bicep tree, one
+OIDC `deploy-all.yml` chain. Predeployment tests grew 82 → 1545. All product epics closed;
+only #81 (GenAI gateway) stays open, gated on Claude e2e (#88).
+**Four rulings changed direction:** D-013 (a numeric quota must equal a tier cap or be
+unlimited — `token-quota` rejects policy expressions, so tiers-as-products is the only design
+where "requests stop when the budget is spent" stays literally true); D-014
+(`FoundryGate.Core`, ASP.NET-Core-free, for services both hosts need — the
+`ValidateRecursively()` assembly-scoping trap is now written down); D-019 (production's
+approval count is six, counted off the job graph rather than the stage diagram, after two
+review corrections — the argument for naming jobs instead of stages); D-020 (the nightly
+Entra sync's departure handling is a second real implementation, not a flag-only stand-in,
+because marking someone inactive while their key still works is a worse lie than the
+duplication — tracked as #214, and the drift it warned about was caught in the same PR).
+**What remains is gated on the owner:** every live-validate issue (#105 → #142 → #132 → #120
+→ #125/#205 → #178 → #192 → #102 → #88) needs a real `dev` deploy, which needs Entra app
+registrations, a dedicated SQL admin group, six OIDC identities (four Environments plus the
+narrower `dev-plan`/`ui-preview` ones added mid-pass), and Graph app roles on both the API
+and Functions identities. The first `Deploy All` stops at the OIDC guard by design. Full
+detail and the categorised backlog are in `handoff-orchestrator.md`, rewritten this session.
+
 ### D-002: Keep a separate decision log file instead of growing fable-refactor.md
 **Date:** 2026-09-01
 **Decision:** Decisions live in `fable-refactor-log.md`; `fable-refactor.md` stays the
