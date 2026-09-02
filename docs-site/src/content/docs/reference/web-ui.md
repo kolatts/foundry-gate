@@ -142,9 +142,12 @@ Two of the counts need more than a number, and the page gives them one:
   holds a working key. That is an error, not a footnote; deprovisioning is idempotent, so the fix is
   to run the sync again.
 
-The page shows only the run you just triggered. Foundry Gate keeps no durable last-sync metadata yet
-([#171](https://github.com/kolatts/foundry-gate/issues/171)) — every run does write an audit row, so
-`/audit` has the history meanwhile.
+The page also shows the **previous** run — when it happened and what it did — on a cold load, from
+`GET /users/sync/last`, which reads the `LastUserSyncDate` / `LastUserSyncResult` rows the sync writes
+in its own unit of work. So a run triggered from anywhere (another admin, another browser, a script)
+shows up here, and finishing a run re-reads the record rather than assuming it. A fork that has never
+synced says so instead of showing a blank. Only the most recent run is kept; `/audit` filtered to
+`users.synced` has the full history, which the note links to.
 
 ### `/groups`, `/groups/new` and `/groups/{id}`
 
@@ -198,9 +201,14 @@ A new deployment reaches developers through the gateway only once it is in the r
 staged locally with per-row dirty tracking; "Save changes" opens a before/after diff you must
 confirm, and only then does each dirty key get its own `PUT /config/{key}`. A value the API refuses
 stops that row alone and reports next to its own field, so one bad entry never loses the rest — and
-a rejected value stays in its box to be corrected rather than being retyped. The editor keeps no
-list of its own of which keys are retired: the API answers `409` naming the replacement, and that
-message is what the admin reads.
+a rejected value stays in its box to be corrected rather than being retyped.
+
+**The editor keeps no list of its own of which keys it may not write.** System-managed rows
+(`LastUserSyncDate`, `LastUserSyncResult`) arrive flagged `isReadOnly`, so their field is disabled and
+labelled "System-managed" without a round trip; every other refusal is reported in the API's own words
+next to the field it belongs to. One map in `FoundryGate.Domain.Constants` decides read-only-ness, and
+both the API's `409` and this flag read it, so the two can no longer drift
+([#172](https://github.com/kolatts/foundry-gate/issues/172) — they had, by one entry).
 
 ### `/audit`
 

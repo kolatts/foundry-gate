@@ -47,4 +47,17 @@ public interface IEntraUserSyncService
     /// <exception cref="Domain.Exceptions.ConflictException">The directory returned <em>no</em> assigned users while active users exist locally → 409; refusing to deactivate everyone on what is almost certainly a misconfiguration.</exception>
     /// <exception cref="UnauthorizedAccessException">The caller has no <c>User</c> row (and is not among the assigned users being imported) → 403.</exception>
     Task<UserSyncResult> SyncUsersAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// When the last successful run finished and what it did, from the <c>LastUserSyncDate</c> and
+    /// <c>LastUserSyncResult</c> configuration rows <see cref="SyncUsersAsync"/> writes in its own unit
+    /// of work (#171). Both are <see langword="null"/> on a fork that has never run one — including a
+    /// fork whose last run predates #171, since nothing backfills a record that was never kept.
+    /// </summary>
+    /// <remarks>
+    /// Reads nothing from Entra, so it answers on a host where the directory is disabled: "when did
+    /// this last run" is a question about this database. Malformed stored JSON reads as "no result"
+    /// rather than throwing — the value is a souvenir of a past run, not state anything depends on.
+    /// </remarks>
+    Task<UserSyncStatusResponse> GetLastSyncStatusAsync(CancellationToken cancellationToken);
 }

@@ -30,6 +30,9 @@ public sealed partial class FoundryGateApiClient
         return GetAsync<PagedResult<UserResponse>>($"users?{string.Join('&', parts)}", ct);
     }
 
+    public Task<ApiCallResult<UserSyncStatusResponse>> GetLastUserSyncAsync(CancellationToken ct = default) =>
+        GetAsync<UserSyncStatusResponse>("users/sync/last", ct);
+
     // Groups — api.md §Groups
 
     public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, bool force, CancellationToken ct = default) =>

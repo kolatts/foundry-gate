@@ -26,17 +26,32 @@ public sealed class ConfigService(
     TimeProvider timeProvider) : IConfigService
 {
     /// <inheritdoc />
-    public async Task<IReadOnlyList<SystemConfigEntryResponse>> ListAsync(CancellationToken cancellationToken) =>
-        await dbContext.SystemConfigurations
+    public async Task<IReadOnlyList<SystemConfigEntryResponse>> ListAsync(CancellationToken cancellationToken)
+    {
+        // Projected to a row shape first: IsReadOnly comes from a Domain dictionary lookup, which no
+        // provider can translate, and the alternative — materializing the key list into the query — is
+        // a filter this five-row table does not need.
+        var rows = await dbContext.SystemConfigurations
             .AsNoTracking()
             .OrderBy(c => c.Key)
-            .Select(c => new SystemConfigEntryResponse(
+            .Select(c => new
+            {
                 c.Key,
                 c.Value,
                 c.UpdatedDate,
                 c.UpdatedByUserId,
-                c.UpdatedByUser != null ? c.UpdatedByUser.DisplayName : null))
+                UpdatedByDisplayName = c.UpdatedByUser != null ? c.UpdatedByUser.DisplayName : null,
+            })
             .ToListAsync(cancellationToken);
+
+        return [.. rows.Select(r => new SystemConfigEntryResponse(
+            r.Key,
+            r.Value,
+            r.UpdatedDate,
+            r.UpdatedByUserId,
+            r.UpdatedByDisplayName,
+            SystemConfigurationKeys.SystemManagedReason(r.Key) is not null))];
+    }
 
     /// <inheritdoc />
     public async Task<SystemConfigEntryResponse> UpdateAsync(
@@ -56,6 +71,10 @@ public sealed class ConfigService(
         var entry = entries.FirstOrDefault(c => string.Equals(c.Key, key, StringComparison.OrdinalIgnoreCase))
             ?? throw new KeyNotFoundException(
                 $"There is no system configuration key '{key}'. GET /api/v1/config lists the keys this fork has.");
+
+        // Refused before the value is even looked at: a system-managed key has no admin-settable
+        // value, so validating one would be answering the wrong question (#171/#172).
+        SystemConfigValidator.EnsureEditable(entry.Key);
 
         var newValue = validator.Normalize(entry.Key, request.Value);
 
@@ -87,6 +106,9 @@ public sealed class ConfigService(
             entry.Value,
             entry.UpdatedDate,
             entry.UpdatedByUserId,
-            actor.DisplayName);
+            actor.DisplayName,
+            // Always false here — EnsureEditable above refuses every system-managed key — but read
+            // from the same map rather than hard-coded, so the two can never fall out of step.
+            SystemConfigurationKeys.SystemManagedReason(entry.Key) is not null);
     }
 }

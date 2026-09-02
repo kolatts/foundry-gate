@@ -31,6 +31,13 @@ public sealed partial class FakeFoundryGateApiClient
 
     // -- Captured arguments ---------------------------------------------------------------------
 
+    /// <summary>
+    /// What <c>GET /users/sync/last</c> answers (#171). Defaults to "this fork has never run one",
+    /// which is what a freshly deployed fork sees.
+    /// </summary>
+    public ApiCallResult<UserSyncStatusResponse> LastUserSyncResult { get; set; } =
+        ApiCallResult<UserSyncStatusResponse>.Ok(new UserSyncStatusResponse(null, null));
+
     /// <summary>Every filtered <c>GET /users</c> the pages made, in order — search, status and paging.</summary>
     public List<(UserListQuery Query, PagedRequest Paging)> UserListCalls { get; } = [];
 
@@ -61,6 +68,9 @@ public sealed partial class FakeFoundryGateApiClient
         UserListCalls.Add((query, paging));
         return RespondAsync(nameof(GetUsersAsync), UsersResult);
     }
+
+    public Task<ApiCallResult<UserSyncStatusResponse>> GetLastUserSyncAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetLastUserSyncAsync), LastUserSyncResult);
 
     public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, bool force, CancellationToken ct = default)
     {

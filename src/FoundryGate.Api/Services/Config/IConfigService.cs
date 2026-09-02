@@ -32,6 +32,11 @@ public interface IConfigService
     /// so there is nothing to distinguish it from a typo.
     /// </exception>
     /// <exception cref="ArgumentException">The value breaks the key's rule (→ 400); the message states the rule.</exception>
+    /// <exception cref="Domain.Exceptions.ConflictException">
+    /// The key is system-managed (→ 409) — written by a job rather than by an admin (#171). Its rows are
+    /// flagged <c>IsReadOnly</c> on the read, so the editor disables the field rather than offering an
+    /// edit that can only fail.
+    /// </exception>
     /// <exception cref="UnauthorizedAccessException">The calling admin has no <c>User</c> row yet (→ 403; call <c>GET /users/me</c> first).</exception>
     Task<SystemConfigEntryResponse> UpdateAsync(string key, UpdateSystemConfigRequest request, CancellationToken cancellationToken);
 }

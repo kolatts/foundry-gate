@@ -132,4 +132,18 @@ public sealed class UsersController(IUserService users, IEntraUserSyncService en
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public Task<UserSyncResult> SyncAsync(CancellationToken cancellationToken) =>
         entraUserSyncService.SyncUsersAsync(cancellationToken);
+
+    /// <summary>
+    /// Admin: when <c>POST /users/sync</c> last ran and what it did (#171), read from the
+    /// configuration rows the sync writes in its own unit of work — so it covers runs triggered
+    /// outside the UI and survives the browser session. Both fields are <c>null</c> on a fork that has
+    /// never run one. Answers on a host where Entra sync is disabled: this is a question about this
+    /// database, not about the directory.
+    /// </summary>
+    /// <response code="200">The last run, or nulls if there has never been one.</response>
+    [HttpGet("sync/last")]
+    [Authorize(Policy = PolicyNames.AdminOnly)]
+    [ProducesResponseType<UserSyncStatusResponse>(StatusCodes.Status200OK)]
+    public Task<UserSyncStatusResponse> GetLastSyncAsync(CancellationToken cancellationToken) =>
+        entraUserSyncService.GetLastSyncStatusAsync(cancellationToken);
 }

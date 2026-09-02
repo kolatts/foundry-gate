@@ -16,12 +16,20 @@ namespace FoundryGate.Domain.Config.Contracts;
 /// config editor (#55) can render "last changed by" without a second round trip per row. Null
 /// exactly when <paramref name="UpdatedByUserId"/> is.
 /// </param>
+/// <param name="IsReadOnly">
+/// True for a key the system writes for itself (<see cref="SystemConfigurationKeys.SystemManaged"/>):
+/// <c>PUT /config/{key}</c> answers <c>409</c> and the admin editor disables the field. Sent on the
+/// read so the UI never has to keep a list of its own — the duplication #172 was filed about — and
+/// never has to discover the refusal by attempting an edit. Appended to this positional record rather
+/// than inserted, because the Web client deserializes it by position.
+/// </param>
 public record SystemConfigEntryResponse(
     string Key,
     string Value,
     DateTimeOffset UpdatedDate,
     int? UpdatedByUserId,
-    string? UpdatedByDisplayName);
+    string? UpdatedByDisplayName,
+    bool IsReadOnly);
 
 /// <summary>PUT /config/{key} body. Init-property record, not positional — see <see cref="Foundry.Contracts.CreateFoundryDeploymentRequest"/>'s remarks (#128).</summary>
 public record UpdateSystemConfigRequest

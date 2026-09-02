@@ -107,13 +107,70 @@ public class UsersSyncPageTests : WebTestContext
     }
 
     [Fact]
-    public void The_page_admits_it_cannot_show_the_previous_run()
+    public void The_previous_run_is_shown_on_a_cold_load()
     {
-        // There are no LastUserSync* configuration keys — #63 assumed them. Until #171 lands the
-        // page has to say so rather than imply the blank space means "never run".
+        // #171: the page used to show only the run you triggered in this browser session, and nothing
+        // at all on first load. The counts now come from configuration rows the sync writes itself,
+        // so a run triggered from anywhere shows up here.
+        Api.LastUserSyncResult = ApiCallResult<UserSyncStatusResponse>.Ok(new UserSyncStatusResponse(
+            new DateTimeOffset(2026, 8, 31, 6, 30, 0, TimeSpan.Zero),
+            new UserSyncResult(2, 40, 1, 0, 0)));
+
         var page = RenderPage<UsersSync>();
 
-        Assert.Contains("171", page.Find("[data-testid=sync-history-note]").InnerHtml, StringComparison.Ordinal);
+        var note = page.Find("[data-testid=sync-history-note]").TextContent;
+        Assert.Contains("Last run", note, StringComparison.Ordinal);
+        Assert.Contains("2 added, 40 updated, 1 deactivated, 0 failed.", note, StringComparison.Ordinal);
+        Assert.Equal(0, Api.CallCount("SyncUsersAsync"));
+    }
+
+    [Fact]
+    public void A_fork_that_has_never_synced_says_so_rather_than_showing_a_blank()
+    {
+        var page = RenderPage<UsersSync>();
+
+        Assert.Contains(
+            "no record of a previous sync",
+            page.Find("[data-testid=sync-last-summary]").TextContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_recorded_run_whose_counts_could_not_be_read_still_shows_when_it_ran()
+    {
+        // Stored JSON that cannot be parsed reads as "no result" — a broken souvenir of a past run
+        // must not take the timestamp down with it.
+        Api.LastUserSyncResult = ApiCallResult<UserSyncStatusResponse>.Ok(
+            new UserSyncStatusResponse(new DateTimeOffset(2026, 8, 31, 6, 30, 0, TimeSpan.Zero), null));
+
+        var page = RenderPage<UsersSync>();
+
+        var note = page.Find("[data-testid=sync-history-note]").TextContent;
+        Assert.Contains("Last run", note, StringComparison.Ordinal);
+        Assert.Contains("weren't recorded", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_failed_status_read_does_not_stop_the_page_doing_its_job()
+    {
+        Api.LastUserSyncResult = ApiCallResult<UserSyncStatusResponse>.Fail(ApiCallStatus.Unavailable, "Gone.");
+
+        var page = RenderPage<UsersSync>();
+
+        Assert.NotNull(page.Find("[data-testid=run-sync]"));
+        Assert.DoesNotContain(Snackbars, s => s.Message?.Contains("Gone.", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void Finishing_a_run_re_reads_the_stored_record()
+    {
+        // Re-read rather than assumed: what a reload would show is what the page shows.
+        Api.UserSyncResult = ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(1, 1, 0, 0, 0));
+
+        var page = RenderPage<UsersSync>();
+        RunSync(page);
+
+        page.WaitForAssertion(() => Assert.Equal(2, Api.CallCount("GetLastUserSyncAsync")));
     }
 
     [Fact]

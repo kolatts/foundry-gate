@@ -244,8 +244,9 @@ public static class WebTestData
         string key = SystemConfigurationKeys.DefaultMonthlyTokenQuota,
         string value = "5000000",
         int? updatedByUserId = null,
-        string? updatedByDisplayName = null) =>
-        new(key, value, DateTimeOffset.UnixEpoch, updatedByUserId, updatedByDisplayName);
+        string? updatedByDisplayName = null,
+        bool isReadOnly = false) =>
+        new(key, value, DateTimeOffset.UnixEpoch, updatedByUserId, updatedByDisplayName, isReadOnly);
 
     public static AuditLogEntryResponse AuditEntry(
         int id = 1,

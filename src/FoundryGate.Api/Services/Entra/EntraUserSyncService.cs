@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using FoundryGate.Api.Services.Audit;
 using FoundryGate.Api.Services.Lifecycle;
 using FoundryGate.Data;
@@ -38,6 +40,13 @@ public sealed class EntraUserSyncService(
     /// &lt; 64).
     /// </summary>
     private const int DisplayNameMaxLength = 200;
+
+    /// <summary>
+    /// How <c>LastUserSyncResult</c> is written and read (#171). Web defaults, so the stored JSON is
+    /// camelCase — the same shape the endpoint puts on the wire, which makes a stored row readable by
+    /// anyone who has seen a <c>POST /users/sync</c> response.
+    /// </summary>
+    private static readonly JsonSerializerOptions ResultJson = new(JsonSerializerDefaults.Web);
 
     /// <inheritdoc />
     public async Task<UserSyncResult> SyncUsersAsync(CancellationToken cancellationToken)
@@ -152,6 +161,12 @@ public sealed class EntraUserSyncService(
 
         var result = new UserSyncResult(addedOids.Count, updated, deactivated.Count, skippedGroups.Count, failed);
 
+        // #171: the durable record of this run, written into the same unit of work as the audit row
+        // below so "the sync happened" and "here is when and what" can never disagree. The audit log
+        // already has the history; these two rows are the *latest* run, which is the question
+        // /users/sync asks on a cold load and cannot answer from a paged, filtered log.
+        await RecordLastSyncAsync(now, result, cancellationToken);
+
         // Audit before save, same context → commits atomically with the rows above (CONVENTIONS.md).
         // No single target: the whole table is the subject. Deactivated ids are known (saved rows);
         // added rows have no ids until save, so they are recorded by oid.
@@ -187,6 +202,77 @@ public sealed class EntraUserSyncService(
             result.SkippedGroupAssignmentCount);
 
         return result;
+    }
+
+    /// <inheritdoc />
+    public async Task<UserSyncStatusResponse> GetLastSyncStatusAsync(CancellationToken cancellationToken)
+    {
+        // Two rows out of a table of seven; read together and matched in memory so the comparison
+        // does not depend on the provider's collation (ConfigService does the same for the same
+        // reason). Never tracked: nothing here writes.
+        var rows = await dbContext.SystemConfigurations
+            .AsNoTracking()
+            .Where(c => c.Key == SystemConfigurationKeys.LastUserSyncDate || c.Key == SystemConfigurationKeys.LastUserSyncResult)
+            .ToListAsync(cancellationToken);
+
+        return new UserSyncStatusResponse(
+            ParseDate(Value(rows, SystemConfigurationKeys.LastUserSyncDate)),
+            ParseResult(Value(rows, SystemConfigurationKeys.LastUserSyncResult)));
+    }
+
+    /// <summary>
+    /// Stamps the two <c>LastUserSync*</c> rows. Nothing is saved here — the caller's single
+    /// <c>SaveChangesAsync</c> commits them with the adds, the updates and the <c>users.synced</c>
+    /// audit row. A fork whose database predates #171 has no rows to update, so they are inserted:
+    /// the reference-data seeder would add them on the next deploy, and a sync run before then should
+    /// still be remembered.
+    /// </summary>
+    private async Task RecordLastSyncAsync(DateTimeOffset now, UserSyncResult result, CancellationToken cancellationToken)
+    {
+        await SetAsync(SystemConfigurationKeys.LastUserSyncDate, now.ToString("O", CultureInfo.InvariantCulture), cancellationToken);
+        await SetAsync(SystemConfigurationKeys.LastUserSyncResult, JsonSerializer.Serialize(result, ResultJson), cancellationToken);
+    }
+
+    private async Task SetAsync(string key, string value, CancellationToken cancellationToken)
+    {
+        var row = await dbContext.SystemConfigurations.FirstOrDefaultAsync(c => c.Key == key, cancellationToken);
+        if (row is null)
+        {
+            row = new SystemConfiguration { Key = key };
+            _ = dbContext.SystemConfigurations.Add(row);
+        }
+
+        row.Value = value;
+
+        // UpdatedByUserId stays null on purpose: nobody edited this row. The admin who triggered the
+        // run is on the users.synced audit row, which is where "who did this" belongs.
+        row.UpdatedByUserId = null;
+    }
+
+    private static string? Value(List<SystemConfiguration> rows, string key) =>
+        rows.Find(r => string.Equals(r.Key, key, StringComparison.OrdinalIgnoreCase))?.Value;
+
+    private static DateTimeOffset? ParseDate(string? value) =>
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
+
+    /// <summary>A stored result that cannot be read is "no result", never an exception: it is a souvenir of a past run, not state anything depends on.</summary>
+    private static UserSyncResult? ParseResult(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<UserSyncResult>(value, ResultJson);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static void ApplyDirectoryFields(User user, EntraUser entraUser, DateTimeOffset now)

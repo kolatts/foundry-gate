@@ -29,6 +29,7 @@ namespace FoundryGate.Tests.Predeployment.Api.Endpoints;
 public class UsersSyncEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTestFactory>
 {
     private const string SyncPath = "/api/v1/users/sync";
+    private const string LastSyncPath = "/api/v1/users/sync/last";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     [Fact]
@@ -128,6 +129,60 @@ public class UsersSyncEndpointTests(ApiTestFactory factory) : IClassFixture<ApiT
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         await using var dbContext = factory.CreateDbContext();
         Assert.True((await dbContext.Users.AsNoTracking().SingleAsync(u => u.UserId == admin.UserId)).IsActive);
+    }
+
+    [Fact]
+    public async Task Anonymous_status_request_returns_401()
+    {
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri(LastSyncPath, UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Authenticated_non_admin_status_request_returns_403()
+    {
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: false);
+
+        var response = await client.GetAsync(new Uri(LastSyncPath, UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task The_status_read_answers_even_where_Entra_sync_is_disabled()
+    {
+        // "When did this last run" is a question about this database, not about the directory — the
+        // default host has Entra:Enabled false and must still answer (#171).
+        using var client = factory.CreateClientAs(Guid.NewGuid().ToString(), isAdmin: true);
+
+        var response = await client.GetAsync(new Uri(LastSyncPath, UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(await response.Content.ReadFromJsonAsync<UserSyncStatusResponse>(JsonOptions));
+    }
+
+    [Fact]
+    public async Task A_completed_run_is_readable_from_the_status_route_afterwards()
+    {
+        var admin = await factory.SeedUserAsync(displayName: "Status Reader");
+        var directory = new FakeEntraDirectoryClient();
+        directory.AssignedUsers.Add(new EntraUser(admin.EntraObjectId, admin.DisplayName, admin.Email, null));
+
+        using var host = WithDirectory(directory);
+        using var client = CreateAdminClient(host, admin.EntraObjectId);
+
+        var run = await client.PostAsync(new Uri(SyncPath, UriKind.Relative), null);
+        Assert.Equal(HttpStatusCode.OK, run.StatusCode);
+        var ran = await run.Content.ReadFromJsonAsync<UserSyncResult>(JsonOptions);
+
+        var status = await client.GetFromJsonAsync<UserSyncStatusResponse>(new Uri(LastSyncPath, UriKind.Relative), JsonOptions);
+
+        Assert.NotNull(status);
+        Assert.Equal(factory.TimeProvider.GetUtcNow(), status.LastSyncDate);
+        Assert.Equal(ran, status.LastResult);
     }
 
     /// <summary>A host identical to the fixture's except that the directory is <paramref name="directory"/>.</summary>

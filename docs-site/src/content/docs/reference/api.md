@@ -16,6 +16,7 @@ Base path: `/api/v1`. All endpoints require a valid Entra ID bearer token. Admin
 | `POST` | `/users/{id}/activate` | Admin | Re-activate user — runs the full provision pipeline |
 | `POST` | `/users/{id}/deactivate` | Admin | Deactivate user — deletes APIM subscription, hard-stops the allocation, rejects pending requests |
 | `POST` | `/users/sync` | Admin | Reconcile `Users` against the people assigned to the FoundryGate app in Entra. Returns `{ addedCount, updatedCount, deactivatedCount, skippedGroupAssignmentCount, failedCount }` |
+| `GET` | `/users/sync/last` | Admin | When the last sync ran and what it did: `{ lastSyncDate, lastResult }`, both `null` if this fork has never run one |
 
 Every user shape carries three dates that are easy to confuse: `createdDate` (the row was made),
 `lastSyncedDate` (an Entra sync last touched it) and `lastLoginDate` (the person last loaded their own
@@ -98,6 +99,8 @@ product, delete the old one, and hand the developer a new key (audited `key.rota
 :::
 
 `POST /users/sync` is idempotent and pull-only. Users assigned to the application but missing locally are inserted with defaults and **no** API key (keys are provisioned on first login or by an admin); users present in both have `displayName`/`email`/`employeeId` refreshed and `lastSyncedDate` stamped (every matched user counts as *updated*); users present locally but no longer assigned run the **same deprovision pipeline as `POST /users/{id}/deactivate`** — APIM subscription deleted, `isActive = false`, allocation hard-stopped, pending requests rejected — so a departed employee never keeps a working gateway key. Rows are never deleted and never auto-reactivated if the person later returns; an admin must re-activate them. Each departure is its own unit of work: one that the gateway refuses is counted in `failedCount`, logged, and skipped — the rest of the run still lands and the next run retries it, so a single bad ARM call can never undo deletions that already succeeded. Adds and updates then commit together with one `users.synced` audit row attributed to the caller; each departure writes system-attributed `user.deactivated` / `key.revoked` rows of its own.
+
+**The run records itself.** In that same unit of work the sync writes two `SystemConfiguration` rows — `LastUserSyncDate` (ISO-8601) and `LastUserSyncResult` (the JSON of the counts above) — so "the sync happened" and "here is when and what" can never disagree. `GET /users/sync/last` reads them back as `{ lastSyncDate, lastResult }`, which is how `/users/sync` shows the previous run on a cold page load, including one triggered outside the UI ([#171](https://github.com/kolatts/foundry-gate/issues/171)). Both are `null` on a fork that has never run a sync, and `lastResult` is `null` on its own if the stored JSON cannot be read — a broken souvenir of a past run is reported as "no result", never as an error. The status read works even where `Entra:Enabled` is `false`: it is a question about this database, not about the directory. The two rows are **system-managed** — `PUT /config/{key}` on either answers `409` and `GET /config` flags them `isReadOnly` — and only the most recent run is kept; the audit log has the history.
 
 **Group-assigned access is expanded.** An app-role assignment granted to a *group* — the common enterprise pattern of assigning `SG_AI_Developers` to the FoundryGate enterprise application — is flattened to that group's **transitive** user members (nested groups included) and merged with the directly assigned users, de-duplicated, before any of the reconciliation above runs ([#121](https://github.com/kolatts/foundry-gate/issues/121)). Assigning developers through a group is a first-class configuration: adds, updates and departures all work.
 
@@ -398,6 +401,7 @@ for one that does not (a quota, a reset day and a feature flag have no empty for
 | `ResetDayOfMonth` | A whole number from 1 to 28 (28 is the last day every month has) |
 | `EntraGroupSyncEnabled` | `true` or `false` |
 | `ApimResourceId`, `FoundryResourceId` | An ARM resource id (`/subscriptions/{id}/resourceGroups/{group}/providers/{namespace}/{type}/{name}`), or empty. Shape only — whether the resource exists is Azure's answer, reported as `503` by the endpoints that use it |
+| `LastUserSyncDate`, `LastUserSyncResult` | **Not editable.** System-managed: written by `POST /users/sync` itself, so a `PUT` is a `409` naming the reason. `GET /config` flags them `isReadOnly: true` so the editor disables the field rather than offering an edit that can only fail |
 | Any other row a fork operator added | Free text, up to 4000 characters |
 
 Three keys that earlier versions seeded — `ApimGatewayUrl`, `ApimProductId`, `EntraTenantId` — are

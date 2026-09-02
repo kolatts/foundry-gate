@@ -23,6 +23,19 @@ public static class SystemConfigurationKeys
     /// <summary>Day of month the monthly reset fires; always "1" for v1 (spec &#167;6).</summary>
     public const string ResetDayOfMonth = nameof(ResetDayOfMonth);
 
+    /// <summary>
+    /// ISO-8601 instant of the last successful <c>POST /users/sync</c>, written by the sync itself
+    /// (#171). Empty until a fork has run one. System-managed — see <see cref="SystemManaged"/>.
+    /// </summary>
+    public const string LastUserSyncDate = nameof(LastUserSyncDate);
+
+    /// <summary>
+    /// The last successful <c>POST /users/sync</c>'s <c>UserSyncResult</c>, JSON-serialized
+    /// (camelCase), written in the same unit of work as the run's audit row (#171). Empty until a
+    /// fork has run one. System-managed — see <see cref="SystemManaged"/>.
+    /// </summary>
+    public const string LastUserSyncResult = nameof(LastUserSyncResult);
+
     /// <summary>All seeded keys, for iteration in seeders and completeness tests.</summary>
     public static readonly IReadOnlyList<string> All =
     [
@@ -31,7 +44,33 @@ public static class SystemConfigurationKeys
         FoundryResourceId,
         EntraGroupSyncEnabled,
         ResetDayOfMonth,
+        LastUserSyncDate,
+        LastUserSyncResult,
     ];
+
+    /// <summary>
+    /// Keys the system writes and an admin may only read, mapped to the reason (#171/#172). <b>One
+    /// map, two readers</b>: the Api's <c>SystemConfigValidator.EnsureEditable</c> refuses a
+    /// <c>PUT</c> with a <c>409</c> carrying the reason, and <c>SystemConfigEntryResponse.IsReadOnly</c>
+    /// is set from the same lookup so the Web editor can disable the field instead of offering an edit
+    /// that can only fail. Neither side keeps a list of its own — that is exactly the duplication #172
+    /// was filed about, and it had already drifted by one entry once.
+    /// <para>
+    /// Distinct from <see cref="Retired"/>: a retired key's row is <em>deleted</em> (a <c>PUT</c> is a
+    /// 404 because there is nothing to write), whereas these rows exist, are seeded, and carry a value
+    /// worth reading — they are simply not an admin's to set.
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> SystemManaged =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [LastUserSyncDate] = "it records when POST /users/sync last ran and is written by the sync itself",
+            [LastUserSyncResult] = "it records what POST /users/sync last did and is written by the sync itself",
+        };
+
+    /// <summary>The reason <paramref name="key"/> is system-managed, or <see langword="null"/> when an admin may edit it.</summary>
+    public static string? SystemManagedReason(string key) =>
+        key is not null && SystemManaged.TryGetValue(key, out var reason) ? reason : null;
 
     /// <summary>
     /// Keys that were once seeded and are now <b>retired</b> (#164/#123): nothing reads them, nothing

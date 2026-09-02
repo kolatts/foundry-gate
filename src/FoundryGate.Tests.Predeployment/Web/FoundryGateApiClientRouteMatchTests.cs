@@ -36,6 +36,7 @@ public class FoundryGateApiClientRouteMatchTests(ApiTestFactory factory) : IClas
         { "POST", "/api/v1/users/7/activate" },
         { "POST", "/api/v1/users/7/deactivate" },
         { "POST", "/api/v1/users/sync" },
+        { "GET", "/api/v1/users/sync/last" },
 
         // Groups
         { "GET", "/api/v1/groups" },

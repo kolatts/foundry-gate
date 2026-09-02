@@ -176,6 +176,44 @@ public class ConfigPageTests : WebTestContext
     }
 
     [Fact]
+    public void A_key_the_api_says_is_read_only_is_disabled_and_labelled()
+    {
+        // #171/#172: the flag comes off the row the API returned. There is still no client-side list
+        // of keys — this page cannot decide read-only-ness, only render the API's decision.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+        [
+            WebTestData.ConfigEntry(SystemConfigurationKeys.DefaultMonthlyTokenQuota, "5000000"),
+            WebTestData.ConfigEntry(SystemConfigurationKeys.LastUserSyncDate, "2026-08-31T06:30:00.0000000+00:00", isReadOnly: true),
+        ]);
+
+        var page = RenderPage<Config>();
+
+        Assert.True(page.Find($"[data-testid='config-value-{SystemConfigurationKeys.LastUserSyncDate}']").HasAttribute("disabled"));
+        Assert.Contains(
+            "System-managed",
+            page.Find($"[data-testid='config-readonly-{SystemConfigurationKeys.LastUserSyncDate}']").TextContent,
+            StringComparison.Ordinal);
+
+        // ...and an editable key beside it is untouched.
+        Assert.False(page.Find($"[data-testid='config-value-{SystemConfigurationKeys.DefaultMonthlyTokenQuota}']").HasAttribute("disabled"));
+        Assert.Empty(page.FindAll($"[data-testid='config-readonly-{SystemConfigurationKeys.DefaultMonthlyTokenQuota}']"));
+    }
+
+    [Fact]
+    public void A_read_only_row_is_never_sent_as_a_change()
+    {
+        // Nothing should issue a PUT that exists only to be refused.
+        Api.ConfigResult = Ok<IReadOnlyList<SystemConfigEntryResponse>>(
+            [WebTestData.ConfigEntry(SystemConfigurationKeys.LastUserSyncDate, "recorded", isReadOnly: true)]);
+
+        var page = RenderPage<Config>();
+        Edit(page, SystemConfigurationKeys.LastUserSyncDate, "tampered");
+
+        Assert.True(page.Find("[data-testid='config-save']").HasAttribute("disabled"));
+        Assert.Empty(Api.ConfigUpdates);
+    }
+
+    [Fact]
     public void A_rejected_edit_stays_in_the_box_to_be_fixed_rather_than_being_retyped()
     {
         Api.UpdateConfigResult = ApiCallResult<bool>.Fail(ApiCallStatus.Error, "DefaultMonthlyTokenQuota must equal a configured tier cap.");

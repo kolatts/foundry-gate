@@ -84,7 +84,12 @@ public class SystemConfiguration : IModifiedDate, IReferenceDataEntity<SystemCon
         new() { Key = SystemConfigurationKeys.ApimResourceId, Value = string.Empty },
         new() { Key = SystemConfigurationKeys.FoundryResourceId, Value = string.Empty },
         new() { Key = SystemConfigurationKeys.EntraGroupSyncEnabled, Value = "false" },
-        new() { Key = SystemConfigurationKeys.ResetDayOfMonth, Value = "1" }
+        new() { Key = SystemConfigurationKeys.ResetDayOfMonth, Value = "1" },
+
+        // System-managed (#171): seeded empty so the row exists from the first deploy, then written by
+        // POST /users/sync itself. [DoNotUpdate] on Value means a re-seed never wipes a recorded run.
+        new() { Key = SystemConfigurationKeys.LastUserSyncDate, Value = string.Empty },
+        new() { Key = SystemConfigurationKeys.LastUserSyncResult, Value = string.Empty }
     ];
 }
 
