@@ -389,6 +389,69 @@ public class QuotaResolutionServiceTests : InMemoryDatabaseTest
         Assert.Empty(results);
     }
 
+    // -- PreviewAsync --
+
+    [Fact]
+    public async Task PreviewAsync_answers_the_same_chain_as_ResolveAsync_but_writes_nothing()
+    {
+        await SeedReferenceDataAsync();
+        var user = await SeedUserAsync(u =>
+        {
+            u.MonthlyTokenQuota = TestGatewayTiers.PowerCap;
+            u.ApimSubscriptionId = "sub-preview"; // ResolveAsync would sync this one
+        });
+
+        var preview = await CreateService().PreviewAsync(user.UserId, CancellationToken.None);
+
+        Assert.Equal(TestGatewayTiers.PowerCap, preview.Quota);
+        Assert.Equal(QuotaLevelType.UserOverride, preview.Level);
+        Assert.False(await Context.QuotaAllocations.AsNoTracking().AnyAsync()); // no upsert
+        Assert.Empty(Context.ChangeTracker.Entries<QuotaAllocation>()); // not even tracked
+        Assert.Empty(_tierSync.Calls); // and no gateway move
+    }
+
+    [Fact]
+    public async Task PreviewAsync_walks_every_level_including_group_ones()
+    {
+        await SeedReferenceDataAsync();
+        var unlimitedUser = await SeedUserAsync(u => u.IsUnlimited = true);
+        var groupUser = await SeedUserAsync();
+        await AddToGroupAsync(groupUser, quota: TestGatewayTiers.PowerCap);
+        var defaultUser = await SeedUserAsync();
+        var service = CreateService();
+
+        var unlimited = await service.PreviewAsync(unlimitedUser.UserId, CancellationToken.None);
+        var group = await service.PreviewAsync(groupUser.UserId, CancellationToken.None);
+        var systemDefault = await service.PreviewAsync(defaultUser.UserId, CancellationToken.None);
+
+        Assert.Equal(QuotaLevelType.UserUnlimited, unlimited.Level);
+        Assert.Null(unlimited.Quota);
+        Assert.Equal(QuotaLevelType.GroupMax, group.Level);
+        Assert.Equal(TestGatewayTiers.PowerCap, group.Quota);
+        Assert.Equal(QuotaLevelType.SystemDefault, systemDefault.Level);
+        Assert.NotNull(systemDefault.Quota);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_ignores_a_stale_allocation_row_and_reports_the_users_current_settings()
+    {
+        await SeedReferenceDataAsync();
+        var user = await SeedUserAsync(u => u.MonthlyTokenQuota = TestGatewayTiers.PowerCap);
+        _ = await SeedAllocationAsync(user, Period, allocated: TestGatewayTiers.StandardCap, tokensUsed: 0, isHardStopped: false, tier: GatewayTiers.Standard);
+
+        var preview = await CreateService().PreviewAsync(user.UserId, CancellationToken.None);
+
+        Assert.Equal(TestGatewayTiers.PowerCap, preview.Quota);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_unknown_user_is_404()
+    {
+        await SeedReferenceDataAsync();
+
+        _ = await Assert.ThrowsAsync<KeyNotFoundException>(() => CreateService().PreviewAsync(999_999, CancellationToken.None));
+    }
+
     // -- Helpers --
 
     private QuotaResolutionService CreateService() =>
