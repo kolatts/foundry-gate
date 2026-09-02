@@ -55,7 +55,11 @@ public static class WebTestData
             monthlyTokenQuota,
             isApiKeyProvisioned,
             CreatedDate: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
-            LastSyncedDate: new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero));
+            LastSyncedDate: new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero),
+
+            // #167: distinct from LastSyncedDate on purpose — a fixture where the two agreed would let a
+            // page bind the wrong one and still look right.
+            LastLoginDate: new DateTimeOffset(2026, 9, 1, 8, 30, 0, TimeSpan.Zero));
 
     public static UserDetailResponse UserDetail(
         UserResponse? user = null,
