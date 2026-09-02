@@ -233,10 +233,11 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 options.DefaultChallengeScheme = TestAuthHandler.SchemeName;
             }).AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.SchemeName, _ => { });
 
-            // Test-only controllers (Support/RequestDtoBindingController): this assembly is not in
-            // Api's application-part graph, so add it explicitly. AddControllers() is idempotent —
-            // Program.cs's options (the global AuthorizeFilter) are untouched.
-            services.AddControllers().AddApplicationPart(typeof(ApiTestFactory).Assembly);
+            // No test-only application part: this assembly registered one until #145, to host a
+            // stand-in controller that bound the request records Domain defined ahead of their
+            // production controllers (#128). Every one of those records now has a real endpoint, so
+            // `Api/Endpoints/RequestDtoBindingTests` posts through the production routes instead and
+            // the routing table this factory serves is exactly the API's.
         });
     }
 

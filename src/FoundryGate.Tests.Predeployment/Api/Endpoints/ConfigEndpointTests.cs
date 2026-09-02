@@ -272,9 +272,10 @@ public class ConfigEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTest
     [Fact]
     public async Task An_over_long_value_is_a_field_level_400_not_a_500()
     {
-        // Takes over from RequestDtoBindingController's `config` action now that a production
-        // controller binds this record (#128's guard: an invalid body is a 400 ProblemDetails naming
-        // the member, never the 500 a positional record with [property: …] attributes produced).
+        // This record's share of #128's guard: an invalid body is a 400 ProblemDetails naming the
+        // member, never the 500 a positional record with [property: …] attributes produced. It lives
+        // here rather than in RequestDtoBindingTests because the key has to exist for the request to
+        // reach validation at all.
         var oid = Guid.NewGuid().ToString();
         _ = await factory.SeedUserAsync(oid);
 
