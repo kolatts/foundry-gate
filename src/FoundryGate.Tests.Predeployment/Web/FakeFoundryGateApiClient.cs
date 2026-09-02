@@ -42,7 +42,20 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
     public ApiCallResult<PagedResult<UserResponse>> UsersResult { get; set; } =
         ApiCallResult<PagedResult<UserResponse>>.Ok(PagedResult<UserResponse>.Empty(1, 25));
 
-    public ApiCallResult<UserResponse> UserResult { get; set; } = ApiCallResult<UserResponse>.Ok(WebTestData.User());
+    /// <summary>
+    /// What <c>GET /users/{id}</c> answers. A detail shape, not a row: the endpoint has returned
+    /// <see cref="UserDetailResponse"/> since #156, and the client was reading it as a
+    /// <c>UserResponse</c> until #169 — which deserialized to an all-default object rather than
+    /// failing.
+    /// </summary>
+    public ApiCallResult<UserDetailResponse> UserResult { get; set; } = ApiCallResult<UserDetailResponse>.Ok(WebTestData.UserDetail());
+
+    /// <summary>
+    /// What the three user-row mutations answer. <c>PUT /users/{id}/quota</c>, activate and
+    /// deactivate all return the updated <see cref="UserResponse"/>; the client discarded those
+    /// bodies until #169.
+    /// </summary>
+    public ApiCallResult<UserResponse> UserMutationResult { get; set; } = ApiCallResult<UserResponse>.Ok(WebTestData.User());
 
     public ApiCallResult<UserSyncResult> UserSyncResult { get; set; } =
         ApiCallResult<UserSyncResult>.Ok(new UserSyncResult(0, 0, 0, 0, 0));
@@ -203,27 +216,27 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
     public Task<ApiCallResult<PagedResult<UserResponse>>> GetUsersAsync(PagedRequest paging, CancellationToken ct = default) =>
         RespondAsync(nameof(GetUsersAsync), UsersResult);
 
-    public Task<ApiCallResult<UserResponse>> GetUserAsync(int userId, CancellationToken ct = default) =>
+    public Task<ApiCallResult<UserDetailResponse>> GetUserAsync(int userId, CancellationToken ct = default) =>
         RespondAsync(nameof(GetUserAsync), UserResult);
 
-    public Task<ApiCallResult<bool>> UpdateUserQuotaAsync(int userId, UpdateUserQuotaRequest request, CancellationToken ct = default)
+    public Task<ApiCallResult<UserResponse>> UpdateUserQuotaAsync(int userId, UpdateUserQuotaRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         QuotaUpdates.Add((userId, request));
-        return RespondAsync(nameof(UpdateUserQuotaAsync), MutationResult);
+        return RespondAsync(nameof(UpdateUserQuotaAsync), UserMutationResult);
     }
 
-    public Task<ApiCallResult<bool>> ActivateUserAsync(int userId, CancellationToken ct = default)
+    public Task<ApiCallResult<UserResponse>> ActivateUserAsync(int userId, CancellationToken ct = default)
     {
         ActivatedUserIds.Add(userId);
-        return RespondAsync(nameof(ActivateUserAsync), MutationResult);
+        return RespondAsync(nameof(ActivateUserAsync), UserMutationResult);
     }
 
-    public Task<ApiCallResult<bool>> DeactivateUserAsync(int userId, CancellationToken ct = default)
+    public Task<ApiCallResult<UserResponse>> DeactivateUserAsync(int userId, CancellationToken ct = default)
     {
         DeactivatedUserIds.Add(userId);
-        return RespondAsync(nameof(DeactivateUserAsync), MutationResult);
+        return RespondAsync(nameof(DeactivateUserAsync), UserMutationResult);
     }
 
     public Task<ApiCallResult<UserSyncResult>> SyncUsersAsync(CancellationToken ct = default) =>
@@ -256,6 +269,8 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
 
     public Task<ApiCallResult<bool>> DeleteGroupAsync(int groupId, CancellationToken ct = default)
     {
+        // The forced overload records the flag as well; this one is the un-forced call.
+        DeletedGroups.Add((groupId, false));
         DeletedGroupIds.Add(groupId);
         return RespondAsync(nameof(DeleteGroupAsync), MutationResult);
     }
@@ -283,12 +298,20 @@ public sealed partial class FakeFoundryGateApiClient : IFoundryGateApiClient
         return RespondAsync(nameof(SyncGroupFromEntraAsync), GroupSyncResult);
     }
 
+    /// <summary>
+    /// Answers <see cref="GroupsSyncResult"/> when a test arranged one — the bulk route returns a
+    /// row per group, including rows with <c>Succeeded = false</c>, which the single-group result
+    /// cannot express. Falls back to wrapping the single-group result so tests that only care that
+    /// the call happened need arrange nothing.
+    /// </summary>
     public Task<ApiCallResult<IReadOnlyList<GroupSyncResult>>> SyncGroupsFromEntraAsync(CancellationToken ct = default) =>
         RespondAsync(
             nameof(SyncGroupsFromEntraAsync),
-            GroupSyncResult.IsSuccess && GroupSyncResult.Value is { } one
-                ? ApiCallResult<IReadOnlyList<GroupSyncResult>>.Ok([one])
-                : ApiCallResult<IReadOnlyList<GroupSyncResult>>.Fail(GroupSyncResult.Status, GroupSyncResult.Message ?? "Sync failed."));
+            GroupsSyncResult.Value is { Count: > 0 }
+                ? GroupsSyncResult
+                : GroupSyncResult.IsSuccess && GroupSyncResult.Value is { } one
+                    ? ApiCallResult<IReadOnlyList<GroupSyncResult>>.Ok([one])
+                    : ApiCallResult<IReadOnlyList<GroupSyncResult>>.Fail(GroupSyncResult.Status, GroupSyncResult.Message ?? "Sync failed."));
 
     public Task<ApiCallResult<IReadOnlyList<FoundryModelResponse>>> GetFoundryModelsAsync(CancellationToken ct = default) =>
         RespondAsync(nameof(GetFoundryModelsAsync), FoundryModelsResult);

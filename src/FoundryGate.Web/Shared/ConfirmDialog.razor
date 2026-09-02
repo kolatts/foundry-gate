@@ -1,0 +1,43 @@
+@* Every state-changing admin action goes through this before it reaches the API (#51, #52,
+   #62): activate/deactivate, key provision/rotate/revoke, group delete, member removal,
+   deployment delete. Shown via IDialogService.ShowAsync<ConfirmDialog>(...); the caller acts
+   only when the returned DialogResult is not Canceled. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body1">@Message</MudText>
+        @if (!string.IsNullOrWhiteSpace(Detail))
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mt-3">@Detail</MudText>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@Cancel" data-testid="confirm-cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="@ConfirmColor" OnClick="@Confirm" data-testid="confirm-ok">@ConfirmText</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Instance { get; set; } = default!;
+
+    /// <summary>The question, e.g. "Deactivate Ada Lovelace?".</summary>
+    [Parameter, EditorRequired]
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>Optional second line spelling out the consequence (what the API will actually do).</summary>
+    [Parameter]
+    public string? Detail { get; set; }
+
+    /// <summary>Label on the confirming button — say the verb, not "OK".</summary>
+    [Parameter]
+    public string ConfirmText { get; set; } = "Confirm";
+
+    /// <summary><see cref="Color.Error"/> for anything destructive, <see cref="Color.Primary"/> otherwise.</summary>
+    [Parameter]
+    public Color ConfirmColor { get; set; } = Color.Primary;
+
+    private void Confirm() => Instance.Close(DialogResult.Ok(true));
+
+    private void Cancel() => Instance.Cancel();
+}

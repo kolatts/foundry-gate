@@ -1,6 +1,268 @@
 @page "/requests"
 @attribute [Authorize]
+@inject IFoundryGateApiClient Api
+@inject QuotaTierCatalog Tiers
+@inject ISnackbar Snackbar
+@inject NavigationManager Navigation
 
 <PageTitle>Requests — Foundry Gate</PageTitle>
 
-<UnderConstruction Title="Requests" />
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <MudText Typo="Typo.h4" Class="mb-1">@(_isAdmin ? "Quota increase requests" : "My quota requests")</MudText>
+    <MudText Typo="Typo.body1" Class="mud-text-secondary mb-4">
+        @(_isAdmin
+            ? "Pick a row to review it. Approving applies the tier to the user and re-resolves this month immediately."
+            : "Everything you've asked for, and what came of it.")
+    </MudText>
+
+    <MudDataGrid @ref="_grid"
+                 T="QuotaIncreaseRequestResponse"
+                 ServerData="@LoadAsync"
+                 Loading="@_loading"
+                 Hover="true"
+                 Dense="true"
+                 Elevation="1"
+                 RowClick="@OnRowClick"
+                 data-testid="requests-grid">
+        <ToolBarContent>
+            <MudSelect T="QuotaRequestStatusType?"
+                       Value="@_status"
+                       ValueChanged="@OnStatusChangedAsync"
+                       Label="Status"
+                       Variant="Variant.Outlined"
+                       Margin="Margin.Dense"
+                       Dense="true"
+                       Style="max-width: 14rem;"
+                       data-testid="requests-status-filter">
+                <MudSelectItem T="QuotaRequestStatusType?" Value="@(null)">All</MudSelectItem>
+                <MudSelectItem T="QuotaRequestStatusType?" Value="@(QuotaRequestStatusType.Pending)">Pending</MudSelectItem>
+                <MudSelectItem T="QuotaRequestStatusType?" Value="@(QuotaRequestStatusType.Approved)">Approved</MudSelectItem>
+                <MudSelectItem T="QuotaRequestStatusType?" Value="@(QuotaRequestStatusType.Rejected)">Rejected</MudSelectItem>
+            </MudSelect>
+        </ToolBarContent>
+        <Columns>
+            @if (_isAdmin)
+            {
+                <PropertyColumn Property="@(r => r.UserDisplayName)" Title="Requester" Sortable="false" />
+            }
+            <TemplateColumn Title="Period" Sortable="false">
+                <CellTemplate>@context.Item.PeriodYear-@context.Item.PeriodMonth.ToString("00")</CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Requested" Sortable="false">
+                <CellTemplate>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Text">
+                        @TierDisplay.Describe(context.Item.RequestedQuota is null, context.Item.RequestedQuota, _tiers)
+                    </MudChip>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Status" Sortable="false">
+                <CellTemplate>
+                    <MudChip T="string"
+                             Size="Size.Small"
+                             Variant="Variant.Filled"
+                             Color="@StatusColor(Current(context.Item).StatusType)"
+                             data-testid="@($"request-status-{context.Item.QuotaIncreaseRequestId}")">
+                        @Current(context.Item).StatusType
+                    </MudChip>
+                </CellTemplate>
+            </TemplateColumn>
+            <TemplateColumn Title="Submitted" Sortable="false">
+                <CellTemplate>@context.Item.CreatedDate.ToLocalTime().ToString("d")</CellTemplate>
+            </TemplateColumn>
+        </Columns>
+        <NoRecordsContent>
+            <MudText Class="pa-6 mud-text-secondary" data-testid="requests-empty">
+                @(_status is null
+                    ? (_isAdmin ? "No requests yet." : "You haven't asked for more budget yet.")
+                    : $"Nothing {_status.ToString()!.ToLowerInvariant()}.")
+            </MudText>
+        </NoRecordsContent>
+        <PagerContent>
+            <MudDataGridPager T="QuotaIncreaseRequestResponse" PageSizeOptions="@(new[] { 25, 50, 100 })" />
+        </PagerContent>
+    </MudDataGrid>
+
+    <MudDrawer Open="@_drawerOpen"
+               OpenChanged="@OnDrawerOpenChanged"
+               Anchor="Anchor.End"
+               Elevation="3"
+               Variant="DrawerVariant.Temporary"
+               Width="480px"
+               data-testid="requests-drawer">
+        <MudDrawerHeader Class="d-flex align-center justify-space-between">
+            <MudText Typo="Typo.h6">Request #@(_selected?.QuotaIncreaseRequestId)</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@CloseDrawer" aria-label="Close" data-testid="requests-drawer-close" />
+        </MudDrawerHeader>
+        <div class="pa-4">
+            @if (_selected is { } selected)
+            {
+                <RequestReviewPanel @key="selected.QuotaIncreaseRequestId"
+                                    Request="@selected"
+                                    Tiers="@_tiers"
+                                    CanReview="@_isAdmin"
+                                    OnReviewed="@OnReviewedAsync" />
+            }
+        </div>
+    </MudDrawer>
+}
+
+@code {
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationState { get; set; }
+
+    /// <summary>
+    /// The admin dashboard's pending-requests badge links here as <c>?status=Pending</c>, so the
+    /// enum <em>name</em> is what has to parse — the numeric wire value the API takes is the
+    /// client's business. Anything unrecognised is ignored rather than failing the page.
+    /// </summary>
+    [Parameter, SupplyParameterFromQuery(Name = "status")]
+    public string? StatusQuery { get; set; }
+
+    private MudDataGrid<QuotaIncreaseRequestResponse>? _grid;
+    private IReadOnlyList<QuotaTierResponse> _tiers = [];
+
+    /// <summary>
+    /// Verdicts landed in this session, keyed by request id. The grid owns the page ServerData
+    /// gave it and won't let a row be swapped in place, so this overlay is what makes an approve
+    /// or reject show on the row immediately — without re-fetching the page. Cleared on every
+    /// real read, which supersedes it.
+    /// </summary>
+    private readonly Dictionary<int, QuotaIncreaseRequestResponse> _reviewed = [];
+
+    private QuotaIncreaseRequestResponse? _selected;
+    private QuotaRequestStatusType? _status;
+    private bool _drawerOpen;
+    private bool _isAdmin;
+    private bool _loading;
+    private bool _accessDenied;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthenticationState is not null)
+        {
+            var state = await AuthenticationState;
+            _isAdmin = state.User.IsInRole(RoleNames.Admin);
+        }
+
+        _tiers = await Tiers.GetAsync();
+    }
+
+    /// <summary>Keeps the filter in step with the query string, including a later in-app navigation to it.</summary>
+    protected override async Task OnParametersSetAsync()
+    {
+        var fromQuery = ParseStatus(StatusQuery);
+        if (fromQuery == _status)
+        {
+            return;
+        }
+
+        _status = fromQuery;
+        if (_grid is not null)
+        {
+            await ReloadAsync();
+        }
+    }
+
+    private static QuotaRequestStatusType? ParseStatus(string? raw) =>
+        Enum.TryParse<QuotaRequestStatusType>(raw, ignoreCase: true, out var status) && Enum.IsDefined(status)
+            ? status
+            : null;
+
+    private QuotaIncreaseRequestResponse Current(QuotaIncreaseRequestResponse row) =>
+        _reviewed.TryGetValue(row.QuotaIncreaseRequestId, out var reviewed) ? reviewed : row;
+
+    private static Color StatusColor(QuotaRequestStatusType status) => status switch
+    {
+        QuotaRequestStatusType.Approved => Color.Success,
+        QuotaRequestStatusType.Rejected => Color.Error,
+        _ => Color.Warning,
+    };
+
+    private async Task<GridData<QuotaIncreaseRequestResponse>> LoadAsync(GridState<QuotaIncreaseRequestResponse> state, CancellationToken cancellationToken)
+    {
+        _loading = true;
+        try
+        {
+            // No userId filter here: the API already scopes a developer to their own requests and
+            // gives an admin everyone's. Per-user filtering is reached from /users/{id}.
+            var query = new QuotaRequestQuery(_status, UserId: null);
+            var result = await Api.GetRequestsAsync(query, new PagedRequest(state.Page + 1, state.PageSize), cancellationToken);
+
+            if (result.IsSuccess)
+            {
+                // A real read supersedes every optimistic verdict this session recorded.
+                _reviewed.Clear();
+            }
+
+            return result.ToGridData(OnForbidden, Snackbar, "Couldn't load requests.");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private Task OnStatusChangedAsync(QuotaRequestStatusType? status)
+    {
+        if (status == _status)
+        {
+            return Task.CompletedTask;
+        }
+
+        _status = status;
+
+        // Write the filter back into the URL so the page you are looking at is the page you can
+        // send someone — the deep link already worked inbound, this makes it work outbound too.
+        // Replacing rather than pushing keeps Back meaning "the page before this one".
+        Navigation.NavigateTo(
+            Navigation.GetUriWithQueryParameter("status", status?.ToString()),
+            forceLoad: false,
+            replace: true);
+
+        return ReloadAsync();
+    }
+
+    private Task ReloadAsync() => _grid?.ReloadFromFirstPageAsync() ?? Task.CompletedTask;
+
+    private void OnForbidden()
+    {
+        _accessDenied = true;
+        StateHasChanged();
+    }
+
+    private void OnRowClick(DataGridRowClickEventArgs<QuotaIncreaseRequestResponse> args)
+    {
+        // Non-pending rows open the same drawer; RequestReviewPanel renders them read-only.
+        _selected = Current(args.Item);
+        _drawerOpen = true;
+    }
+
+    private void CloseDrawer() => OnDrawerOpenChanged(false);
+
+    /// <summary>
+    /// Every way the drawer closes — the button, the scrim, escape — clears the selection. Leaving
+    /// it set kept the previous request's panel mounted behind a hidden drawer, which is how one
+    /// person's draft review notes reached the next request.
+    /// </summary>
+    private void OnDrawerOpenChanged(bool open)
+    {
+        _drawerOpen = open;
+        if (!open)
+        {
+            _selected = null;
+        }
+    }
+
+    private Task OnReviewedAsync(QuotaIncreaseRequestResponse reviewed)
+    {
+        _reviewed[reviewed.QuotaIncreaseRequestId] = reviewed;
+        _selected = reviewed;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+}

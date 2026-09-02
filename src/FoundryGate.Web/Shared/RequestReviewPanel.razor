@@ -1,0 +1,224 @@
+@* One quota-increase request, rendered identically wherever it appears: inside /requests'
+   end-anchored review drawer and as the whole of /requests/{id} (#53). Admins reviewing a
+   Pending request get the notes field and the two verdict buttons; everyone else — a
+   developer looking at their own request, or anyone looking at one already decided — gets the
+   same facts read-only. *@
+
+@inject IFoundryGateApiClient Api
+@inject ISnackbar Snackbar
+
+<div class="d-flex flex-column ga-4" data-testid="request-panel">
+    <div>
+        <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">Requester</MudText>
+        <div class="d-flex align-center ga-2">
+            <MudText Typo="Typo.body1" data-testid="request-requester">@Request.UserDisplayName</MudText>
+            <AuthorizeView Roles="@RoleNames.Admin">
+                <Authorized>
+                    <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                   Size="Size.Small"
+                                   Href="@($"users/{Request.UserId}")"
+                                   aria-label="Open user" />
+                </Authorized>
+            </AuthorizeView>
+        </div>
+        @if (Request.RequestedByUserId != Request.UserId)
+        {
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">Submitted on their behalf by an administrator.</MudText>
+        }
+    </div>
+
+    <div>
+        <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">Budget change</MudText>
+        <div class="d-flex align-center ga-2">
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" data-testid="request-current">
+                @TierDisplay.Describe(isUnlimited: false, Request.CurrentQuota, Tiers)
+            </MudChip>
+            <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" />
+            <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" data-testid="request-requested">
+                @TierDisplay.Describe(Request.RequestedQuota is null, Request.RequestedQuota, Tiers)
+            </MudChip>
+        </div>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mt-1">
+            For @Request.PeriodYear-@Request.PeriodMonth.ToString("00"), requested
+            @Request.CreatedDate.ToLocalTime().ToString("f").
+        </MudText>
+    </div>
+
+    <div>
+        <MudText Typo="Typo.subtitle2" Class="mud-text-secondary">Justification</MudText>
+        <MudText Typo="Typo.body1" Style="white-space: pre-wrap;" data-testid="request-justification">@Request.Justification</MudText>
+    </div>
+
+    @if (IsPending)
+    {
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Filled" Color="Color.Warning" data-testid="request-status">Pending</MudChip>
+    }
+    else
+    {
+        <div>
+            <MudChip T="string"
+                     Size="Size.Small"
+                     Variant="Variant.Filled"
+                     Color="@StatusColor(Request.StatusType)"
+                     data-testid="request-status">@Request.StatusType</MudChip>
+            <MudText Typo="Typo.body2" Class="mud-text-secondary mt-2">
+                @(Request.ReviewedDate is { } reviewed
+                    ? $"Reviewed {reviewed.ToLocalTime():f}."
+                    : "Reviewed.")
+            </MudText>
+            <MudText Typo="Typo.subtitle2" Class="mud-text-secondary mt-3">Review notes</MudText>
+            <MudText Typo="Typo.body1" Style="white-space: pre-wrap;" data-testid="request-review-notes">
+                @(string.IsNullOrWhiteSpace(Request.ReviewNotes) ? "— none —" : Request.ReviewNotes)
+            </MudText>
+        </div>
+    }
+
+    @if (CanReview && IsPending)
+    {
+        <MudDivider />
+
+        <MudTextField @bind-Value="_reviewNotes"
+                      Label="Review notes (optional)"
+                      Variant="Variant.Outlined"
+                      Lines="3"
+                      MaxLength="@ValidationConstants.ReviewNotesMaxLength"
+                      Disabled="@_busy"
+                      HelperText="The requester sees these, whichever way this goes."
+                      data-testid="request-notes-input" />
+
+        <div class="d-flex ga-2">
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Success"
+                       StartIcon="@Icons.Material.Filled.Check"
+                       Disabled="@_busy"
+                       OnClick="@ApproveAsync"
+                       data-testid="request-approve">Approve</MudButton>
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Error"
+                       StartIcon="@Icons.Material.Filled.Close"
+                       Disabled="@_busy"
+                       OnClick="@RejectAsync"
+                       data-testid="request-reject">Reject</MudButton>
+        </div>
+
+        <MudText Typo="Typo.body2" Class="mud-text-secondary">
+            Approving applies the tier to the user and re-resolves this month straight away.
+            Rejecting changes nothing about their budget.
+        </MudText>
+    }
+</div>
+
+@code {
+    /// <summary>The request being shown. Replaced by the parent after a verdict lands.</summary>
+    [Parameter, EditorRequired]
+    public QuotaIncreaseRequestResponse Request { get; set; } = default!;
+
+    /// <summary>The tier catalogue, so quotas render as names rather than token counts (D-013).</summary>
+    [Parameter]
+    public IReadOnlyList<QuotaTierResponse> Tiers { get; set; } = [];
+
+    /// <summary>True only for an admin. A developer sees their own request read-only.</summary>
+    [Parameter]
+    public bool CanReview { get; set; }
+
+    /// <summary>
+    /// Raised with the request as it now stands, so the host can update its row without a full
+    /// grid reload. The status and notes are known from the transition; everything the server
+    /// filled in arrives on the next real read.
+    /// </summary>
+    [Parameter]
+    public EventCallback<QuotaIncreaseRequestResponse> OnReviewed { get; set; }
+
+    private string? _reviewNotes;
+    private int _notesBelongToRequestId;
+    private bool _busy;
+
+    private bool IsPending => Request.StatusType == QuotaRequestStatusType.Pending;
+
+    private static Color StatusColor(QuotaRequestStatusType status) => status switch
+    {
+        QuotaRequestStatusType.Approved => Color.Success,
+        QuotaRequestStatusType.Rejected => Color.Error,
+        _ => Color.Warning,
+    };
+
+    protected override void OnParametersSet()
+    {
+        // Draft notes belong to the request they were typed against, and nothing else. The drawer
+        // on /requests is reused rather than unmounted — closing it by the scrim leaves the panel
+        // rendered — so "is this a different request than the one I hold notes for" is the only
+        // safe test. Keying on Pending was not: two pending requests in a row kept the first one's
+        // notes, and approving the second sent them to the wrong requester.
+        if (Request.QuotaIncreaseRequestId != _notesBelongToRequestId)
+        {
+            _reviewNotes = null;
+            _notesBelongToRequestId = Request.QuotaIncreaseRequestId;
+        }
+    }
+
+    /// <summary>
+    /// After a rejected verdict, replaces what is on screen with what the API now holds, so the
+    /// reviewer sees the other reviewer's decision instead of a stale set of live buttons.
+    /// </summary>
+    private async Task ReloadAfterConflictAsync()
+    {
+        var fresh = await Api.GetRequestAsync(Request.QuotaIncreaseRequestId);
+        if (fresh.IsSuccess && fresh.Value is not null)
+        {
+            await OnReviewed.InvokeAsync(fresh.Value);
+        }
+    }
+
+    private Task ApproveAsync() => ReviewAsync(approve: true);
+
+    private Task RejectAsync() => ReviewAsync(approve: false);
+
+    private async Task ReviewAsync(bool approve)
+    {
+        var review = new ReviewQuotaIncreaseRequest { ReviewNotes = string.IsNullOrWhiteSpace(_reviewNotes) ? null : _reviewNotes.Trim() };
+
+        _busy = true;
+        try
+        {
+            var result = approve
+                ? await Api.ApproveRequestAsync(Request.QuotaIncreaseRequestId, review)
+                : await Api.RejectRequestAsync(Request.QuotaIncreaseRequestId, review);
+
+            if (!result.IsSuccess)
+            {
+                Snackbar.Add(result.Message ?? "That verdict didn't stick.", Severity.Error);
+
+                // A 409 means somebody else reviewed it first (api.md). Leaving the panel saying
+                // "Pending" with both buttons live invites pressing again — re-read and show what
+                // actually happened. ApiCallStatus folds every non-401/403/404 into Error, so the
+                // status code on the problem body is what distinguishes this one.
+                if (result.Error?.Status == 409)
+                {
+                    await ReloadAfterConflictAsync();
+                }
+
+                return;
+            }
+
+            Snackbar.Add(approve ? "Request approved." : "Request rejected.", Severity.Success);
+
+            // ReviewedDate is deliberately left as it was rather than stamped from the browser
+            // clock: the panel renders it as "Reviewed {time}", and a time this component invented
+            // is not the one the server recorded. Null falls through to the plain "Reviewed."
+            // wording until the next real read supplies the real instant. (It is also the only
+            // thing here that would have needed a naked UtcNow — CONVENTIONS.md forbids those.)
+            var reviewed = Request with
+            {
+                StatusType = approve ? QuotaRequestStatusType.Approved : QuotaRequestStatusType.Rejected,
+                ReviewNotes = review.ReviewNotes,
+            };
+
+            _reviewNotes = null;
+            await OnReviewed.InvokeAsync(reviewed);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

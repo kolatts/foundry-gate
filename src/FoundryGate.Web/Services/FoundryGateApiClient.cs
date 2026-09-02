@@ -34,20 +34,20 @@ public sealed partial class FoundryGateApiClient(HttpClient httpClient) : IFound
     public Task<ApiCallResult<UserProfileResponse>> GetMeAsync(CancellationToken ct = default) =>
         GetAsync<UserProfileResponse>("users/me", ct);
 
-    public Task<ApiCallResult<UserResponse>> GetUserAsync(int userId, CancellationToken ct = default) =>
-        GetAsync<UserResponse>($"users/{userId}", ct);
+    public Task<ApiCallResult<UserDetailResponse>> GetUserAsync(int userId, CancellationToken ct = default) =>
+        GetAsync<UserDetailResponse>($"users/{userId}", ct);
 
-    public Task<ApiCallResult<bool>> UpdateUserQuotaAsync(int userId, UpdateUserQuotaRequest request, CancellationToken ct = default)
+    public Task<ApiCallResult<UserResponse>> UpdateUserQuotaAsync(int userId, UpdateUserQuotaRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return SendActionAsync(HttpMethod.Put, $"users/{userId}/quota", request, ct);
+        return SendAsync<UserResponse>(HttpMethod.Put, $"users/{userId}/quota", request, ct);
     }
 
-    public Task<ApiCallResult<bool>> ActivateUserAsync(int userId, CancellationToken ct = default) =>
-        SendActionAsync(HttpMethod.Put, $"users/{userId}/activate", body: null, ct);
+    public Task<ApiCallResult<UserResponse>> ActivateUserAsync(int userId, CancellationToken ct = default) =>
+        SendAsync<UserResponse>(HttpMethod.Post, $"users/{userId}/activate", body: null, ct);
 
-    public Task<ApiCallResult<bool>> DeactivateUserAsync(int userId, CancellationToken ct = default) =>
-        SendActionAsync(HttpMethod.Put, $"users/{userId}/deactivate", body: null, ct);
+    public Task<ApiCallResult<UserResponse>> DeactivateUserAsync(int userId, CancellationToken ct = default) =>
+        SendAsync<UserResponse>(HttpMethod.Post, $"users/{userId}/deactivate", body: null, ct);
 
     public Task<ApiCallResult<UserSyncResult>> SyncUsersAsync(CancellationToken ct = default) =>
         SendAsync<UserSyncResult>(HttpMethod.Post, "users/sync", body: null, ct);
@@ -139,13 +139,13 @@ public sealed partial class FoundryGateApiClient(HttpClient httpClient) : IFound
     public Task<ApiCallResult<bool>> ApproveRequestAsync(int requestId, ReviewQuotaIncreaseRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return SendActionAsync(HttpMethod.Put, $"requests/{requestId}/approve", request, ct);
+        return SendActionAsync(HttpMethod.Post, $"requests/{requestId}/approve", request, ct);
     }
 
     public Task<ApiCallResult<bool>> RejectRequestAsync(int requestId, ReviewQuotaIncreaseRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return SendActionAsync(HttpMethod.Put, $"requests/{requestId}/reject", request, ct);
+        return SendActionAsync(HttpMethod.Post, $"requests/{requestId}/reject", request, ct);
     }
 
     // Keys — spec §4.5

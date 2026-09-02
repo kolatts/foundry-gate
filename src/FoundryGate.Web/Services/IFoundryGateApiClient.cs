@@ -25,13 +25,25 @@ public partial interface IFoundryGateApiClient
 
     Task<ApiCallResult<UserProfileResponse>> GetMeAsync(CancellationToken ct = default);
 
-    Task<ApiCallResult<UserResponse>> GetUserAsync(int userId, CancellationToken ct = default);
+    /// <summary>
+    /// <c>GET /users/{id}</c>. Returns <see cref="UserDetailResponse"/> — the list row plus group
+    /// memberships, the current-period allocation and the masked key (#156). It was declared as
+    /// <c>UserResponse</c> when this client was written against the spec rather than the
+    /// controllers, which deserialized to a half-empty object (#169).
+    /// </summary>
+    Task<ApiCallResult<UserDetailResponse>> GetUserAsync(int userId, CancellationToken ct = default);
 
-    Task<ApiCallResult<bool>> UpdateUserQuotaAsync(int userId, UpdateUserQuotaRequest request, CancellationToken ct = default);
+    /// <summary>
+    /// <c>PUT /users/{id}/quota</c>. These three return the updated <see cref="UserResponse"/>
+    /// rather than a bare success, so a caller that only needs the row can skip the re-read (#169).
+    /// </summary>
+    Task<ApiCallResult<UserResponse>> UpdateUserQuotaAsync(int userId, UpdateUserQuotaRequest request, CancellationToken ct = default);
 
-    Task<ApiCallResult<bool>> ActivateUserAsync(int userId, CancellationToken ct = default);
+    /// <summary><c>POST /users/{id}/activate</c> — POST, not PUT (#169).</summary>
+    Task<ApiCallResult<UserResponse>> ActivateUserAsync(int userId, CancellationToken ct = default);
 
-    Task<ApiCallResult<bool>> DeactivateUserAsync(int userId, CancellationToken ct = default);
+    /// <summary><c>POST /users/{id}/deactivate</c> — POST, not PUT (#169).</summary>
+    Task<ApiCallResult<UserResponse>> DeactivateUserAsync(int userId, CancellationToken ct = default);
 
     Task<ApiCallResult<UserSyncResult>> SyncUsersAsync(CancellationToken ct = default);
 
@@ -72,8 +84,10 @@ public partial interface IFoundryGateApiClient
 
     Task<ApiCallResult<QuotaIncreaseRequestResponse>> GetRequestAsync(int requestId, CancellationToken ct = default);
 
+    /// <summary><c>POST /requests/{id}/approve</c> — POST, not PUT (#169).</summary>
     Task<ApiCallResult<bool>> ApproveRequestAsync(int requestId, ReviewQuotaIncreaseRequest request, CancellationToken ct = default);
 
+    /// <summary><c>POST /requests/{id}/reject</c> — POST, not PUT (#169).</summary>
     Task<ApiCallResult<bool>> RejectRequestAsync(int requestId, ReviewQuotaIncreaseRequest request, CancellationToken ct = default);
 
     // Keys — spec §4.5

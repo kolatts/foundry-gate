@@ -1,0 +1,172 @@
+@* Create form for POST /foundry/deployments (#62). OpenAI format only — the API refuses an
+   Anthropic-format create with a 400, so this dialog never offers one and says why instead of
+   letting the user find out from an error. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4">
+            Claude deployments aren't created here. They need an attestation block the ARM SDK
+            can't send yet, and Bicep can only recreate a whole account's deployments at once —
+            so Foundry Gate's infra owns them end to end. This form creates OpenAI-format
+            deployments only.
+        </MudAlert>
+
+        <MudForm @ref="_form">
+            <MudAutocomplete T="string"
+                             @bind-Value="_accountName"
+                             Label="Foundry account"
+                             Variant="Variant.Outlined"
+                             SearchFunc="@SearchAccountsAsync"
+                             CoerceValue="true"
+                             CoerceText="true"
+                             OpenOnFocus="true"
+                             Required="true"
+                             RequiredError="Name the account to deploy into."
+                             HelperText="One account per region. Pick an existing one, or type a configured account that has no deployments yet."
+                             data-testid="deployment-account" />
+
+            <MudTextField @bind-Value="_deploymentName"
+                          Label="Deployment name"
+                          Variant="Variant.Outlined"
+                          Class="mt-4"
+                          Required="true"
+                          RequiredError="A deployment needs a name."
+                          MaxLength="@ValidationConstants.FoundryDeploymentNameMaxLength"
+                          HelperText="What callers put in the model field. Letters, digits, and . _ - after the first character."
+                          data-testid="deployment-name" />
+
+            <MudAutocomplete T="string"
+                             @bind-Value="_modelName"
+                             Label="Model"
+                             Variant="Variant.Outlined"
+                             Class="mt-4"
+                             SearchFunc="@SearchModelsAsync"
+                             CoerceValue="true"
+                             CoerceText="true"
+                             OpenOnFocus="true"
+                             Required="true"
+                             RequiredError="Name the model to deploy."
+                             HelperText="Suggestions are a shortcut, not a catalogue — any model your account can serve is accepted."
+                             data-testid="deployment-model" />
+
+            <MudTextField @bind-Value="_modelVersion"
+                          Label="Model version"
+                          Variant="Variant.Outlined"
+                          Class="mt-4"
+                          Required="true"
+                          RequiredError="ARM needs an explicit version."
+                          MaxLength="@ValidationConstants.FoundryModelVersionMaxLength"
+                          data-testid="deployment-version" />
+
+            <MudSelect T="string"
+                       @bind-Value="_skuName"
+                       Label="SKU"
+                       Variant="Variant.Outlined"
+                       Class="mt-4"
+                       Dense="true"
+                       data-testid="deployment-sku">
+                @foreach (var sku in KnownSkus)
+                {
+                    <MudSelectItem T="string" Value="@sku">@sku</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudNumericField T="int"
+                             @bind-Value="_capacity"
+                             Label="Capacity"
+                             Variant="Variant.Outlined"
+                             Class="mt-4"
+                             Min="1"
+                             Max="@ValidationConstants.FoundryDeploymentMaxCapacity"
+                             HelperText="Thousands of tokens per minute — 25 means 25,000 TPM."
+                             data-testid="deployment-capacity" />
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@Cancel" data-testid="deployment-cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@SubmitAsync" data-testid="deployment-create">Create</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    /// <summary>
+    /// A shortcut list, not a catalogue: both fields coerce whatever is typed, because a hardcoded
+    /// model list goes stale the week after it ships. Sourced from the #60 direction update; the
+    /// real fix is an endpoint that lists what an account can serve (#173).
+    /// </summary>
+    private static readonly string[] KnownModels =
+    [
+        "gpt-5.3-codex",
+        "gpt-5.1-codex-max",
+        "gpt-5.1-codex-mini",
+        "gpt-5-codex",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "text-embedding-3-large",
+    ];
+
+    private static readonly string[] KnownSkus = ["GlobalStandard", "DataZoneStandard", "Standard", "ProvisionedManaged"];
+
+    [CascadingParameter]
+    private IMudDialogInstance Instance { get; set; } = default!;
+
+    /// <summary>Accounts already known to have deployments, so the common case is a pick not a guess.</summary>
+    [Parameter]
+    public IReadOnlyList<string> KnownAccounts { get; set; } = [];
+
+    private MudForm? _form;
+    private string _accountName = string.Empty;
+    private string _deploymentName = string.Empty;
+    private string _modelName = string.Empty;
+    private string _modelVersion = string.Empty;
+    private string _skuName = KnownSkus[0];
+    private int _capacity = 25;
+
+    protected override void OnInitialized()
+    {
+        if (KnownAccounts.Count == 1)
+        {
+            _accountName = KnownAccounts[0];
+        }
+    }
+
+    private Task<IEnumerable<string>> SearchAccountsAsync(string value, CancellationToken cancellationToken) =>
+        Task.FromResult(Filter(KnownAccounts, value));
+
+    private Task<IEnumerable<string>> SearchModelsAsync(string value, CancellationToken cancellationToken) =>
+        Task.FromResult(Filter(KnownModels, value));
+
+    private static IEnumerable<string> Filter(IReadOnlyList<string> source, string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? source
+            : source.Where(item => item.Contains(value, StringComparison.OrdinalIgnoreCase));
+
+    private async Task SubmitAsync()
+    {
+        if (_form is not null)
+        {
+            await _form.ValidateAsync();
+            if (!_form.IsValid)
+            {
+                return;
+            }
+        }
+
+        // CreateFoundryDeploymentRequest's properties are init-only (the repo's request-DTO
+        // convention), so the form binds to locals and the record is built once, here.
+        var request = new CreateFoundryDeploymentRequest
+        {
+            AccountName = _accountName.Trim(),
+            DeploymentName = _deploymentName.Trim(),
+            ModelFormat = FoundryModelFormatType.OpenAI,
+            ModelName = _modelName.Trim(),
+            ModelVersion = _modelVersion.Trim(),
+            SkuName = _skuName,
+            Capacity = _capacity,
+        };
+
+        Instance.Close(DialogResult.Ok(request));
+    }
+
+    private void Cancel() => Instance.Cancel();
+}

@@ -110,7 +110,7 @@ else
                             </HeaderContent>
                             <RowTemplate Context="request">
                                 <MudTd DataLabel="Submitted">@request.CreatedDate.ToLocalTime().ToString("d MMM yyyy")</MudTd>
-                                <MudTd DataLabel="Requested" Class="fg-mono">@QuotaDisplay.FormatTokens(request.RequestedQuota)</MudTd>
+                                <MudTd DataLabel="Requested" Class="fg-mono">@TierDisplay.FormatTokensExact(request.RequestedQuota)</MudTd>
                                 <MudTd DataLabel="Status">
                                     <MudChip T="string" Size="Size.Small" Color="@StatusColor(request.StatusType)" Variant="Variant.Text">
                                         @request.StatusType
