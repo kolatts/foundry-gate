@@ -15,8 +15,9 @@ Configure four GitHub Environments in the repo settings before any workflows run
 
 | Environment | Protection | Used by |
 |---|---|---|
-| `dev` | None — auto-deploys | infra-deploy, all code deploys (dev) |
-| `production` | Required reviewers (at least 1) | infra-deploy, all code deploys (prod) |
+| `dev` | None — auto-deploys. Deployment branch policy: **protected branches only** | `deploy-all.yml` and every dispatch-driven dev deploy |
+| `dev-plan` | None, any branch. Its identity holds **Reader** only | the PR-track Bicep what-if — the only Azure work a pull request can do |
+| `production` | Required reviewers (at least 1) | production deploys (dispatch) |
 | `dev-destroy` | Required reviewers + 5 min timer | infra-destroy (dev) |
 | `prod-destroy` | Required reviewers (2+) + 30 min timer | infra-destroy (prod) |
 
@@ -264,11 +265,68 @@ Files:
 
 ---
 
+## Implementation notes (#68–#75, landed)
+
+Where the shipped workflows deviate from the sketches above, the shipped shape wins — it was
+written against the real infra contract from PR #111 (`docs-site/.../reference/infrastructure.md`):
+
+- **No `SQL_ADMIN_PASSWORD` / `GRAPH_CLIENT_SECRET` / `SWA_DEPLOY_TOKEN`.** SQL is Entra-only, Key
+  Vault holds no Bicep-managed secrets, and the SWA deployment token is read at run time with
+  `az staticwebapp secrets list`. The GitHub side has **zero secrets**.
+- **One workflow deploys on merge.** `deploy-all.yml` has the `push: branches: [main]` trigger,
+  with path filters covering `infra/**`, `src/**`, `Directory.*.props`, `global.json`,
+  `NuGet.config`, `.github/workflows/_deploy-*.yml`, `.github/scripts/**` and
+  `.github/actions/**`, and runs the ordered chain infra → prepare-database → database → api →
+  functions ∥ ui → postdeployment tests → summary under the `deploy-dev` lock
+  (`cancel-in-progress: false`). `infra-deploy.yml`, `api-deploy.yml`, `functions-deploy.yml`
+  and `ui-deploy.yml` have **no** `push` trigger: they keep their PR-track jobs (Bicep what-if,
+  Docker image build) plus `workflow_dispatch` for targeted redeploys. The four of them shared
+  the `deploy-{env}` group, and GitHub keeps one pending run per group, so a `Domain/**` or
+  `Directory.Packages.props` change used to start three workflows and silently cancel one.
+- **`functions` and `ui` need `api`.** On a day-0 run the api stage re-runs the whole
+  subscription deployment to swap the bootstrap placeholder; an infra re-run restarting the
+  Function App mid-upload is a real flake. GitHub Actions has no conditional `needs:`.
+- **Nothing on `pull_request` can mutate Azure or read a token.** `dev` is restricted to
+  protected branches; the PR what-if runs under the new read-only `dev-plan` Environment; the
+  Static Web Apps PR previews were removed (#155 tracks restoring them behind a narrower
+  identity). `azure-oidc-login` soft-skips with a notice on any `pull_request` event, id-token
+  branch included, so forks stay green.
+- **No `RESOURCE_GROUP` / `ACR_LOGIN_SERVER` / `CONTAINER_APP_NAME` / `FUNCTION_APP_NAME` variables.**
+  Every code deploy reads `az deployment sub show -n foundrygate-{dev|prod}` outputs
+  (`.github/scripts/infra/export-outputs.sh`). Variables are only the OIDC ids, the Entra client
+  ids and (prod) the SQL admin group.
+- `environment` inputs are GitHub Environment names (`dev` | `production`); the Bicep name
+  (`prod`) is derived.
+- `_deploy-infra.yml` computes `FG_API_IMAGE` from the running Container App (or the placeholder on
+  day 0) so a re-run never resets the API; `create-model-deployments` is a dispatch input, false by
+  default.
+- The first API deploy detects the bootstrap placeholder and replaces it with an infra re-run (port
+  8080 + probes flip together with the image) instead of `az containerapp update`.
+- Reusable children: `_deploy-infra.yml`, `_prepare-database.yml` (dacpac + CLI artifacts, SQL names
+  from outputs, OIDC-id bridge for `_deploy-database.yml` — #137), `_deploy-database.yml`,
+  `_deploy-api.yml`, `_deploy-functions.yml`, `_deploy-ui.yml`, `_postdeployment-tests.yml`.
+  `docs.yml` became `docs-deploy.yml`. Shared helpers: `.github/actions/azure-oidc-login`,
+  `.github/actions/version` (GitVersion 6 trunk-based, `GitVersion.yml`).
+- `deploy-all.yml` does not call `docs-deploy.yml` (Pages deploys from main; no Azure dependency).
+- Shared helpers added by the review pass: `.github/actions/build-api-image` (one docker build +
+  `/health` smoke), `.github/scripts/infra/deploy.sh` (one `az deployment sub create`),
+  `.github/scripts/infra/resolve-api-image.test.sh` (11 offline cases over the image-drift
+  guard), `.github/workflows/actionlint.yml` (#140).
+- Full reference: `docs-site/src/content/docs/reference/ci-cd.md`.
+
 ## Verification
-- [ ] `infra-deploy.yml` what-if posts a PR comment with the diff
-- [ ] `infra-deploy.yml` deploy-prod requires manual reviewer approval in GitHub UI
-- [ ] `infra-destroy.yml` rejects mismatched confirmation string (no resources deleted)
-- [ ] `infra-destroy.yml` destroy-prod has both required reviewers AND a 30-minute wait timer
-- [ ] Each code pipeline builds and tests on PRs without deploying
-- [ ] `deploy-all.yml` successfully rebuilds a fresh dev environment from zero
-- [ ] No long-lived Azure credentials anywhere in GitHub secrets — OIDC only
+- [x] Every workflow and composite action passes `actionlint` with zero errors
+- [x] `src/FoundryGate.Api/Dockerfile` builds; container runs non-root on 8080 and `/health` returns 200
+- [x] GitHub Environments `dev`, `production` (1 reviewer, protected branches), `dev-destroy` (reviewer + 5 min), `prod-destroy` (reviewer + 30 min, protected branches) exist — second `prod-destroy` reviewer is an owner action (#109)
+- [x] No long-lived Azure credentials anywhere in GitHub secrets — OIDC only (no secrets at all)
+- [x] `infra-destroy.yml` rejects a mismatched confirmation string before any login (job `validate-confirmation`)
+- [x] Exactly one workflow has a `push: branches: [main]` deploy trigger (`deploy-all.yml`); the four wrappers are dispatch + PR-track only
+- [x] `resolve-api-image.sh` fails the job on every non-bootstrap error — 11 offline cases in `resolve-api-image.test.sh`
+- [x] Every job in every workflow has a `timeout-minutes`
+- [x] `dev` is restricted to protected branches; the PR what-if runs under the unprotected, Reader-only `dev-plan`
+- [ ] `infra-deploy.yml` what-if posts a PR comment with the diff — needs a live subscription (#105/#109)
+- [ ] A production dispatch stops at the reviewer approval — needs a live run (#105)
+- [ ] A merge to `main` runs the whole `deploy-all.yml` chain against dev — needs a live run (#105)
+- [ ] `deploy-all.yml` rebuilds a fresh dev environment from zero — needs a live run (#105)
+- [ ] Postdeployment tests gating — #139
+- [ ] `_deploy-database.yml`'s `ip setup` is real, so the chain can complete end to end — #143

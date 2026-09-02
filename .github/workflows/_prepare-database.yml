@@ -1,0 +1,133 @@
+name: Prepare Database Deploy (Reusable)
+
+# Reusable workflow_call that does everything _deploy-database.yml (#79) expects its CALLER to
+# have done, so api-deploy.yml and deploy-all.yml share one implementation:
+#   1. builds the two artifacts _deploy-database.yml downloads — `dacpac`
+#      (FoundryGate.Database.dacpac) and `foundrygate-cli` (framework-dependent publish of
+#      FoundryGate.Cli);
+#   2. resolves the SQL server / database / resource group from the infra deployment outputs
+#      (docs reference/infrastructure "Outputs contract") — its three `sql-*` inputs;
+#   3. surfaces the environment's OIDC identifiers as outputs, because _deploy-database.yml takes
+#      them as `secrets:` and a `uses:` job cannot read Environment-scoped variables itself
+#      (only jobs that declare `environment:` can). The ids are identifiers, not secrets, so
+#      passing them through job outputs is safe; #137 asks _deploy-database.yml to read the
+#      variables directly so this bridge can go.
+#
+# Callers then do:
+#   database:
+#     needs: prepare-database
+#     uses: ./.github/workflows/_deploy-database.yml
+#     permissions: { id-token: write, contents: read }
+#     with:
+#       environment: <same>
+#       sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
+#       sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
+#       sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
+#     secrets:
+#       AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
+#       AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
+#       AZURE_SUBSCRIPTION_ID: ${{ needs.prepare-database.outputs.azure-subscription-id }}
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name: dev | production."
+        required: true
+        type: string
+    outputs:
+      resource-group:
+        value: ${{ jobs.prepare.outputs.resource-group }}
+      sql-server-name:
+        value: ${{ jobs.prepare.outputs.sql-server-name }}
+      sql-database-name:
+        value: ${{ jobs.prepare.outputs.sql-database-name }}
+      azure-client-id:
+        value: ${{ jobs.prepare.outputs.azure-client-id }}
+      azure-tenant-id:
+        value: ${{ jobs.prepare.outputs.azure-tenant-id }}
+      azure-subscription-id:
+        value: ${{ jobs.prepare.outputs.azure-subscription-id }}
+      api-identity-client-id:
+        description: "apiIdentityClientId output - lets db grant-identities CREATE USER ... WITH SID (no Directory Readers needed)."
+        value: ${{ jobs.prepare.outputs.api-identity-client-id }}
+      functions-identity-client-id:
+        description: "functionsIdentityClientId output - same purpose for the Functions identity."
+        value: ${{ jobs.prepare.outputs.functions-identity-client-id }}
+
+jobs:
+  prepare:
+    name: Database - Prepare (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      resource-group: ${{ steps.infra.outputs.resource-group }}
+      sql-server-name: ${{ steps.infra.outputs.sql-server-name }}
+      sql-database-name: ${{ steps.infra.outputs.sql-database-name }}
+      api-identity-client-id: ${{ steps.infra.outputs.api-identity-client-id }}
+      functions-identity-client-id: ${{ steps.infra.outputs.functions-identity-client-id }}
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+
+      - name: Resolve infra outputs
+        id: infra
+        run: bash .github/scripts/infra/export-outputs.sh "foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Version
+        id: version
+        uses: ./.github/actions/version
+
+      - name: Build dacpac
+        run: |
+          dotnet build src/FoundryGate.Database/FoundryGate.Database.sqlproj --configuration Release -o artifacts/dacpac
+          test -f artifacts/dacpac/FoundryGate.Database.dacpac
+
+      - name: Publish CLI
+        env:
+          SEMVER: ${{ steps.version.outputs.semver }}
+          ASSEMBLY_VERSION: ${{ steps.version.outputs.major-minor-patch }}
+        run: |
+          dotnet publish src/FoundryGate.Cli/FoundryGate.Cli.csproj --configuration Release --no-self-contained \
+            -o artifacts/cli \
+            "-p:Version=${SEMVER}" \
+            "-p:AssemblyVersion=${ASSEMBLY_VERSION}" \
+            "-p:FileVersion=${ASSEMBLY_VERSION}"
+          test -f artifacts/cli/FoundryGate.Cli.dll
+
+      - name: Upload dacpac artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dacpac
+          path: artifacts/dacpac/FoundryGate.Database.dacpac
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundrygate-cli
+          path: artifacts/cli
+          retention-days: 7
+          if-no-files-found: error

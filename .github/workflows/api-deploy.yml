@@ -1,0 +1,111 @@
+name: API Deploy
+
+# Targeted API pipeline for FoundryGate.Api (#71) — never triggers on infra/**.
+#   pull_request touching the Dockerfile or these workflows -> image build + /health smoke only
+#   workflow_dispatch (environment)                         -> database -> api
+#
+# There is deliberately NO `push` trigger: a merge to `main` runs deploy-all.yml, the single
+# ordered chain. Three wrappers racing for the `deploy-{env}` concurrency group used to mean one
+# of them was silently cancelled. This file is now the "redeploy just the API" button.
+#
+# Build/test of the .NET code on PRs is ci.yml's job (required check `build-test`); this workflow
+# does not repeat it. Order matters on dispatch: the dacpac (schema) goes first, then the
+# Container App rolls to the new image.
+
+on:
+  pull_request:
+    paths:
+      - "src/FoundryGate.Api/Dockerfile"
+      - ".dockerignore"
+      - ".github/actions/build-api-image/**"
+      - ".github/workflows/api-deploy.yml"
+      - ".github/workflows/_deploy-api.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target GitHub Environment."
+        required: true
+        type: choice
+        options: [dev, production]
+        default: dev
+      run-seed-test:
+        description: "Seed Bogus demo data after the schema deploy (ignored for production)."
+        required: false
+        type: boolean
+        default: false
+
+# No workflow-level id-token: the PR image-build job touches no Azure and must stay usable from
+# forks. The deploy jobs grant it themselves.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('api-image-pr-{0}', github.event.pull_request.number) || format('deploy-{0}', inputs.environment) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # PR-only: prove the Dockerfile still builds and the image answers /health. No Azure access,
+  # no credentials, safe on forks.
+  image-build:
+    name: API - Image build check (PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Version
+        id: version
+        uses: ./.github/actions/version
+      - name: Build and smoke-test the image
+        uses: ./.github/actions/build-api-image
+        with:
+          image-tag: ${{ steps.version.outputs.image-tag }}
+          version: ${{ steps.version.outputs.semver }}
+          assembly-version: ${{ steps.version.outputs.major-minor-patch }}
+
+  prepare-database:
+    name: Database
+    if: github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/_prepare-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}
+
+  database:
+    name: Database
+    needs: prepare-database
+    uses: ./.github/workflows/_deploy-database.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}
+      sql-server-name: ${{ needs.prepare-database.outputs.sql-server-name }}
+      sql-database-name: ${{ needs.prepare-database.outputs.sql-database-name }}
+      sql-resource-group: ${{ needs.prepare-database.outputs.resource-group }}
+      run-seed-test: ${{ inputs.run-seed-test }}
+      # Create the contained SQL users WITH SID from the identities' client ids, so Azure SQL
+      # never has to look them up in Entra (which would need Directory Readers on the server
+      # identity) - #143.
+      api-identity-client-id: ${{ needs.prepare-database.outputs.api-identity-client-id }}
+      functions-identity-client-id: ${{ needs.prepare-database.outputs.functions-identity-client-id }}
+    secrets:
+      AZURE_CLIENT_ID: ${{ needs.prepare-database.outputs.azure-client-id }}
+      AZURE_TENANT_ID: ${{ needs.prepare-database.outputs.azure-tenant-id }}
+      AZURE_SUBSCRIPTION_ID: ${{ needs.prepare-database.outputs.azure-subscription-id }}
+
+  api:
+    name: API
+    needs: database
+    uses: ./.github/workflows/_deploy-api.yml
+    permissions:
+      id-token: write
+      contents: read
+    with:
+      environment: ${{ inputs.environment }}

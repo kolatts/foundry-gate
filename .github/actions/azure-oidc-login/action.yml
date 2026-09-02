@@ -1,0 +1,110 @@
+name: Azure OIDC login (guarded)
+description: >-
+  Logs in to Azure with azure/login@v2 using the three OIDC identifiers FoundryGate keeps as
+  GitHub Environment VARIABLES (AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID — they
+  are identifiers, not secrets; see docs reference/ci-cd). Before logging in it checks that all
+  three are present and that the calling job actually has a usable `id-token: write`, and fails
+  with a readable ::error:: pointing at the owner-setup issue (#109) instead of letting
+  azure/login fail later with an opaque AADSTS error. On `pull_request` events — where a fork
+  has neither the variables nor an OIDC token — BOTH checks skip cleanly with `configured=false`
+  and a ::notice::, never a failure.
+
+inputs:
+  client-id:
+    description: "vars.AZURE_CLIENT_ID of the calling job's GitHub Environment (may be empty)."
+    required: true
+  tenant-id:
+    description: "vars.AZURE_TENANT_ID (may be empty)."
+    required: true
+  subscription-id:
+    description: "vars.AZURE_SUBSCRIPTION_ID (may be empty)."
+    required: true
+  environment:
+    description: "GitHub Environment name, used only for the error message."
+    required: true
+  required:
+    description: >-
+      "'true' (default) fails the job when setup is missing; 'false' skips with
+      configured=false. `pull_request` events always skip regardless of this input — nothing on
+      the PR track may depend on Azure being reachable."
+    required: false
+    default: "true"
+
+outputs:
+  configured:
+    description: "'true' when all three identifiers were present, an OIDC token was available and the login ran."
+    value: ${{ steps.guard.outputs.configured }}
+
+runs:
+  using: composite
+  steps:
+    - name: Verify OIDC setup
+      id: guard
+      shell: bash
+      env:
+        CLIENT_ID: ${{ inputs.client-id }}
+        TENANT_ID: ${{ inputs.tenant-id }}
+        SUBSCRIPTION_ID: ${{ inputs.subscription-id }}
+        TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        REQUIRED: ${{ inputs.required }}
+      run: |
+        set -uo pipefail
+
+        # A fork PR resolves the base repo's Environment variables but never receives an OIDC
+        # token, so `configured=true` followed by a hard exit on the id-token check was exactly
+        # the red-instead-of-skip the guard exists to prevent. On pull_request, both branches
+        # below are soft.
+        soft="false"
+        if [ "$REQUIRED" != "true" ] || [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
+          soft="true"
+        fi
+
+        skip() {
+          echo "::notice title=Azure OIDC not available - skipping::$1"
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
+        missing=()
+        [ -n "$CLIENT_ID" ] || missing+=("AZURE_CLIENT_ID")
+        [ -n "$TENANT_ID" ] || missing+=("AZURE_TENANT_ID")
+        [ -n "$SUBSCRIPTION_ID" ] || missing+=("AZURE_SUBSCRIPTION_ID")
+
+        if [ ${#missing[@]} -gt 0 ]; then
+          message="GitHub Environment '${TARGET_ENVIRONMENT}' is missing the variable(s): ${missing[*]}. \
+        These are the OIDC identifiers azure/login needs (Settings -> Environments -> ${TARGET_ENVIRONMENT} -> Variables). \
+        Owner setup is tracked in https://github.com/kolatts/foundry-gate/issues/109 and documented at \
+        docs-site/src/content/docs/reference/ci-cd.md."
+          [ "$soft" = "true" ] && skip "$message"
+          echo "::error title=Azure OIDC not configured::${message}"
+          exit 1
+        fi
+
+        if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+          message="ACTIONS_ID_TOKEN_REQUEST_URL is not set, so no OIDC token can be requested. \
+        On a fork pull request GitHub never issues one. Otherwise the workflow (or job) that calls this reusable \
+        workflow must declare 'permissions: id-token: write' and 'contents: read' - a reusable workflow can only \
+        narrow what its caller grants."
+          [ "$soft" = "true" ] && skip "$message"
+          echo "::error title=id-token permission missing::${message}"
+          exit 1
+        fi
+
+        echo "configured=true" >> "$GITHUB_OUTPUT"
+
+    - name: Azure login
+      if: steps.guard.outputs.configured == 'true'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.client-id }}
+        tenant-id: ${{ inputs.tenant-id }}
+        subscription-id: ${{ inputs.subscription-id }}
+
+    # The containerapp and staticwebapp commands live in extensions; install them on demand
+    # without prompting so scripts never hang on "Do you want to install it now?".
+    - name: Allow dynamic Azure CLI extension install
+      if: steps.guard.outputs.configured == 'true'
+      shell: bash
+      run: |
+        az config set extension.use_dynamic_install=yes_without_prompt --only-show-errors
+        az config set extension.dynamic_install_allow_preview=true --only-show-errors

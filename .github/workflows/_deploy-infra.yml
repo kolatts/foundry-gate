@@ -1,0 +1,343 @@
+name: Deploy Infrastructure (Reusable)
+
+# Reusable workflow_call (#69): validate -> what-if -> deploy for infra/main.bicep at subscription
+# scope, publishing the outputs contract (docs reference/infrastructure) as workflow outputs so
+# downstream jobs never hard-code resource names.
+#
+# Conventions shared by every _deploy-*.yml in this repo:
+#   - `environment` is the GitHub Environment NAME (`dev` | `production`); it gates the job and
+#     scopes the variables. The FoundryGate/Bicep environment name (`dev` | `prod`) is derived
+#     from it: prod.bicepparam, rg-foundrygate-prod, deployment `foundrygate-prod`.
+#   - OIDC identifiers are Environment VARIABLES (vars.AZURE_CLIENT_ID / AZURE_TENANT_ID /
+#     AZURE_SUBSCRIPTION_ID), guarded by .github/actions/azure-oidc-login. A caller must grant
+#     `permissions: id-token: write, contents: read` (a reusable workflow can only narrow).
+#   - One deploy at a time per environment (concurrency below, never cancelled mid-flight).
+#
+# Two invariants from PR #111 are enforced here, not left to the operator:
+#   1. FG_API_IMAGE is set to the image the Container App is CURRENTLY running (or the public
+#      placeholder on day 0) so a re-run never resets the API — scripts/infra/resolve-api-image.sh.
+#   2. createModelDeployments=false unless the caller explicitly flips `create-model-deployments`
+#      for the very first run of a fresh environment (Anthropic deployments are create-once,
+#      CLAUDE.md / fable-refactor-log E-007).
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment name: dev | production."
+        required: true
+        type: string
+      plan-environment:
+        description: >-
+          GitHub Environment the read-only what-if job runs under. Defaults to the deploy
+          environment; PR-track callers pass `dev-plan`, whose identity holds Reader only and
+          which (unlike `dev`) is reachable from an unprotected branch (#109).
+        required: false
+        type: string
+        default: ""
+      mode:
+        description: "'what-if' = validate + what-if only (PRs). 'deploy' = validate + what-if + deploy."
+        required: false
+        type: string
+        default: deploy
+      create-model-deployments:
+        description: "Pass createModelDeployments=true. ONLY for the first deployment of a brand-new environment."
+        required: false
+        type: boolean
+        default: false
+      post-what-if-comment:
+        description: "On pull_request events, upsert the what-if result as a PR comment (caller needs pull-requests: write)."
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      deployment-name:
+        description: "Stable subscription deployment name (foundrygate-{dev|prod})."
+        value: ${{ jobs.deploy.outputs.deployment-name }}
+      resource-group:
+        value: ${{ jobs.deploy.outputs.resource-group }}
+      sql-server-name:
+        value: ${{ jobs.deploy.outputs.sql-server-name }}
+      sql-database-name:
+        value: ${{ jobs.deploy.outputs.sql-database-name }}
+      container-registry-login-server:
+        value: ${{ jobs.deploy.outputs.container-registry-login-server }}
+      container-app-name:
+        value: ${{ jobs.deploy.outputs.container-app-name }}
+      container-app-fqdn:
+        value: ${{ jobs.deploy.outputs.container-app-fqdn }}
+      function-app-name:
+        value: ${{ jobs.deploy.outputs.function-app-name }}
+      static-web-app-name:
+        value: ${{ jobs.deploy.outputs.static-web-app-name }}
+      static-web-app-hostname:
+        value: ${{ jobs.deploy.outputs.static-web-app-hostname }}
+      container-app-is-bootstrap-image:
+        description: "'true' when the Container App still runs the placeholder (the api deploy replaces it)."
+        value: ${{ jobs.deploy.outputs.container-app-is-bootstrap-image }}
+
+concurrency:
+  group: infra-${{ inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  # FoundryGate/Bicep environment name derived from the GitHub Environment name.
+  FG_ENV: ${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  DEPLOYMENT_NAME: foundrygate-${{ inputs.environment == 'production' && 'prod' || inputs.environment }}
+  PLACEHOLDER_IMAGE: mcr.microsoft.com/k8se/quickstart:latest
+
+jobs:
+  validate:
+    name: Infra - Validate (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # `mode` is a free-form string; an unknown value would skip both downstream jobs and
+      # report this reusable workflow as a success with empty outputs. Fail loudly instead.
+      - name: Validate inputs
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "$MODE" in
+            what-if|deploy) echo "mode=${MODE}" ;;
+            *) echo "::error::Unknown mode '${MODE}'. _deploy-infra.yml accepts 'what-if' or 'deploy'."; exit 1 ;;
+          esac
+
+      - name: Install Bicep
+        run: |
+          az bicep install --only-show-errors
+          az bicep version
+
+      - name: Build main.bicep
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null
+
+      - name: Lint main.bicep and modules
+        run: |
+          az bicep lint --file infra/main.bicep
+          for f in infra/modules/*.bicep; do
+            echo "::group::lint $f"
+            az bicep lint --file "$f"
+            echo "::endgroup::"
+          done
+
+      # The param files read FG_API_IMAGE (and prod: FG_SQL_ADMIN_GROUP_*) with no default — a
+      # deliberate loud failure. Validation only checks the file compiles, so placeholders are
+      # fine HERE and only here.
+      - name: Build ${{ env.FG_ENV }}.bicepparam
+        env:
+          FG_API_IMAGE: ${{ env.PLACEHOLDER_IMAGE }}
+          FG_SQL_ADMIN_GROUP_OBJECT_ID: 00000000-0000-0000-0000-000000000000
+          FG_SQL_ADMIN_GROUP_NAME: validation-placeholder
+        run: az bicep build-params --file "infra/parameters/${FG_ENV}.bicepparam" --stdout > /dev/null
+
+  what-if:
+    name: Infra - What-if (${{ inputs.environment }})
+    needs: validate
+    if: inputs.mode == 'what-if'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.plan-environment != '' && inputs.plan-environment || inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        id: login
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          # The variables come from the environment this JOB runs under, which is
+          # plan-environment when the caller set one - name that one in the error.
+          environment: ${{ inputs.plan-environment != '' && inputs.plan-environment || inputs.environment }}
+          required: "false"
+
+      # The script writes `image=` to $GITHUB_OUTPUT itself — wrapping it in `echo "$(...)"`
+      # would let `echo` swallow every "refusing to guess" exit code.
+      - name: Resolve current API image
+        if: steps.login.outputs.configured == 'true'
+        id: image
+        run: bash .github/scripts/infra/resolve-api-image.sh "$FG_ENV" "$DEPLOYMENT_NAME"
+
+      - name: What-if
+        if: steps.login.outputs.configured == 'true'
+        id: whatif
+        env:
+          FG_API_IMAGE: ${{ steps.image.outputs.image }}
+          FG_ENTRA_API_CLIENT_ID: ${{ vars.FG_ENTRA_API_CLIENT_ID }}
+          FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}
+          FG_SQL_ADMIN_GROUP_NAME: ${{ vars.FG_SQL_ADMIN_GROUP_NAME }}
+        run: |
+          bash .github/scripts/infra/what-if.sh "$FG_ENV" "$DEPLOYMENT_NAME" \
+            "${{ vars.AZURE_LOCATION || 'eastus2' }}" "${{ inputs.create-model-deployments }}" what-if.txt
+          summary_line="$(grep -E '^Resource changes:' what-if.txt | tail -n1 || true)"
+          {
+            echo "## Bicep what-if — ${FG_ENV}"
+            echo ""
+            echo "\`${summary_line:-see output}\`"
+            echo ""
+            echo "<details><summary>Full output</summary>"
+            echo ""
+            echo '```text'
+            head -c 60000 what-if.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload what-if output
+        if: steps.login.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: what-if-${{ env.FG_ENV }}
+          path: what-if.txt
+          retention-days: 14
+
+      # Upsert (not append) one comment per environment so a long-lived PR does not accumulate
+      # a wall of what-ifs. Only same-repo PRs: a fork PR's GITHUB_TOKEN is read-only.
+      - name: Post what-if as PR comment
+        if: >-
+          inputs.post-what-if-comment && steps.login.outputs.configured == 'true' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        env:
+          FG_ENV: ${{ env.FG_ENV }}
+          WHATIF_SUMMARY: ${{ steps.whatif.outputs.summary }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = `<!-- foundrygate-what-if:${process.env.FG_ENV} -->`;
+            const maxBody = 60000;
+            let output = fs.readFileSync('what-if.txt', 'utf8');
+            let truncated = '';
+            if (output.length > maxBody) {
+              output = output.slice(0, maxBody);
+              truncated = `\n\n_Output truncated to ${maxBody} characters — the full text is in the workflow artifact \`what-if-${process.env.FG_ENV}\`._`;
+            }
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              `### Bicep what-if — \`${process.env.FG_ENV}\``,
+              '',
+              `**${process.env.WHATIF_SUMMARY || 'see output'}** · commit \`${context.sha.slice(0, 7)}\` · [run](${runUrl})`,
+              '',
+              '<details><summary>Full what-if output</summary>',
+              '',
+              '```text',
+              output,
+              '```',
+              '</details>',
+              truncated,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.issue.number, per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+            }
+
+  deploy:
+    name: Infra - Deploy (${{ inputs.environment }})
+    needs: validate
+    if: inputs.mode == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      deployment-name: ${{ steps.outputs.outputs.deployment-name }}
+      resource-group: ${{ steps.outputs.outputs.resource-group }}
+      sql-server-name: ${{ steps.outputs.outputs.sql-server-name }}
+      sql-database-name: ${{ steps.outputs.outputs.sql-database-name }}
+      container-registry-login-server: ${{ steps.outputs.outputs.container-registry-login-server }}
+      container-app-name: ${{ steps.outputs.outputs.container-app-name }}
+      container-app-fqdn: ${{ steps.outputs.outputs.container-app-fqdn }}
+      function-app-name: ${{ steps.outputs.outputs.function-app-name }}
+      static-web-app-name: ${{ steps.outputs.outputs.static-web-app-name }}
+      static-web-app-hostname: ${{ steps.outputs.outputs.static-web-app-hostname }}
+      container-app-is-bootstrap-image: ${{ steps.outputs.outputs.container-app-is-bootstrap-image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: ./.github/actions/azure-oidc-login
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: ${{ inputs.environment }}
+
+      - name: Resolve current API image (image-drift protection)
+        id: image
+        run: bash .github/scripts/infra/resolve-api-image.sh "$FG_ENV" "$DEPLOYMENT_NAME"
+
+      - name: Warn when creating model deployments
+        if: inputs.create-model-deployments
+        run: |
+          echo "::warning title=createModelDeployments=true::This run PUTs the Anthropic/OpenAI model deployments. Anthropic deployments are create-once under ARM — re-running with this flag against an environment that already has them drives them to Failed. Only use it on the first deployment of a fresh environment."
+
+      # A what-if right before the deploy, in the same job: one environment approval covers both
+      # for production, and the summary shows exactly what the deploy is about to change.
+      - name: What-if (pre-deploy preview)
+        id: whatif
+        env:
+          FG_API_IMAGE: ${{ steps.image.outputs.image }}
+          FG_ENTRA_API_CLIENT_ID: ${{ vars.FG_ENTRA_API_CLIENT_ID }}
+          FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}
+          FG_SQL_ADMIN_GROUP_NAME: ${{ vars.FG_SQL_ADMIN_GROUP_NAME }}
+        run: |
+          bash .github/scripts/infra/what-if.sh "$FG_ENV" "$DEPLOYMENT_NAME" \
+            "${{ vars.AZURE_LOCATION || 'eastus2' }}" "${{ inputs.create-model-deployments }}" what-if.txt
+          {
+            echo "## Bicep what-if (pre-deploy) — ${FG_ENV}"
+            echo ""
+            echo "<details><summary>Full output</summary>"
+            echo ""
+            echo '```text'
+            head -c 60000 what-if.txt
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy infra/main.bicep (subscription scope)
+        env:
+          FG_API_IMAGE: ${{ steps.image.outputs.image }}
+          FG_ENTRA_API_CLIENT_ID: ${{ vars.FG_ENTRA_API_CLIENT_ID }}
+          FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}
+          FG_SQL_ADMIN_GROUP_NAME: ${{ vars.FG_SQL_ADMIN_GROUP_NAME }}
+        run: |
+          bash .github/scripts/infra/deploy.sh "$FG_ENV" "$DEPLOYMENT_NAME" \
+            "${{ vars.AZURE_LOCATION || 'eastus2' }}" "${{ inputs.create-model-deployments }}"
+
+      - name: Export deployment outputs
+        id: outputs
+        run: bash .github/scripts/infra/export-outputs.sh "$DEPLOYMENT_NAME"
+
+      - name: Summary
+        run: |
+          {
+            echo "## Infra deployed — ${FG_ENV}"
+            echo ""
+            echo "- Deployment: \`${DEPLOYMENT_NAME}\` · commit \`${GITHUB_SHA::7}\` · by @${GITHUB_ACTOR}"
+            echo "- FG_API_IMAGE used: \`${{ steps.image.outputs.image }}\`"
+            echo "- createModelDeployments: \`${{ inputs.create-model-deployments }}\`"
+            if [ "${{ steps.outputs.outputs.container-app-is-bootstrap-image }}" = "true" ]; then
+              echo ""
+              echo "> The Container App still runs the bootstrap placeholder. The next api deploy (api-deploy.yml / deploy-all.yml) replaces it with the real image."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
