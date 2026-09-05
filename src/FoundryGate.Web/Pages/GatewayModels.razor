@@ -214,7 +214,7 @@ else
     /// after a successful provision. A model nobody is allowed to use is not yet useful, so the page
     /// says so and opens the add dialog pre-filled rather than leaving the admin to find it.
     /// </summary>
-    [SupplyParameterFromQuery(Name = "deployment")]
+    [Parameter, SupplyParameterFromQuery(Name = "deployment")]
     public string? DeploymentQuery { get; set; }
 
     private IReadOnlyList<GatewayTierResponse>? _tiers;

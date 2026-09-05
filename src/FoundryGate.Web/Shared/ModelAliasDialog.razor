@@ -173,6 +173,14 @@
             .Select(d => d.DeploymentName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)];
+
+        // One deployment is not a choice — pre-select it, the way the provision dialog pre-selects a
+        // lone account, so the common early-days case is "name the alias" rather than "name the alias
+        // and confirm the only possible answer".
+        if (_deploymentName.Length == 0 && _deploymentNames.Count == 1)
+        {
+            OnDeploymentChanged(_deploymentNames[0]);
+        }
     }
 
     private void OnTierChanged(string? tier) => _tier = tier ?? string.Empty;

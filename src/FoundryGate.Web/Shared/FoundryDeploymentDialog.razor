@@ -221,6 +221,18 @@
         {
             _accountName = KnownAccounts[0];
         }
+
+        // Which accounts a model belongs in is infra/main.bicep's pooled / primary-only split, not a
+        // preference: a pooled model must exist in every region or a 429 failover becomes a 404. This
+        // form creates OpenAI-format deployments, so the answer today is "the primary account alone"
+        // and nothing extra is pre-selected — the rule lives in ModelAliasDerivation so it stays true
+        // on the day Anthropic creates become possible (#126) rather than being re-derived then.
+        _additionalAccounts =
+        [
+            .. ModelAliasDerivation
+                .DefaultAccountsFor(nameof(FoundryModelFormatType.OpenAI), KnownAccounts)
+                .Where(account => !string.Equals(account, _accountName, StringComparison.OrdinalIgnoreCase)),
+        ];
     }
 
     /// <summary>

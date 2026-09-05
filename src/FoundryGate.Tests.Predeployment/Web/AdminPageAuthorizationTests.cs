@@ -23,6 +23,7 @@ public class AdminPageAuthorizationTests
         typeof(GroupDetail),
         typeof(Foundry),
         typeof(QuotaAllocations),
+        typeof(GatewayModels),
     ];
 
     [Theory]

@@ -78,6 +78,12 @@ public class FoundryGateApiClientRouteMatchTests(ApiTestFactory factory) : IClas
         { "GET", "/api/v1/foundry/catalog" },
         { "POST", "/api/v1/foundry/deployments" },
         { "DELETE", "/api/v1/foundry/deployments/fg-eastus/gpt-4-1-mini" },
+        { "GET", "/api/v1/foundry/deployments/fg-eastus/gpt-4-1-mini" },
+
+        // Gateway model allowlist (#225)
+        { "GET", "/api/v1/gateway/tiers" },
+        { "GET", "/api/v1/gateway/tiers/standard/models" },
+        { "PUT", "/api/v1/gateway/tiers/standard/models" },
 
         // Admin
         { "GET", "/api/v1/config" },
