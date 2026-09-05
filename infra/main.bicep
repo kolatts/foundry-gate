@@ -81,7 +81,11 @@ param primaryOnlyModelDeployments array = [
     model: 'gpt-4.1-mini'
     version: '2025-04-14'
     sku: 'GlobalStandard'
-    capacity: 10
+    // 100 units = 100,000 TPM, matching the highest tier that can reach this alias (#260). Below
+    // that, the deployment throttles before the developer's own meter does and `x-fg-remaining-tpm`
+    // is never the reason they are refused. GlobalStandard bills per token, so capacity is a rate
+    // ceiling, not a reservation: raising it costs nothing until the tokens are actually spent.
+    capacity: 100
   }
 ]
 
@@ -147,8 +151,8 @@ param productModelAliases object = {
   }
 }
 
-@description('Create model deployments (first run). Set false on re-runs — Anthropic deployments are create-once under ARM; see modules/foundry.bicep.')
-param createModelDeployments bool = true
+@description('Create the Anthropic (Claude) deployments (first run only). Set false on re-runs — they are create-once under ARM; see modules/foundry.bicep. OpenAI deployments are reconciled on every run regardless (#259).')
+param createAnthropicModelDeployments bool = true
 
 // ---- Control plane (#43/#44) -----------------------------------------------------
 // Off by default so the gateway-only deployment keeps working unchanged; dev/prod param
@@ -301,7 +305,7 @@ module foundry 'modules/foundry.bicep' = [
       location: region
       modelDeployments: i == 0 ? concat(pooledModelDeployments, primaryOnlyModelDeployments) : pooledModelDeployments
       anthropicProviderData: anthropicProviderData
-      createModelDeployments: createModelDeployments
+      createAnthropicModelDeployments: createAnthropicModelDeployments
       tags: union(standardTags, {
         'fg-role': 'foundry'
         'fg-region-role': i == 0 ? 'primary' : 'pool-member'
@@ -427,6 +431,42 @@ module swaPreviewRole 'modules/swa-preview-role.bicep' = if (deployControlPlane 
   }
 }
 
+// ---- Model capacity ceiling (#260) ----------------------------------------------
+// A tier is well-formed between two bounds. #237 set the floor: a tier's TPM must exceed one
+// agent turn, or a single Codex request can never complete. This is the ceiling, and it is about
+// a resource the tier does not mention — the deployment behind the alias:
+//
+//   sum(capacity of the deployments an alias routes to) * 1000  >=  tpm of every tier that reaches it
+//
+// Below it, the developer's own per-minute meter is unreachable: every throttle they see is the
+// shared Azure OpenAI deployment saturating, `x-fg-remaining-tpm` still shows headroom on the
+// refusal, and one developer's traffic throttles another's even though the meters are correctly
+// isolated per subscription. dev shipped outside it and nothing said so (#260).
+//
+// Reported, not asserted. A shortfall is a capacity decision — for Claude it is also a create-once
+// one (#205) — so the deploy names it and lets a human choose, rather than refusing to run.
+var pooledDeploymentNames = map(pooledModelDeployments, d => d.name)
+
+// TPM each alias's backing deployment can actually serve. A pooled deployment exists in every
+// Foundry region, so its capacity multiplies; a primary-only one does not.
+var deploymentServableTpm = toObject(
+  concat(pooledModelDeployments, primaryOnlyModelDeployments),
+  d => d.name,
+  d => d.capacity * 1000 * (contains(pooledDeploymentNames, d.name) ? length(foundryRegions) : 1)
+)
+
+var tierAliasReach = flatten(
+  map(quotaTiers, tier => map(items(productModelAliases[?tier.name] ?? {}), alias => {
+    tier: tier.name
+    alias: alias.key
+    deployment: alias.value.deployment
+    tierTpm: tier.tpm
+    deploymentTpm: deploymentServableTpm[?alias.value.deployment] ?? 0
+  }))
+)
+
+var modelCapacityShortfalls = filter(tierAliasReach, r => r.deploymentTpm < r.tierTpm)
+
 // ---- Outputs: the contract the deploy workflows and the CLI consume -------------
 // Gateway: addresses, the tier products that developer subscriptions scope to, the
 // workspace holding billing-grade token logs, and the identities/names for further role
@@ -486,3 +526,6 @@ output modelAliasRows array = controlPlane.?outputs.modelAliasRows ?? []
 
 @description('The gateway quota tier table as the control plane receives it — one row per tier, matching the Gateway__Tiers__{i}__* settings on both hosts (#201).')
 output quotaTierRows array = controlPlane.?outputs.quotaTierRows ?? []
+
+@description('Aliases whose backing deployment cannot serve the TPM of a tier that can reach it (#260). Empty means every tier is well-formed; each entry names the tier, the alias, the deployment, the tier TPM and the TPM the deployment can serve. Reported by the deploy as a warning, never fatal.')
+output modelCapacityWarnings array = modelCapacityShortfalls

@@ -29,7 +29,7 @@ on:
         options: [dev, production]
         default: dev
       create-model-deployments:
-        description: "Day-0 ONLY for a brand-new environment: pass createModelDeployments=true (Anthropic deployments are create-once)."
+        description: "Day-0 ONLY for a brand-new environment: pass createAnthropicModelDeployments=true (Claude deployments are create-once; OpenAI deployments need no flag, #259)."
         required: false
         type: boolean
         default: false

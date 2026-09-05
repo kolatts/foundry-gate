@@ -65,7 +65,7 @@ on:
         options: [dev, production]
         default: dev
       create-model-deployments:
-        description: "Day-0 ONLY for a brand-new environment (or right after infra-destroy): pass createModelDeployments=true. Anthropic deployments are create-once — never re-run with this on."
+        description: "Day-0 ONLY for a brand-new environment (or right after infra-destroy): pass createAnthropicModelDeployments=true. Claude deployments are create-once — never re-run with this on. OpenAI deployments are reconciled on every run and need no flag (#259)."
         required: false
         type: boolean
         default: false
@@ -110,7 +110,7 @@ jobs:
           {
             echo "# Deploy All — ${TARGET_ENVIRONMENT}"
             echo ""
-            echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
+            echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createAnthropicModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
             echo ""
             echo "\`\`\`text"
             echo "infra -> prepare-database -> database -> api -+-> functions -+-> tests -> summary"
@@ -251,7 +251,7 @@ jobs:
           {
             echo "# Deploy All — ${TARGET_ENVIRONMENT} — result"
             echo ""
-            echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
+            echo "Commit \`${GITHUB_SHA::7}\` · trigger \`${TRIGGER}\` · by @${GITHUB_ACTOR} · createAnthropicModelDeployments=${CREATE_MODEL_DEPLOYMENTS}"
             echo ""
             echo "| Stage | Result |"
             echo "|---|---|"

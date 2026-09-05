@@ -41,11 +41,18 @@ az deployment sub what-if --location eastus2 \
 
 Two invariants for re-runs:
 
-1. **`createModelDeployments = false` after day 0.** Anthropic (Claude) model deployments
-   are create-once under ARM — re-PUTing an existing one drives it to `Failed`. The
-   parameter files ship with `false`; override to `true` on the command line for the very
-   first deployment of a new environment only. Model lifecycle after that belongs to the
-   control plane, not Bicep.
+1. **`createAnthropicModelDeployments = false` after day 0.** Anthropic (Claude) model
+   deployments are create-once under ARM — re-PUTing an existing one drives it to `Failed`.
+   The parameter files ship with `false`; override to `true` on the command line for the very
+   first deployment of a new environment only.
+
+   **OpenAI-format deployments are not covered by the flag.** They are a genuine upsert:
+   re-PUTing one with the same model, SKU and capacity leaves `provisioningState = Succeeded`
+   and `createdAt` untouched (verified against a live account, 2026-09-05). So ARM reconciles
+   them on **every** run, which is what stops a missing OpenAI deployment from leaving the
+   gateway answering `404 DeploymentNotFound` on every model with nothing owning the fix
+   ([#259](https://github.com/kolatts/foundry-gate/issues/259)). Claude deployment lifecycle
+   after day 0 still belongs to the control plane, not Bicep.
 2. **Pass the current API image — always.** The Container App's image is a parameter
    (`apiContainerImage`), and the param files read it from the `FG_API_IMAGE` environment
    variable **with no default**, so `build-params` fails loudly rather than silently
@@ -155,6 +162,27 @@ One thing to watch on any environment: a `429` is only the developer's own meter
 backing Foundry deployment saturating, which means its capacity is below the tier's TPM cap and
 the developer's budget can never bind
 ([#260](https://github.com/kolatts/foundry-gate/issues/260)).
+
+### The capacity ceiling
+
+A tier is well-formed between two bounds. The floor above is one agent turn. The ceiling is a
+resource the tier does not mention — the deployment behind each alias:
+
+```
+sum(capacity of the deployments an alias routes to) x 1000  >=  TPM of every tier that reaches it
+```
+
+A pooled deployment exists in every Foundry region, so its capacity multiplies by the region
+count; a primary-only one does not. Below the ceiling, every throttle a developer sees is the
+shared deployment rather than their own allocation, `x-fg-remaining-tpm` is permanently
+misleading, and one developer's traffic throttles another's even though the meters are correctly
+isolated per subscription.
+
+The deploy computes the shortfalls from the parameters actually in use and emits one
+`::warning::` per offending `(tier, alias)` — reported, never fatal, because capacity is a human
+decision and for Claude a create-once one
+([#205](https://github.com/kolatts/foundry-gate/issues/205)). The shipped defaults are checked
+offline too, for OpenAI aliases, by `InfraModelDeploymentTests`.
 
 The agent-facing runbook, including the Anthropic create-once rules and the failure-mode
 table, is `.claude/skills/gateway-cycle/SKILL.md`. Committed evidence from real runs lives
