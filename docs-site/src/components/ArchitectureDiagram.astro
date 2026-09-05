@@ -1,0 +1,650 @@
+---
+// Architecture at a glance — every FACT on this page comes from
+// src/generated/architecture.json, which docs-site/scripts/generate-architecture.mjs
+// derives from infra/*.bicep and src/**. No region, tier, model name, schedule, route or
+// module edge is transcribed by hand: change one in the repo and the next `npm run build`
+// moves the picture, and CI fails the PR that forgot to commit the regenerated file
+// (#221). The connective prose around them — the layer titles, the arrow labels, which
+// reference page each node links to — is written here.
+//
+// HTML/CSS rather than SVG on purpose: the nodes are links, the text is selectable and
+// searchable, and the whole thing reflows to one column on a phone without a second
+// hand-laid-out mobile variant. Shared primitives come from src/styles/diagrams.css.
+import { execSync } from 'node:child_process';
+import arch from '../generated/architecture.json';
+import { tokens, scheduleInline } from '../lib/architecture';
+import FgIcon from './FgIcon.astro';
+
+const base = import.meta.env.BASE_URL.endsWith('/')
+  ? import.meta.env.BASE_URL
+  : `${import.meta.env.BASE_URL}/`;
+
+// Provenance is stamped at build time, not baked into the generated JSON — a sha inside
+// a committed generated file would go stale on its own commit and make the CI freshness
+// check unsatisfiable.
+let commit = '';
+try {
+  commit = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+    .toString()
+    .trim();
+} catch {
+  commit = (process.env.GITHUB_SHA ?? '').slice(0, 7);
+}
+
+const { infra, code } = arch;
+const fmt = tokens;
+
+// The .NET side, in dependency order: projects that reference nothing first, then each
+// project once everything it references has been placed. Rendered as layers under the
+// module graph, so the generated ProjectReference data is drawn, not just carried.
+const shipping = code.projects.filter((p) => !p.isTest);
+const projectLayers: (typeof shipping)[] = [];
+const placed = new Set<string>();
+while (placed.size < shipping.length) {
+  const layer = shipping.filter(
+    (p) => !placed.has(p.name) && p.references.every((r) => placed.has(r) || !shipping.some((s) => s.name === r)),
+  );
+  // Defensive: a reference cycle would loop forever. Bicep-style fail-loud is wrong for a
+  // docs page, so drop the remainder into a final layer instead.
+  if (!layer.length) {
+    projectLayers.push(shipping.filter((p) => !placed.has(p.name)));
+    break;
+  }
+  layer.forEach((p) => placed.add(p.name));
+  projectLayers.push(layer);
+}
+
+const ref = (slug: string) => `${base}${slug}/`;
+
+const controlPlaneNodes = [
+  {
+    title: 'FoundryGate.Web',
+    sub: 'Blazor WebAssembly on Static Web Apps — the admin and self-service UI',
+    href: ref('reference/web-ui'),
+    module: 'staticWebApp',
+  },
+  {
+    title: 'FoundryGate.Api',
+    // apiRoutes are the resolved prefixes (api/v1/users, …); the raw [Route] template
+    // with its [controller] token is not reader-facing.
+    sub: `ASP.NET Core on Container Apps — ${code.apiRoutes.length} route groups: ${code.apiRoutes
+      .map((r) => r.split('/').pop())
+      .join(', ')}`,
+    href: ref('reference/api'),
+    module: 'containerApp',
+  },
+  {
+    title: 'Azure SQL',
+    sub: 'Users, groups, quota allocations, requests, audit log — via EF Core',
+    href: ref('reference/infrastructure'),
+    module: 'sql',
+  },
+  {
+    title: 'FoundryGate.Functions',
+    sub: code.functions.map((f) => `${f.name.replace(/Function$/, '')} — ${scheduleInline(f.schedule)}`).join(' · '),
+    href: ref('reference/configuration'),
+    module: 'functionApp',
+  },
+  {
+    title: 'Azure Key Vault',
+    sub: 'APIM key-encryption key — no app secrets',
+    href: ref('reference/infrastructure'),
+    module: 'keyVault',
+  },
+  {
+    title: 'Log Analytics + App Insights',
+    sub: 'ApiManagementGatewayLlmLog — the billing-grade token record the sync reconciles against',
+    href: ref('reference/infrastructure'),
+    module: 'monitoring',
+  },
+];
+
+const ariaLabel =
+  `FoundryGate architecture, generated from infrastructure and source code. ` +
+  `Developer CLIs (${infra.frontDoors.map((d) => `${d.client} sending ${d.header}`).join(', ')}) ` +
+  `call the API Management gateway. The gateway has ${infra.frontDoors.length} front doors: ` +
+  `${infra.frontDoors.map((d) => `/${d.path}`).join(' and ')}. Each developer key belongs to one of ` +
+  `${infra.quotaTiers.length} tier products: ` +
+  infra.quotaTiers
+    .map(
+      (t) =>
+        `${t.displayName}, ${t.monthlyTokenQuota ? `${fmt(t.monthlyTokenQuota)} tokens per month` : 'no monthly cap'}, ` +
+        `${fmt(t.tpm)} tokens per minute, permitting ${t.aliases.map((a) => a.alias).join(', ')}`,
+    )
+    .join('; ') +
+  `. Requests route through backend pools to Azure AI Foundry accounts in ` +
+  infra.regions.map((r) => `${r.name} (${r.role}, ${r.deployments.length} model deployments)`).join(' and ') +
+  `. Out of the request path, the control plane runs the Blazor UI, the API on Container Apps, Azure SQL, ` +
+  `Key Vault and ${code.functions.length} timer functions: ` +
+  code.functions.map((f) => `${f.name} ${scheduleInline(f.schedule)}`).join(', ') +
+  '.';
+---
+
+<figure class="fgd fgd-gen not-content" role="group" aria-labelledby="fgd-gen-title" aria-describedby="fgd-gen-desc">
+  <p id="fgd-gen-title" class="fgd-sr-only">FoundryGate architecture — generated from infra/ and src/</p>
+  <p id="fgd-gen-desc" class="fgd-sr-only">{ariaLabel}</p>
+
+  <!-- ── 1 · Developers ─────────────────────────────────────── -->
+  <section class="fgd-gen__layer fgd-gen__layer--ext">
+    <header class="fgd-gen__layer-head">
+      <span class="fgd-gen__icon" aria-hidden="true">
+        <FgIcon name="laptop" size="100%" />
+      </span>
+      <span class="fgd-gen__layer-name">1 · What developers run</span>
+      <span class="fgd-gen__layer-note">their laptop, their own key</span>
+    </header>
+    <div class="fgd-row fgd-row--2">
+      {infra.frontDoors.map((door) => (
+        <a class="fgd-node fgd-node--ext fgd-gen__node" href={ref('getting-started/cli-setup')}>
+          <div class="fgd-node__title">{door.client}</div>
+          <div class="fgd-node__sub">
+            sends its key as <code>{door.header}</code> to <code>/{door.path}</code>
+          </div>
+        </a>
+      ))}
+    </div>
+  </section>
+
+  <div class="fgd-arrow">
+    <span class="fgd-arrow__label"><strong>HTTPS</strong> — one personal APIM subscription key per developer</span>
+    <span class="fgd-arrow__line"></span>
+    <span class="fgd-arrow__head"></span>
+  </div>
+
+  <!-- ── 2 · Gateway ────────────────────────────────────────── -->
+  <section class="fgd-plane fgd-plane--data fgd-gen__layer">
+    <header class="fgd-gen__layer-head">
+      <span class="fgd-gen__icon fgd-gen__icon--azure" aria-hidden="true">
+        <FgIcon name="shield" size="100%" />
+      </span>
+      <span class="fgd-gen__layer-name">2 · The gate</span>
+      <span class="fgd-gen__layer-note">Azure API Management — every limit is enforced here, on the request itself</span>
+    </header>
+
+    <p class="fgd-gen__step">Front doors — one per model provider</p>
+    <div class="fgd-row fgd-row--2">
+      {infra.frontDoors.map((door) => (
+        <a class="fgd-node fgd-node--azure fgd-gen__node" href={ref('reference/infrastructure')}>
+          <div class="fgd-node__title"><code>/{door.path}</code></div>
+          <div class="fgd-node__sub">{door.label} · APIM API <code>{door.api}</code></div>
+        </a>
+      ))}
+    </div>
+
+    <div class="fgd-arrow">
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__label"><code>fg-require-product</code> — a key with no tier product is refused</span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+
+    <p class="fgd-gen__step">Tier products — the developer's key belongs to exactly one</p>
+    <div class="fgd-row fgd-row--3">
+      {infra.quotaTiers.map((tier) => (
+        <a class="fgd-node fgd-node--azure fgd-gen__node fgd-gen__tier" href={ref('reference/cost-and-capacity')}>
+          <div class="fgd-node__title">{tier.displayName}</div>
+          <div class="fgd-gen__stat">
+            <span class="fgd-gen__stat-num">
+              {tier.monthlyTokenQuota ? fmt(tier.monthlyTokenQuota) : '∞'}
+            </span>
+            <span class="fgd-gen__stat-unit">tokens / month</span>
+          </div>
+          <div class="fgd-gen__stat fgd-gen__stat--minor">
+            <span class="fgd-gen__stat-num">{fmt(tier.tpm)}</span>
+            <span class="fgd-gen__stat-unit">tokens / minute</span>
+          </div>
+          <div class="fgd-gen__chips">
+            {tier.aliases.map((a) => (
+              <span class="fgd-gen__chip" title={`${a.alias} → ${a.deployment} (${a.pool} pool)`}>{a.alias}</span>
+            ))}
+          </div>
+        </a>
+      ))}
+    </div>
+
+    <div class="fgd-gen__policy">
+      <div class="fgd-gen__policy-title">
+        <code>llm-token-limit</code> + the alias allowlist, counted against the developer's own subscription
+      </div>
+      <div class="fgd-gen__policy-body">
+        <span class="fgd-badge fgd-badge--muted">200 · headers carry what's left</span>
+        <span class="fgd-badge fgd-badge--ember">429 + <code>Retry-After</code> · going too fast</span>
+        <span class="fgd-badge fgd-badge--hot">403 · monthly budget spent, or model not on the tier</span>
+      </div>
+    </div>
+
+    <div class="fgd-arrow">
+      <span class="fgd-arrow__line"></span>
+      <span class="fgd-arrow__label">gateway <strong>managed identity</strong> — no Foundry account keys exist anywhere</span>
+      <span class="fgd-arrow__head"></span>
+    </div>
+
+    <p class="fgd-gen__step">Backend pools — where an allowed request is sent</p>
+    <div class="fgd-row fgd-row--2">
+      {infra.pools.map((pool) => (
+        <div class="fgd-node fgd-node--azure">
+          <div class="fgd-node__title"><code>{pool.name}</code></div>
+          <div class="fgd-node__sub">
+            {pool.kind === 'pool'
+              ? pool.members.map((m) => `priority ${m.priority} ${m.region}`).join(' → ')
+              : `${pool.members[0]?.region} only`}
+            {pool.kind === 'pool' ? ' · circuit breaker per backend, retried across the pool' : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  </section>
+
+  <div class="fgd-arrow">
+    <span class="fgd-arrow__line"></span>
+    <span class="fgd-arrow__head"></span>
+  </div>
+
+  <!-- ── 3 · Foundry ────────────────────────────────────────── -->
+  <section class="fgd-gen__layer fgd-gen__layer--models">
+    <header class="fgd-gen__layer-head">
+      <span class="fgd-gen__icon fgd-gen__icon--azure" aria-hidden="true">
+        <FgIcon name="chip" size="100%" />
+      </span>
+      <span class="fgd-gen__layer-name">3 · The models</span>
+      <span class="fgd-gen__layer-note">
+        Azure AI Foundry accounts, one per region in <code>foundryRegions</code>
+      </span>
+    </header>
+    <div class="fgd-row fgd-row--2">
+      {infra.regions.map((region) => (
+        <a class="fgd-node fgd-node--azure fgd-gen__node" href={ref('reference/infrastructure')}>
+          <div class="fgd-node__title">
+            {region.name}
+            <span class="fgd-gen__pill">{region.role}</span>
+          </div>
+          <ul class="fgd-gen__models">
+            {region.deployments.map((d) => (
+              <li>
+                <code>{d.name}</code>
+                <span class="fgd-gen__models-meta">{d.format} · {d.sku} · capacity {d.capacity}</span>
+              </li>
+            ))}
+          </ul>
+        </a>
+      ))}
+    </div>
+  </section>
+
+  <div class="fgd-arrow fgd-arrow--dashed">
+    <span class="fgd-arrow__line"></span>
+    <span class="fgd-arrow__label">
+      <strong>Out of band</strong> — the gateway streams per-request token logs to Log Analytics; the
+      control plane reads them afterwards. It is never consulted during a request.
+    </span>
+    <span class="fgd-arrow__head"></span>
+  </div>
+
+  <!-- ── 4 · Control plane ──────────────────────────────────── -->
+  <section class="fgd-plane fgd-plane--control fgd-gen__layer">
+    <header class="fgd-gen__layer-head">
+      <span class="fgd-gen__icon fgd-gen__icon--app" aria-hidden="true">
+        <FgIcon name="sliders" size="100%" />
+      </span>
+      <span class="fgd-gen__layer-name">4 · The app that manages it</span>
+      <span class="fgd-gen__layer-note">
+        deployed only when <code>deployControlPlane</code> is true
+      </span>
+    </header>
+    <div class="fgd-row fgd-row--2">
+      {controlPlaneNodes.map((node) => (
+        <a class="fgd-node fgd-node--app fgd-gen__node" href={node.href}>
+          <div class="fgd-node__title">{node.title}</div>
+          <div class="fgd-node__sub">{node.sub}</div>
+        </a>
+      ))}
+    </div>
+  </section>
+
+  <!-- ── Module graph ───────────────────────────────────────── -->
+  <section class="fgd-gen__layer fgd-gen__layer--graph">
+    <header class="fgd-gen__layer-head">
+      <span class="fgd-gen__icon" aria-hidden="true">
+        <FgIcon name="graph" size="100%" />
+      </span>
+      <span class="fgd-gen__layer-name">How it gets built</span>
+      <span class="fgd-gen__layer-note">
+        the Bicep module graph of <code>{infra.entrypoint}</code> — an arrow means "consumes that
+        module's outputs"
+      </span>
+    </header>
+    <ol class="fgd-gen__graph">
+      {infra.modules.map((mod) => (
+        <li class:list={['fgd-gen__graph-row', mod.conditional && 'fgd-gen__graph-row--cond']}>
+          <span class="fgd-gen__graph-name">
+            {mod.symbol}
+            {mod.forEach ? <span class="fgd-gen__pill">per region</span> : null}
+            {mod.conditional ? <span class="fgd-gen__pill fgd-gen__pill--cond">if {mod.conditional}</span> : null}
+          </span>
+          <span class="fgd-gen__graph-dep">
+            {mod.dependsOn.length ? `← ${mod.dependsOn.join(', ')}` : 'no dependencies'}
+          </span>
+          <code class="fgd-gen__graph-file">{mod.template}</code>
+        </li>
+      ))}
+    </ol>
+    <p class="fgd-gen__aside">
+      The control plane module fans out into {infra.controlPlaneModules.length} more:{' '}
+      {infra.controlPlaneModules.map((m) => m.symbol).join(', ')}.
+    </p>
+
+    <p class="fgd-gen__step">
+      And the .NET side — {shipping.length} shipping projects, in reference order (each row
+      may only reference the rows above it)
+    </p>
+    <ol class="fgd-gen__stack">
+      {projectLayers.map((layer) => (
+        <li class="fgd-gen__stack-row">
+          {layer.map((p) => (
+            <span class="fgd-gen__stack-item">
+              {p.name}
+              <span class="fgd-gen__stack-refs">
+                {p.references.length ? `→ ${p.references.map((r) => r.replace('FoundryGate.', '')).join(', ')}` : 'references nothing'}
+              </span>
+            </span>
+          ))}
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <figcaption class="fgd-legend fgd-gen__caption">
+    <span class="fgd-legend__item"><span class="fgd-legend__swatch"></span> the request path — real-time enforcement</span>
+    <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--dashed"></span> out of band — telemetry and reconciliation</span>
+    <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--app"></span> control plane — lifecycle and tiers</span>
+    <span class="fgd-provenance">
+      Generated from <code>infra/</code> and <code>src/</code> at build time{commit ? ` · commit ${commit}` : ''} ·{' '}
+      <a href="https://github.com/kolatts/foundry-gate/blob/main/docs-site/scripts/generate-architecture.mjs">generator</a>
+    </span>
+  </figcaption>
+</figure>
+
+<style>
+  .fgd-gen__layer {
+    margin: 0;
+  }
+
+  .fgd-gen__layer--ext,
+  .fgd-gen__layer--models,
+  .fgd-gen__layer--graph {
+    border: 1px solid var(--fg-border-subtle, #1C2E44);
+    border-radius: 12px;
+    padding: 0.7rem 0.9rem 0.9rem;
+    background: color-mix(in srgb, var(--fg-bg-surface, #0C1420) 55%, transparent);
+  }
+
+  .fgd-gen__layer-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.15rem 0.55rem;
+    margin-bottom: 0.7rem;
+  }
+
+  .fgd-gen__icon {
+    width: 1.1rem;
+    height: 1.1rem;
+    flex: 0 0 auto;
+    align-self: center;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  .fgd-gen__icon svg { width: 100%; height: 100%; display: block; }
+  .fgd-gen__icon--azure { color: var(--fg-azure-neon, #4DCFFF); }
+  .fgd-gen__icon--app { color: var(--fg-ember-soft, #FFB347); }
+
+  .fgd-gen__layer-name {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--fg-text-secondary, #C4D0DC);
+  }
+
+  .fgd-gen__layer-note {
+    font-size: 0.72rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  .fgd-gen__step {
+    margin: 0.75rem 0 0.4rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  .fgd-gen__step:first-of-type { margin-top: 0; }
+
+  /* Nodes that are links: keep the box styling, drop the underline, add a lift. */
+  a.fgd-gen__node {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.2s, box-shadow 0.2s;
+  }
+
+  a.fgd-gen__node:hover,
+  a.fgd-gen__node:focus-visible {
+    transform: translateY(-2px);
+    border-color: var(--fg-azure-neon, #4DCFFF);
+    box-shadow: 0 6px 20px color-mix(in srgb, #000 28%, transparent);
+  }
+
+  a.fgd-gen__node:focus-visible {
+    outline: 2px solid var(--fg-azure-neon, #4DCFFF);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    a.fgd-gen__node { transition: none; }
+    a.fgd-gen__node:hover, a.fgd-gen__node:focus-visible { transform: none; }
+  }
+
+  /* Tier cards — the numbers are the point, so they get to be big. */
+  .fgd-gen__tier { text-align: left; }
+
+  .fgd-gen__stat {
+    display: flex;
+    align-items: baseline;
+    gap: 0.3rem;
+    margin-top: 0.35rem;
+  }
+
+  .fgd-gen__stat-num {
+    font-family: var(--fgd-mono);
+    font-size: 1.15rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--fg-azure-neon, #4DCFFF);
+  }
+
+  .fgd-gen__stat--minor .fgd-gen__stat-num {
+    font-size: 0.9rem;
+    color: var(--fg-text-secondary, #C4D0DC);
+  }
+
+  .fgd-gen__stat-unit {
+    font-size: 0.66rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  .fgd-gen__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+  }
+
+  .fgd-gen__chip {
+    font-family: var(--fgd-mono);
+    font-size: 0.64rem;
+    padding: 0.12rem 0.4rem;
+    border-radius: 4px;
+    color: var(--fg-text-secondary, #C4D0DC);
+    background: color-mix(in srgb, var(--fg-azure, #0078D4) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg-azure, #0078D4) 30%, transparent);
+  }
+
+  .fgd-gen__policy {
+    margin-top: 0.6rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px dashed color-mix(in srgb, var(--fg-azure-neon, #4DCFFF) 45%, transparent);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--fg-azure, #0078D4) 8%, transparent);
+    text-align: center;
+  }
+
+  .fgd-gen__policy-title {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: var(--fg-text-secondary, #C4D0DC);
+  }
+
+  .fgd-gen__policy-body {
+    margin-top: 0.4rem;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.35rem 0.5rem;
+  }
+
+  .fgd-gen__pill {
+    display: inline-block;
+    margin-left: 0.4rem;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.1rem 0.35rem;
+    border-radius: 100px;
+    color: var(--fg-text-muted, #7E96AD);
+    border: 1px solid var(--fg-border-strong, #2A4260);
+    vertical-align: middle;
+  }
+
+  .fgd-gen__pill--cond {
+    color: var(--fg-ember-soft, #FFB347);
+    border-color: color-mix(in srgb, var(--fg-ember, #F58025) 45%, transparent);
+    text-transform: none;
+    font-family: var(--fgd-mono);
+    letter-spacing: 0;
+  }
+
+  .fgd-gen__models {
+    list-style: none;
+    margin: 0.4rem 0 0;
+    padding: 0;
+    text-align: left;
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .fgd-gen__models li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.15rem 0.45rem;
+    font-size: 0.72rem;
+  }
+
+  .fgd-gen__models-meta {
+    font-size: 0.65rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  /* Module graph rows */
+  .fgd-gen__graph {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .fgd-gen__graph-row {
+    display: grid;
+    grid-template-columns: minmax(9rem, auto) 1fr auto;
+    align-items: baseline;
+    gap: 0.2rem 0.75rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 6px;
+    background: var(--fg-bg-raised, #101B2A);
+    border: 1px solid var(--fg-border-subtle, #1C2E44);
+    font-size: 0.74rem;
+  }
+
+  .fgd-gen__graph-row--cond {
+    border-style: dashed;
+    border-color: color-mix(in srgb, var(--fg-ember, #F58025) 40%, transparent);
+  }
+
+  .fgd-gen__graph-name {
+    font-family: var(--fgd-mono);
+    font-weight: 600;
+    color: var(--fg-text-primary, #EDF2F7);
+  }
+
+  .fgd-gen__graph-dep { color: var(--fg-text-muted, #7E96AD); }
+
+  .fgd-gen__graph-file {
+    font-size: 0.66rem !important;
+    color: var(--fg-text-muted, #7E96AD) !important;
+    justify-self: end;
+  }
+
+  .fgd-gen__aside {
+    margin: 0.7rem 0 0;
+    font-size: 0.74rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  /* Project reference layers: bottom-up, each row only referencing the rows above it. */
+  .fgd-gen__stack {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .fgd-gen__stack-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .fgd-gen__stack-item {
+    flex: 1 1 12rem;
+    display: grid;
+    gap: 0.1rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid var(--fg-border-subtle, #1C2E44);
+    background: var(--fg-bg-raised, #101B2A);
+    font-family: var(--fgd-mono);
+    font-size: 0.72rem;
+    color: var(--fg-text-primary, #EDF2F7);
+  }
+
+  .fgd-gen__stack-refs {
+    font-size: 0.66rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  .fgd-gen__caption {
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--fg-border-subtle, #1C2E44);
+  }
+
+  @media (max-width: 719px) {
+    .fgd-gen__graph-row {
+      grid-template-columns: 1fr;
+    }
+    .fgd-gen__graph-file { justify-self: start; }
+  }
+</style>

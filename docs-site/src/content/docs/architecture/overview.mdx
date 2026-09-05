@@ -12,7 +12,7 @@ import Pipeline from '../../../components/Pipeline.astro';
 import QuotaChain from '../../../components/QuotaChain.astro';
 import KeyLifecycle from '../../../components/KeyLifecycle.astro';
 
-*The plain-English version of this page is [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/); the full platform detail lives in [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) and the [reference section](/foundry-gate/reference/configuration/).*
+*The plain-English version of this page is [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/); the one-picture version is [Architecture at a glance](/foundry-gate/architecture/diagram/), generated from `infra/` and `src/`; the full platform detail lives in [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) and the [reference section](/foundry-gate/reference/configuration/).*
 
 FoundryGate is a governance and access-management layer for Azure AI Foundry. It provisions the gateway and the model deployments — Claude models are set up by the infrastructure deploy, and admins manage OpenAI model deployments from the UI — then adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
 
@@ -34,6 +34,19 @@ Two details on the diagram are ground truths worth stating plainly:
 - **Reconciliation is the dashed path.** The Functions read the gateway's
   `ApiManagementGatewayLlmLog` table to keep `QuotaAllocation.TokensUsed`, dashboards, and
   cost figures authoritative. If that sync stopped, enforcement would continue unchanged.
+
+The layout of the diagram above is hand-drawn, but the values in it that also exist in the
+repository — the regions and their model deployments, the tier limits, the front-door
+paths, the pool priorities and the Functions' schedules — are generated from `infra/` and
+`src/` at build time, so they cannot drift from `main.bicep`. The fully generated picture
+is [Architecture at a glance](/foundry-gate/architecture/diagram/); the deploy pipeline,
+quota chain and key lifecycle diagrams further down this page are conceptual by nature —
+they show sequences and decisions, not deployed resources.
+
+**Live evidence.** Responses captured from real deployed gateways — the 429s, the 403s,
+the header measurements — are written up in
+[`validation/`](https://github.com/kolatts/foundry-gate/tree/main/validation) in the
+repository, one file per gateway cycle.
 
 ---
 

@@ -6,6 +6,7 @@ sidebar:
 ---
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+import RequestJourney from '../../../components/RequestJourney.astro';
 
 ## In plain words
 
@@ -20,7 +21,16 @@ sizes — a standard one, a bigger one for heavy users, and unlimited — so "mo
 means moving up a size, not haggling over a number.
 
 The rest of this page explains the same idea in more technical terms. For the
-next level of detail, see the [system overview](/foundry-gate/architecture/overview/).
+next level of detail, see the [system overview](/foundry-gate/architecture/overview/),
+or [the whole system in one picture](/foundry-gate/architecture/diagram/).
+
+## What happens to one request
+
+Here is the entire life of a single request, from the developer's terminal to the model
+and back. The tier numbers are read out of the infrastructure at build time, so they are
+whatever the deployment actually enforces.
+
+<RequestJourney />
 
 ## The gap, technically
 
