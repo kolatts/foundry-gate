@@ -585,6 +585,7 @@
       "api/v1/config",
       "api/v1/dashboard",
       "api/v1/foundry",
+      "api/v1/gateway",
       "api/v1/groups",
       "api/v1/keys",
       "api/v1/quota",
