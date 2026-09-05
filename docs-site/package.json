@@ -3,7 +3,10 @@
   "type": "module",
   "version": "0.1.0",
   "scripts": {
+    "generate:architecture": "node scripts/generate-architecture.mjs",
+    "predev": "node scripts/generate-architecture.mjs",
     "dev": "astro dev",
+    "prebuild": "node scripts/generate-architecture.mjs",
     "build": "astro build",
     "preview": "astro preview"
   },

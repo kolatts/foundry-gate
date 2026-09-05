@@ -1,0 +1,595 @@
+{
+  "note": "GENERATED FILE — do not edit. Run docs-site/scripts/generate-architecture.mjs.",
+  "generator": "docs-site/scripts/generate-architecture.mjs",
+  "sources": [
+    "infra/main.bicep",
+    "infra/modules/ai-gateway.bicep",
+    "infra/modules/apim.bicep",
+    "infra/modules/container-app.bicep",
+    "infra/modules/container-registry.bicep",
+    "infra/modules/control-plane-rbac.bicep",
+    "infra/modules/control-plane.bicep",
+    "infra/modules/foundry-rbac.bicep",
+    "infra/modules/foundry.bicep",
+    "infra/modules/function-app.bicep",
+    "infra/modules/key-vault.bicep",
+    "infra/modules/managed-identities.bicep",
+    "infra/modules/monitoring.bicep",
+    "infra/modules/sql.bicep",
+    "infra/modules/static-web-app.bicep",
+    "infra/modules/storage-account.bicep",
+    "infra/modules/swa-preview-role.bicep",
+    "src/FoundryGate.Api/FoundryGate.Api.csproj",
+    "src/FoundryGate.Cli/FoundryGate.Cli.csproj",
+    "src/FoundryGate.Core/FoundryGate.Core.csproj",
+    "src/FoundryGate.Data/FoundryGate.Data.csproj",
+    "src/FoundryGate.Domain/FoundryGate.Domain.csproj",
+    "src/FoundryGate.Functions/FoundryGate.Functions.csproj",
+    "src/FoundryGate.Functions/Functions/EntraSyncFunction.cs",
+    "src/FoundryGate.Functions/Functions/MonthlyQuotaResetFunction.cs",
+    "src/FoundryGate.Functions/Functions/UsageSyncFunction.cs",
+    "src/FoundryGate.Tests.Postdeployment/FoundryGate.Tests.Postdeployment.csproj",
+    "src/FoundryGate.Tests.Predeployment/FoundryGate.Tests.Predeployment.csproj",
+    "src/FoundryGate.Web/FoundryGate.Web.csproj"
+  ],
+  "infra": {
+    "entrypoint": "infra/main.bicep",
+    "scope": "subscription",
+    "resourceGroup": "rg-foundrygate-${environmentName}",
+    "modules": [
+      {
+        "symbol": "monitoring",
+        "file": "infra/main.bicep",
+        "template": "modules/monitoring.bicep",
+        "component": "monitoring",
+        "role": "monitoring",
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": []
+      },
+      {
+        "symbol": "foundry",
+        "file": "infra/main.bicep",
+        "template": "modules/foundry.bicep",
+        "component": "foundry",
+        "role": "foundry",
+        "conditional": null,
+        "forEach": "(region, i) in foundryRegions",
+        "dependsOn": []
+      },
+      {
+        "symbol": "apim",
+        "file": "infra/main.bicep",
+        "template": "modules/apim.bicep",
+        "component": "apim",
+        "role": "gateway",
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": [
+          "monitoring"
+        ]
+      },
+      {
+        "symbol": "foundryRbac",
+        "file": "infra/main.bicep",
+        "template": "modules/foundry-rbac.bicep",
+        "component": "foundry-rbac",
+        "role": null,
+        "conditional": null,
+        "forEach": "(region, i) in foundryRegions",
+        "dependsOn": [
+          "apim",
+          "foundry"
+        ]
+      },
+      {
+        "symbol": "gateway",
+        "file": "infra/main.bicep",
+        "template": "modules/ai-gateway.bicep",
+        "component": "ai-gateway",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": [
+          "apim",
+          "foundry",
+          "foundryRbac"
+        ]
+      },
+      {
+        "symbol": "controlPlane",
+        "file": "infra/main.bicep",
+        "template": "modules/control-plane.bicep",
+        "component": "control-plane",
+        "role": null,
+        "conditional": "deployControlPlane",
+        "forEach": null,
+        "dependsOn": [
+          "apim",
+          "foundry",
+          "gateway",
+          "monitoring"
+        ]
+      },
+      {
+        "symbol": "swaPreviewRole",
+        "file": "infra/main.bicep",
+        "template": "modules/swa-preview-role.bicep",
+        "component": "swa-preview-role",
+        "role": null,
+        "conditional": "deployControlPlane && deploySwaPreviewRole",
+        "forEach": null,
+        "dependsOn": [
+          "controlPlane"
+        ]
+      }
+    ],
+    "controlPlaneModules": [
+      {
+        "symbol": "identities",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "managed-identities.bicep",
+        "component": "managed-identities",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": []
+      },
+      {
+        "symbol": "keyVault",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "key-vault.bicep",
+        "component": "key-vault",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": []
+      },
+      {
+        "symbol": "registry",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "container-registry.bicep",
+        "component": "container-registry",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": []
+      },
+      {
+        "symbol": "storage",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "storage-account.bicep",
+        "component": "storage-account",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": []
+      },
+      {
+        "symbol": "sql",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "sql.bicep",
+        "component": "sql",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": []
+      },
+      {
+        "symbol": "staticWebApp",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "static-web-app.bicep",
+        "component": "static-web-app",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": []
+      },
+      {
+        "symbol": "rbac",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "control-plane-rbac.bicep",
+        "component": "control-plane-rbac",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": [
+          "identities",
+          "keyVault",
+          "registry",
+          "storage"
+        ]
+      },
+      {
+        "symbol": "containerApp",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "container-app.bicep",
+        "component": "container-app",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": [
+          "identities",
+          "rbac",
+          "registry",
+          "staticWebApp"
+        ]
+      },
+      {
+        "symbol": "functionApp",
+        "file": "infra/modules/control-plane.bicep",
+        "template": "function-app.bicep",
+        "component": "function-app",
+        "role": null,
+        "conditional": null,
+        "forEach": null,
+        "dependsOn": [
+          "containerApp",
+          "identities",
+          "keyVault",
+          "rbac",
+          "registry",
+          "sql",
+          "staticWebApp",
+          "storage"
+        ]
+      }
+    ],
+    "regions": [
+      {
+        "name": "eastus2",
+        "role": "primary",
+        "poolPriority": 1,
+        "deployments": [
+          {
+            "name": "claude-sonnet-4-5",
+            "format": "Anthropic",
+            "model": "claude-sonnet-4-5 (20250929)",
+            "sku": "GlobalStandard",
+            "capacity": 10
+          },
+          {
+            "name": "claude-haiku-4-5",
+            "format": "Anthropic",
+            "model": "claude-haiku-4-5 (20251001)",
+            "sku": "GlobalStandard",
+            "capacity": 5
+          },
+          {
+            "name": "claude-opus-4-5",
+            "format": "Anthropic",
+            "model": "claude-opus-4-5 (20251101)",
+            "sku": "GlobalStandard",
+            "capacity": 5
+          },
+          {
+            "name": "gpt-4-1-mini",
+            "format": "OpenAI",
+            "model": "gpt-4.1-mini (2025-04-14)",
+            "sku": "GlobalStandard",
+            "capacity": 10
+          }
+        ]
+      },
+      {
+        "name": "swedencentral",
+        "role": "pool-member",
+        "poolPriority": 2,
+        "deployments": [
+          {
+            "name": "claude-sonnet-4-5",
+            "format": "Anthropic",
+            "model": "claude-sonnet-4-5 (20250929)",
+            "sku": "GlobalStandard",
+            "capacity": 10
+          },
+          {
+            "name": "claude-haiku-4-5",
+            "format": "Anthropic",
+            "model": "claude-haiku-4-5 (20251001)",
+            "sku": "GlobalStandard",
+            "capacity": 5
+          },
+          {
+            "name": "claude-opus-4-5",
+            "format": "Anthropic",
+            "model": "claude-opus-4-5 (20251101)",
+            "sku": "GlobalStandard",
+            "capacity": 5
+          }
+        ]
+      }
+    ],
+    "quotaTiers": [
+      {
+        "name": "standard",
+        "displayName": "Standard",
+        "description": "Everyday agent usage. 5M tokens/month, 20K tokens/minute.",
+        "monthlyTokenQuota": 5000000,
+        "tpm": 20000,
+        "aliases": [
+          {
+            "alias": "gpt",
+            "deployment": "gpt-4-1-mini",
+            "pool": "openai",
+            "provider": "openai"
+          },
+          {
+            "alias": "haiku",
+            "deployment": "claude-haiku-4-5",
+            "pool": "anthropic",
+            "provider": "anthropic"
+          },
+          {
+            "alias": "sonnet",
+            "deployment": "claude-sonnet-4-5",
+            "pool": "anthropic",
+            "provider": "anthropic"
+          }
+        ]
+      },
+      {
+        "name": "power",
+        "displayName": "Power",
+        "description": "Heavy agentic workloads. 20M tokens/month, 40K tokens/minute.",
+        "monthlyTokenQuota": 20000000,
+        "tpm": 40000,
+        "aliases": [
+          {
+            "alias": "gpt",
+            "deployment": "gpt-4-1-mini",
+            "pool": "openai",
+            "provider": "openai"
+          },
+          {
+            "alias": "haiku",
+            "deployment": "claude-haiku-4-5",
+            "pool": "anthropic",
+            "provider": "anthropic"
+          },
+          {
+            "alias": "sonnet",
+            "deployment": "claude-sonnet-4-5",
+            "pool": "anthropic",
+            "provider": "anthropic"
+          }
+        ]
+      },
+      {
+        "name": "unlimited",
+        "displayName": "Unlimited",
+        "description": "No gateway-enforced monthly budget; burst smoothing only. Monthly oversight is the control plane's job.",
+        "monthlyTokenQuota": 0,
+        "tpm": 100000,
+        "aliases": [
+          {
+            "alias": "gpt",
+            "deployment": "gpt-4-1-mini",
+            "pool": "openai",
+            "provider": "openai"
+          },
+          {
+            "alias": "haiku",
+            "deployment": "claude-haiku-4-5",
+            "pool": "anthropic",
+            "provider": "anthropic"
+          },
+          {
+            "alias": "opus",
+            "deployment": "claude-opus-4-5",
+            "pool": "anthropic",
+            "provider": "anthropic"
+          },
+          {
+            "alias": "sonnet",
+            "deployment": "claude-sonnet-4-5",
+            "pool": "anthropic",
+            "provider": "anthropic"
+          }
+        ]
+      }
+    ],
+    "modelDeployments": {
+      "pooled": [
+        {
+          "name": "claude-sonnet-4-5",
+          "format": "Anthropic",
+          "model": "claude-sonnet-4-5",
+          "version": "20250929",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        },
+        {
+          "name": "claude-haiku-4-5",
+          "format": "Anthropic",
+          "model": "claude-haiku-4-5",
+          "version": "20251001",
+          "sku": "GlobalStandard",
+          "capacity": 5
+        },
+        {
+          "name": "claude-opus-4-5",
+          "format": "Anthropic",
+          "model": "claude-opus-4-5",
+          "version": "20251101",
+          "sku": "GlobalStandard",
+          "capacity": 5
+        }
+      ],
+      "primaryOnly": [
+        {
+          "name": "gpt-4-1-mini",
+          "format": "OpenAI",
+          "model": "gpt-4.1-mini",
+          "version": "2025-04-14",
+          "sku": "GlobalStandard",
+          "capacity": 10
+        }
+      ]
+    },
+    "frontDoors": [
+      {
+        "provider": "anthropic",
+        "path": "anthropic",
+        "api": "foundrygate-anthropic",
+        "label": "Anthropic Messages API",
+        "client": "Claude Code",
+        "header": "x-api-key"
+      },
+      {
+        "provider": "openai",
+        "path": "openai/v1",
+        "api": "foundrygate-openai",
+        "label": "OpenAI Responses / Chat Completions",
+        "client": "Codex CLI",
+        "header": "api-key"
+      }
+    ],
+    "pools": [
+      {
+        "name": "foundry-anthropic-pool",
+        "kind": "pool",
+        "members": [
+          {
+            "region": "eastus2",
+            "priority": 1
+          },
+          {
+            "region": "swedencentral",
+            "priority": 2
+          }
+        ]
+      },
+      {
+        "name": "foundry-openai (primary account)",
+        "kind": "single",
+        "members": [
+          {
+            "region": "eastus2",
+            "priority": 1
+          }
+        ]
+      }
+    ]
+  },
+  "code": {
+    "projects": [
+      {
+        "name": "FoundryGate.Api",
+        "path": "src/FoundryGate.Api/FoundryGate.Api.csproj",
+        "references": [
+          "FoundryGate.Core",
+          "FoundryGate.Data",
+          "FoundryGate.Domain"
+        ],
+        "isTest": false
+      },
+      {
+        "name": "FoundryGate.Cli",
+        "path": "src/FoundryGate.Cli/FoundryGate.Cli.csproj",
+        "references": [
+          "FoundryGate.Data",
+          "FoundryGate.Domain"
+        ],
+        "isTest": false
+      },
+      {
+        "name": "FoundryGate.Core",
+        "path": "src/FoundryGate.Core/FoundryGate.Core.csproj",
+        "references": [
+          "FoundryGate.Data",
+          "FoundryGate.Domain"
+        ],
+        "isTest": false
+      },
+      {
+        "name": "FoundryGate.Data",
+        "path": "src/FoundryGate.Data/FoundryGate.Data.csproj",
+        "references": [
+          "FoundryGate.Domain"
+        ],
+        "isTest": false
+      },
+      {
+        "name": "FoundryGate.Domain",
+        "path": "src/FoundryGate.Domain/FoundryGate.Domain.csproj",
+        "references": [],
+        "isTest": false
+      },
+      {
+        "name": "FoundryGate.Functions",
+        "path": "src/FoundryGate.Functions/FoundryGate.Functions.csproj",
+        "references": [
+          "FoundryGate.Core",
+          "FoundryGate.Data",
+          "FoundryGate.Domain"
+        ],
+        "isTest": false
+      },
+      {
+        "name": "FoundryGate.Tests.Postdeployment",
+        "path": "src/FoundryGate.Tests.Postdeployment/FoundryGate.Tests.Postdeployment.csproj",
+        "references": [
+          "FoundryGate.Domain"
+        ],
+        "isTest": true
+      },
+      {
+        "name": "FoundryGate.Tests.Predeployment",
+        "path": "src/FoundryGate.Tests.Predeployment/FoundryGate.Tests.Predeployment.csproj",
+        "references": [
+          "FoundryGate.Api",
+          "FoundryGate.Cli",
+          "FoundryGate.Core",
+          "FoundryGate.Data",
+          "FoundryGate.Domain",
+          "FoundryGate.Functions",
+          "FoundryGate.Web"
+        ],
+        "isTest": true
+      },
+      {
+        "name": "FoundryGate.Web",
+        "path": "src/FoundryGate.Web/FoundryGate.Web.csproj",
+        "references": [
+          "FoundryGate.Domain"
+        ],
+        "isTest": false
+      }
+    ],
+    "functions": [
+      {
+        "name": "EntraSyncFunction",
+        "file": "src/FoundryGate.Functions/Functions/EntraSyncFunction.cs",
+        "cron": "0 0 2 * * *",
+        "schedule": "Daily at 02:00 UTC"
+      },
+      {
+        "name": "MonthlyQuotaResetFunction",
+        "file": "src/FoundryGate.Functions/Functions/MonthlyQuotaResetFunction.cs",
+        "cron": "0 1 0 * * *",
+        "schedule": "Daily at 00:01 UTC"
+      },
+      {
+        "name": "UsageSyncFunction",
+        "file": "src/FoundryGate.Functions/Functions/UsageSyncFunction.cs",
+        "cron": "0 */15 * * * *",
+        "schedule": "Every 15 minutes"
+      }
+    ],
+    "apiRouteTemplates": [
+      "api/v1/[controller]"
+    ],
+    "apiRoutes": [
+      "api/v1/audit",
+      "api/v1/config",
+      "api/v1/dashboard",
+      "api/v1/foundry",
+      "api/v1/groups",
+      "api/v1/keys",
+      "api/v1/quota",
+      "api/v1/requests",
+      "api/v1/users"
+    ]
+  }
+}
