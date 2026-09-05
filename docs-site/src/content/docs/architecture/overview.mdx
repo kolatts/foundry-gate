@@ -169,6 +169,21 @@ product's policy carries that tier's budget and TPM cap, and changing a develope
 quota means moving their subscription between products. Subscription *suspension* is
 reserved for deactivation and offboarding — not quota exhaustion.
 
+**Which models a tier may use is enforced in the same place.** Each tier product carries a
+model alias map — an APIM named value holding `{ alias: { deployment, backend, provider } }`
+— and a policy fragment that runs *before* `llm-token-limit` rewrites the alias a developer
+pinned (`sonnet`, `haiku`, `gpt`) to the real Foundry deployment and routes it at the right
+backend. The map **is** the allowlist: an alias a tier does not list is refused with
+`403 model_not_permitted`, ahead of the quota policy, so a blocked model costs the developer
+nothing. Because it lives in a named value rather than in policy text, admins edit it from
+the **Models &amp; access** page (`/models`) through the APIM Management API — granting a tier
+a model, or re-pointing an alias at a newer deployment, takes effect without redeploying a
+policy or an infrastructure template. The API validates before it writes: an alias must be
+lower-case and url-safe, and it must point at a deployment the configured Foundry accounts
+actually have — in *every* account when it routes at the multi-region Anthropic pool, because
+the pool sends a throttled request to another region and a region missing the deployment would
+turn a `429` into a `404`.
+
 The usage-sync Function still runs, but as **reconciliation**, not enforcement. It is a
 .NET isolated worker on a Flex Consumption plan — scale-to-zero, so it costs nothing between
 ticks — reading the gateway's own log with the Function App's managed identity. The query it

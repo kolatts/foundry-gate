@@ -72,6 +72,7 @@ answers `409` anyway, the page says so and locks the form instead of navigating 
 | `/requests` | Any | The quota increase review queue. **Not admin-only**: a developer sees their own requests here (the nav links it as "My Requests"), an admin sees everyone's — the API scopes the list, not the route |
 | `/requests/{id}` | Owner or Admin | One request, with the approve/reject panel for admins |
 | `/foundry` | Admin | Foundry model deployments |
+| `/models` | Admin | Which models each quota tier is allowed to use — the gateway's own allowlist |
 | `/config` | Admin | Edit the `SystemConfiguration` key-value rows (the `RateCard` gets a multi-line box — it is JSON) |
 | `/audit` | Admin | Browse and filter the audit trail |
 
@@ -235,8 +236,52 @@ still coerces whatever is typed, so a model Azure lists before this endpoint doe
 deployable — ARM decides either way. If the catalogue can't be read, the dialog says so and the
 fields fall back to plain free text rather than to another hardcoded list.
 
+The dialog creates one deployment per account and can name **several accounts** — the chosen one,
+plus anything picked under "Also create in". That is one `POST /foundry/deployments` per account, run
+in order and reported separately, so a second region failing never reads as the first one having
+failed too. Which accounts a model belongs in is not a preference: a model served through the
+multi-region Anthropic pool must exist in every region, because the pool sends a throttled request to
+another one. OpenAI-format models are primary-account-only, so nothing extra is pre-selected today.
+
+After a create the page **polls each new deployment** until ARM stops moving it (`Succeeded`,
+`Failed` or `Canceled`), refreshing the grid as it goes, so you find out whether the thing you asked
+for works without pressing refresh. It gives up after about a minute; the state chips are still the
+truth at that point, they just stop updating themselves.
+
 A new deployment reaches developers through the gateway only once it is in the right backend pool
-([#83](https://github.com/kolatts/foundry-gate/issues/83)), which the page also says.
+([#83](https://github.com/kolatts/foundry-gate/issues/83)), which the page also says — and only once
+a tier is allowed to use it. So a successful create ends with a link into `/models` carrying the new
+deployment's name, which that page pre-fills into its "allow a model" dialog.
+
+### `/models`
+
+**Models &amp; access** — which models each quota tier is allowed to use, backed by
+[`GET`/`PUT /gateway/tiers/{tier}/models`](/foundry-gate/reference/api/#gateway--model-allowlist).
+This list *is* the rule the gateway enforces: a developer asking for a model their tier does not list
+is refused `403 model_not_permitted` at the gateway, before it costs them any quota. Changes take
+effect without redeploying anything.
+
+The page has three parts:
+
+- **At a glance** — a matrix of every alias any tier permits against every tier, so "who can use
+  `opus`?" is one look rather than three page visits. A tier that does not permit an alias shows
+  `—`.
+- **One panel per tier** — the tier's rows (alias, deployment, front door, backend) with *allow*,
+  *retarget* and *remove*. Each of those sends the tier's whole map, because the gateway reads one
+  JSON document; the page composes the new list from what is already there. Remove asks first and
+  says what happens: developers who have that model configured start being refused, and nothing is
+  deleted in Azure.
+- **What developers on this tier see** — the aliases as they would appear in a developer's
+  "Configure your CLI" panel. A tier with no models says so plainly: nothing is available to anyone
+  on it.
+
+Two fields the dialog **derives rather than asks**: the front door (`provider`) and the backend
+(`pool`) both follow from the chosen deployment's ARM `model.format`. Getting either wrong produces a
+failure that looks like something else — a Claude alias routed at the OpenAI backend dies as an
+opaque 404 — so the form asks the question once, in the deployment picker. Rows whose deployment is
+missing entirely, or missing from a region a pooled alias needs, are flagged in the grid rather than
+hidden; the API refuses to *write* such a map, so a flagged row is one a deploy or a later deletion
+left behind.
 
 ### `/config`
 
