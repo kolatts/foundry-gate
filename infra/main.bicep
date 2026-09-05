@@ -15,6 +15,9 @@ param environmentName string
 @description('Primary Azure region for shared resources (APIM, monitoring).')
 param location string = 'eastus2'
 
+@description('Region for the Azure SQL logical server. Defaults to `location`. Override when the primary region is closed to NEW SQL servers — Azure does this per region without notice and it is invisible to quota/SKU queries (#241); see modules/sql.bicep.')
+param sqlLocation string = location
+
 @description('Globally-unique suffix for DNS-named resources (APIM, Foundry accounts).')
 param nameSuffix string
 
@@ -367,6 +370,7 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
   params: {
     environmentName: environmentName
     location: location
+    sqlLocation: sqlLocation
     nameSuffix: nameSuffix
     tags: standardTags
     appEnvironment: appEnvironment

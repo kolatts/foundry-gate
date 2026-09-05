@@ -25,6 +25,13 @@
 // jobs (#84) should keep their cadence above the pause delay or accept an always-on vCore.
 param sqlServerName string
 param sqlDatabaseName string
+
+// NOT necessarily the deployment's primary region. Azure closes individual regions to NEW
+// SQL logical servers without warning and without it showing up in any quota or SKU query —
+// the only way to find out is to try, and the error is `ProvisioningDisabled` /
+// `RegionDoesNotAllowProvisioning`, not a quota error. Both `eastus2` and `eastus` were
+// closed to this subscription on 2026-09-05, which is what pushed dev's SQL to `centralus`
+// (#241). Existing servers in a closed region keep working; only creation is blocked.
 param location string
 param tags object = {}
 
