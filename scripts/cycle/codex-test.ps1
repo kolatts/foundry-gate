@@ -64,6 +64,13 @@ $bobKey = $state.apimSubscriptions['dev-bob'].primaryKey
 $carolKey = $state.apimSubscriptions['dev-carol'].primaryKey
 $failures = 0
 
+# C3's tier is dev-carol's — power. Same arithmetic as smoke.ps1's T5: on a shared
+# environment running the shipped tier defaults the monthly wall is hours of traffic away,
+# so C3 is skipped by design rather than run for half an hour and then reported as a failure.
+$carolTier = @($state.quotaTiers | Where-Object { $_.name -eq $state.apimSubscriptions['dev-carol'].product })[0]
+$carolBurnMinutes = Get-CycleQuotaBurnMinutes -Tier $carolTier
+$carolQuotaReachable = $carolBurnMinutes -le $TimeoutMinutes
+
 function Assert-Check {
     param([string] $Id, [string] $Name, [bool] $Condition, [string] $Detail)
     Add-CycleCheck -State $state -Id $Id -Name $Name -Status ($Condition ? 'PASS' : 'FAIL') -Detail $Detail
@@ -220,31 +227,43 @@ else {
     # and 12000 TPM). With TPM well above one exec, each run completes and the small monthly
     # budget is gone in a handful of them.
     Write-CycleHeading 'C3 — codex exec as dev-carol (power tier, generous TPM, small monthly budget) until the gateway says 403'
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
-    $seen403 = $null
-    $carolExecs = 0
-    while ($totalExecs -lt $MaxExecs -and (Get-Date) -lt $deadline -and $null -eq $seen403) {
-        $carolExecs++; $totalExecs++
-        $run = Invoke-CodexExec -Key $carolKey -Prompt "Write a 200-word explanation of TCP congestion control. Run number $carolExecs. Do not run any commands."
-        $verdict = Get-GatewayVerdict -Key $carolKey
-        Write-CycleInfo ("dev-carol exec {0}: codex exit={1}; gateway now {2} (tpm={3} quota={4})" -f $carolExecs, $run.ExitCode, $verdict.StatusCode, $verdict.RemainingTpm, $verdict.RemainingQuota)
-        # Our own policy denials always set x-fg-error; a bare 403 is APIM's native
-        # token-quota refusal, which is the thing under test.
-        if ($verdict.StatusCode -eq 403 -and $verdict.FgError -eq '') {
-            $seen403 = [pscustomobject]@{ Exec = $carolExecs; Run = $run; Verdict = $verdict }
-        }
-    }
-
-    if ($null -ne $seen403) {
-        Assert-Check -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Condition $true `
-            -Detail ("after {0} execs: gateway 403 (native token-quota refusal), body={1}; codex exit={2}; stderr={3}" -f `
-                $seen403.Exec, (Format-BodyExcerpt $seen403.Verdict.Body 200), $seen403.Run.ExitCode, (Format-BodyExcerpt $seen403.Run.StdErr 240))
+    if (-not $carolQuotaReachable) {
+        $why = [double]::IsPositiveInfinity($carolBurnMinutes) `
+            ? "the '$($carolTier.name)' tier sets no monthly token quota on this environment" `
+            : ("the '$($carolTier.name)' tier's $($carolTier.monthlyTokenQuota)-token budget needs at least $carolBurnMinutes minutes of continuous full-rate traffic to exhaust (cap: $TimeoutMinutes min), which is hours of `codex exec` and several dollars of real tokens")
+        Add-CycleCheck -State $state -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Status 'SKIP' `
+            -Detail ("SKIPPED BY DESIGN on this environment: $why. " +
+            'The monthly counter cannot be reset once spent, so reaching it here would also leave the tier exhausted for anyone else on it until the month rolls over. ' +
+            'C3 is proved on the cycle''s own gateway, whose power tier is deployed deliberately small — see validation/2026-09-05-gateway-cycle.md.')
+        $state.codexExecCount = $totalExecs
     }
     else {
-        Assert-Check -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Condition $false `
-            -Detail "dev-carol's monthly budget was not exhausted within $carolExecs execs / $TimeoutMinutes min."
+        $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        $seen403 = $null
+        $carolExecs = 0
+        while ($totalExecs -lt $MaxExecs -and (Get-Date) -lt $deadline -and $null -eq $seen403) {
+            $carolExecs++; $totalExecs++
+            $run = Invoke-CodexExec -Key $carolKey -Prompt "Write a 200-word explanation of TCP congestion control. Run number $carolExecs. Do not run any commands."
+            $verdict = Get-GatewayVerdict -Key $carolKey
+            Write-CycleInfo ("dev-carol exec {0}: codex exit={1}; gateway now {2} (tpm={3} quota={4})" -f $carolExecs, $run.ExitCode, $verdict.StatusCode, $verdict.RemainingTpm, $verdict.RemainingQuota)
+            # Our own policy denials always set x-fg-error; a bare 403 is APIM's native
+            # token-quota refusal, which is the thing under test.
+            if ($verdict.StatusCode -eq 403 -and $verdict.FgError -eq '') {
+                $seen403 = [pscustomobject]@{ Exec = $carolExecs; Run = $run; Verdict = $verdict }
+            }
+        }
+
+        if ($null -ne $seen403) {
+            Assert-Check -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Condition $true `
+                -Detail ("after {0} execs: gateway 403 (native token-quota refusal), body={1}; codex exit={2}; stderr={3}" -f `
+                    $seen403.Exec, (Format-BodyExcerpt $seen403.Verdict.Body 200), $seen403.Run.ExitCode, (Format-BodyExcerpt $seen403.Run.StdErr 240))
+        }
+        else {
+            Assert-Check -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Condition $false `
+                -Detail "dev-carol's monthly budget was not exhausted within $carolExecs execs / $TimeoutMinutes min."
+        }
+        $state.codexExecCount = $totalExecs
     }
-    $state.codexExecCount = $totalExecs
 }
 
 # ---- C4: Claude Code against the Anthropic front door -----------------------------

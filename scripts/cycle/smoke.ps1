@@ -51,6 +51,22 @@ $carol = $state.apimSubscriptions['dev-carol'].primaryKey
 $standardTier = @($state.quotaTiers | Where-Object { $_.name -eq 'standard' })[0]
 $failures = 0
 
+# Is the monthly wall reachable at all on this environment, in the time this stage is allowed?
+#
+# The cycle's own `test` gateway is deployed with a deliberately tiny standard tier (40K
+# tokens behind a 12K/min cap) precisely so T5 can happen — ~3 minutes of burning. A SHARED
+# environment's tiers are the shipped product defaults, and dev's standard tier is 5,000,000
+# tokens behind 20,000 TPM: 250 minutes of continuous full-rate traffic, several dollars of
+# real tokens, and a monthly counter left exhausted for every developer sharing that tier
+# until the month rolls over — because APIM offers no way to reset it.
+#
+# So T5 is SKIPPED BY DESIGN there rather than failed or fudged. It is not skipped because
+# anything is broken and it is not skipped because it is slow: it is arithmetic, stated as
+# arithmetic, and the enforcement it would prove is the same policy element T4 exercises on
+# the same tier. Editing dev's policy to shrink the tier would test a gateway nobody runs.
+$quotaBurnMinutes = Get-CycleQuotaBurnMinutes -Tier $standardTier
+$quotaReachable = $quotaBurnMinutes -le $QuotaBurnTimeoutMinutes
+
 function New-OpenAIHeaders { param([string] $Key) if ($Key) { @{ 'api-key' = $Key } } else { @{} } }
 function New-AnthropicHeaders {
     param([string] $Key)
@@ -140,7 +156,16 @@ Write-CycleHeading "T4 — TPM cap ($($standardTier.tpm)/min) and per-subscripti
 # ~600-token requests left remaining-tpm oscillating around 7300.
 # A few thousand prompt tokens plus a large max_tokens outruns the refill, so the bucket
 # empties in two or three requests and the 429 is reached deterministically.
-$bulk = ('The quick brown fox jumps over the lazy dog. ' * 400)
+#
+# Scaled to the tier, not fixed. A body sized for a 12,000 TPM tier is a rounding error
+# against dev's 20,000 and would leave the bucket hovering for thirty attempts before the
+# stage gave up and reported a working meter as broken. The sentence is ~10 tokens, and
+# ~35% of a minute's budget per request drains a full bucket in three or four requests on
+# any tier while staying well inside the model's context window.
+$bulkSentence = 'The quick brown fox jumps over the lazy dog. '
+$bulkRepeats = [math]::Max(200, [math]::Min(3000, [int]($standardTier.tpm * 0.35 / 10)))
+$bulk = ($bulkSentence * $bulkRepeats)
+Write-CycleInfo "burn request ~$($bulkRepeats * 10) prompt tokens + 1500 max_tokens against a $($standardTier.tpm) TPM cap"
 $burnBody = New-ChatBody -MaxTokens 1500 -Prompt @"
 Summarise the following text in exactly 500 words, then write a 500-word critique of its style.
 
@@ -196,59 +221,90 @@ else {
 
 # ---- T5: monthly token quota ------------------------------------------------------
 Write-CycleHeading "T5 — monthly token quota ($($standardTier.monthlyTokenQuota) tokens) for dev-alice"
-$deadline = (Get-Date).AddMinutes($QuotaBurnTimeoutMinutes)
-$quota403 = $null
-$quotaAttempts = 0
-$lastRemainingQuota = ''
-while ((Get-Date) -lt $deadline -and $null -eq $quota403) {
-    $quotaAttempts++
-    $r = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $alice) -Body $burnBody
-    $rq = Get-ResponseHeader $r 'x-fg-remaining-quota'
-    if ($rq) { $lastRemainingQuota = $rq }
-    Write-CycleInfo "attempt $quotaAttempts -> HTTP $($r.StatusCode), remaining-quota=$rq"
-
-    if ($r.StatusCode -eq 403 -and (Get-ResponseHeader $r 'x-fg-error') -eq '') {
-        # Our own policy denials always set x-fg-error; a bare 403 here is APIM's native
-        # token-quota refusal, which is the thing under test.
-        $quota403 = $r
+if (-not $quotaReachable) {
+    $why = [double]::IsPositiveInfinity($quotaBurnMinutes) `
+        ? "the '$($standardTier.name)' tier sets no monthly token quota on this environment, so there is no 403 wall to reach" `
+        : ("exhausting the $($standardTier.monthlyTokenQuota)-token '$($standardTier.name)' budget through its own $($standardTier.tpm) TPM cap takes at least $quotaBurnMinutes minutes of continuous full-rate traffic (cap: $QuotaBurnTimeoutMinutes min)")
+    $skipDetail = "SKIPPED BY DESIGN, not by failure: $why. " +
+    'The monthly counter is keyed on the APIM subscription and APIM offers no way to reset it, so burning it would also leave a spent counter on this environment until the calendar month rolls over. ' +
+    'The 403 path is proved on the cycle''s own gateway, whose standard tier is deployed deliberately small (see validation/2026-09-05-gateway-cycle.md, T5a-c); ' +
+    'it is the same llm-token-limit element T4a/T4b exercise here, and x-fg-remaining-quota is observed counting down on this environment even though it does not reach zero.'
+    $skipped = [ordered]@{
+        'T5a' = 'Monthly token quota exhausted -> 403'
+        'T5b' = 'x-fg-remaining-quota reached 0 before the refusal'
+        'T5c' = 'Power-tier dev-carol still 200 while standard-tier dev-alice is quota-blocked'
     }
-    elseif ($r.StatusCode -eq 429) {
-        # Expected constantly: burning a 40K monthly budget through an 8K/min cap takes at
-        # least five minutes of wall clock no matter how the requests are shaped.
-        $wait = [int](Get-ResponseHeader $r 'Retry-After')
-        if ($wait -le 0 -or $wait -gt 65) { $wait = 20 }
-        Write-CycleInfo "  TPM throttled, sleeping ${wait}s"
-        Start-Sleep -Seconds $wait
+    foreach ($id in $skipped.Keys) {
+        Add-CycleCheck -State $state -Id $id -Name $skipped[$id] -Status 'SKIP' -Detail $skipDetail
     }
-}
 
-if ($null -ne $quota403) {
-    Assert-Check -Id 'T5a' -Name 'Monthly token quota exhausted -> 403' -Condition $true `
-        -Detail "HTTP 403 after $quotaAttempts requests, last x-fg-remaining-quota=$lastRemainingQuota, Retry-After=$(Get-ResponseHeader $quota403 'Retry-After') — $(Format-BodyExcerpt $quota403.Body 200)"
-    Assert-Check -Id 'T5b' -Name 'x-fg-remaining-quota reached 0 before the refusal' -Condition ($lastRemainingQuota -eq '0') `
-        -Detail "last observed x-fg-remaining-quota=$lastRemainingQuota"
-
-    # What this proves is that the MONTHLY QUOTA counter is per-subscription: alice being out
-    # of budget must not touch carol. A transient 429 is a different meter entirely (carol's
-    # own TPM bucket, which an earlier stage may have just drained), so it is retried rather
-    # than counted as a failure — observed live once, where carol answered 429 with her
-    # monthly quota still showing the full 1000000 untouched.
-    $rc = $null
-    for ($try = 1; $try -le 3; $try++) {
-        $rc = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
-        if ($rc.StatusCode -ne 429) { break }
-        $wait = [int](Get-ResponseHeader $rc 'Retry-After')
-        if ($wait -le 0 -or $wait -gt 65) { $wait = 20 }
-        Write-CycleInfo "dev-carol is TPM-throttled (not quota-blocked); waiting ${wait}s and retrying"
-        Start-Sleep -Seconds $wait
-    }
-    Assert-Check -Id 'T5c' -Name 'Power-tier dev-carol still 200 while standard-tier dev-alice is quota-blocked' `
-        -Condition ($rc.StatusCode -eq 200) `
-        -Detail "dev-carol HTTP $($rc.StatusCode), x-fg-remaining-quota=$(Get-ResponseHeader $rc 'x-fg-remaining-quota') while dev-alice is 403"
+    # Not the wall, but the meter: the header proves the monthly counter exists on this
+    # environment, is keyed per subscription and is moving. That is the observable part of
+    # the quota path that IS reachable here, so record it rather than leaving three SKIPs and
+    # no evidence at all.
+    $rq1 = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
+    $before = Get-ResponseHeader $rq1 'x-fg-remaining-quota'
+    $rq2 = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
+    $after = Get-ResponseHeader $rq2 'x-fg-remaining-quota'
+    Assert-Check -Id 'T5d' -Name 'Monthly quota counter is live and decrementing (x-fg-remaining-quota)' `
+        -Condition ($before -ne '' -and $after -ne '' -and [long]$after -lt [long]$before) `
+        -Detail "dev-carol x-fg-remaining-quota $before -> $after across two requests against the $($standardTier.name)/power products on this gateway"
 }
 else {
-    Assert-Check -Id 'T5a' -Name 'Monthly token quota exhausted -> 403' -Condition $false `
-        -Detail "No quota 403 within $QuotaBurnTimeoutMinutes min / $quotaAttempts requests; last x-fg-remaining-quota=$lastRemainingQuota"
+    $deadline = (Get-Date).AddMinutes($QuotaBurnTimeoutMinutes)
+    $quota403 = $null
+    $quotaAttempts = 0
+    $lastRemainingQuota = ''
+    while ((Get-Date) -lt $deadline -and $null -eq $quota403) {
+        $quotaAttempts++
+        $r = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $alice) -Body $burnBody
+        $rq = Get-ResponseHeader $r 'x-fg-remaining-quota'
+        if ($rq) { $lastRemainingQuota = $rq }
+        Write-CycleInfo "attempt $quotaAttempts -> HTTP $($r.StatusCode), remaining-quota=$rq"
+
+        if ($r.StatusCode -eq 403 -and (Get-ResponseHeader $r 'x-fg-error') -eq '') {
+            # Our own policy denials always set x-fg-error; a bare 403 here is APIM's native
+            # token-quota refusal, which is the thing under test.
+            $quota403 = $r
+        }
+        elseif ($r.StatusCode -eq 429) {
+            # Expected constantly: burning a 40K monthly budget through an 8K/min cap takes at
+            # least five minutes of wall clock no matter how the requests are shaped.
+            $wait = [int](Get-ResponseHeader $r 'Retry-After')
+            if ($wait -le 0 -or $wait -gt 65) { $wait = 20 }
+            Write-CycleInfo "  TPM throttled, sleeping ${wait}s"
+            Start-Sleep -Seconds $wait
+        }
+    }
+
+    if ($null -ne $quota403) {
+        Assert-Check -Id 'T5a' -Name 'Monthly token quota exhausted -> 403' -Condition $true `
+            -Detail "HTTP 403 after $quotaAttempts requests, last x-fg-remaining-quota=$lastRemainingQuota, Retry-After=$(Get-ResponseHeader $quota403 'Retry-After') — $(Format-BodyExcerpt $quota403.Body 200)"
+        Assert-Check -Id 'T5b' -Name 'x-fg-remaining-quota reached 0 before the refusal' -Condition ($lastRemainingQuota -eq '0') `
+            -Detail "last observed x-fg-remaining-quota=$lastRemainingQuota"
+
+        # What this proves is that the MONTHLY QUOTA counter is per-subscription: alice being out
+        # of budget must not touch carol. A transient 429 is a different meter entirely (carol's
+        # own TPM bucket, which an earlier stage may have just drained), so it is retried rather
+        # than counted as a failure — observed live once, where carol answered 429 with her
+        # monthly quota still showing the full 1000000 untouched.
+        $rc = $null
+        for ($try = 1; $try -le 3; $try++) {
+            $rc = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
+            if ($rc.StatusCode -ne 429) { break }
+            $wait = [int](Get-ResponseHeader $rc 'Retry-After')
+            if ($wait -le 0 -or $wait -gt 65) { $wait = 20 }
+            Write-CycleInfo "dev-carol is TPM-throttled (not quota-blocked); waiting ${wait}s and retrying"
+            Start-Sleep -Seconds $wait
+        }
+        Assert-Check -Id 'T5c' -Name 'Power-tier dev-carol still 200 while standard-tier dev-alice is quota-blocked' `
+            -Condition ($rc.StatusCode -eq 200) `
+            -Detail "dev-carol HTTP $($rc.StatusCode), x-fg-remaining-quota=$(Get-ResponseHeader $rc 'x-fg-remaining-quota') while dev-alice is 403"
+    }
+    else {
+        Assert-Check -Id 'T5a' -Name 'Monthly token quota exhausted -> 403' -Condition $false `
+            -Detail "No quota 403 within $QuotaBurnTimeoutMinutes min / $quotaAttempts requests; last x-fg-remaining-quota=$lastRemainingQuota"
+    }
 }
 
 $state.smokeCompletedUtc = Get-CycleTimestamp

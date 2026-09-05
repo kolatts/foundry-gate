@@ -8,21 +8,29 @@
     policy, and the quota counter is keyed on the subscription, so three subscriptions
     against two products is exactly the fixture the enforcement tests need:
 
-      dev-alice   standard   the victim — small TPM and monthly budget, gets 429 then 403
-      dev-bob     standard   the control for TPM isolation — same tier, own counter
-      dev-carol   power      the control for the monthly quota — different tier, stays 200
+      alice   standard   the victim — small TPM and monthly budget, gets 429 then 403
+      bob     standard   the control for TPM isolation — same tier, own counter
+      carol   power      the control for the monthly quota — different tier, stays 200
 
     `az apim` has no subscription verb, so this goes through the Management REST API via
     `az rest`.
 
+    EVERY SUBSCRIPTION THIS SCRIPT CREATES IS NAMED `fgcycle-*`, and that prefix does real
+    work on a SHARED environment. On dev the same APIM service also carries the real
+    developer keys the control plane issues as `foundrygate-{UserId}` — so a test fixture has
+    to be recognisable at a glance in the APIM blade, has to be excluded from anything that
+    reads real usage, and above all has to be deletable without a human deciding key by key
+    whether it is safe. `-Cleanup` deletes exactly the `fgcycle-*` subscriptions and nothing
+    else, which is only a safe thing to write because the prefix is not shared with anything.
+
     EACH CYCLE GETS FRESH SUBSCRIPTION IDS, and that is not cosmetic. The monthly
     `token-quota` counter is keyed on `context.Subscription.Id` and there is no way to reset
     it — a subscription that has spent its budget stays spent until the calendar month rolls
-    over. Reusing `dev-alice` across cycles therefore means the SECOND cycle in a month can
-    never demonstrate the quota wall (dev-alice starts at 403) and can never demonstrate the
+    over. Reusing `fgcycle-alice` across cycles therefore means the SECOND cycle in a month
+    can never demonstrate the quota wall (alice starts at 403) and can never demonstrate the
     TPM wall either (she never gets a 200 to burn). So the real APIM ids carry a cycle stamp
-    — `dev-alice-202609051530` — while the state file keeps the stable logical names the
-    other stages ask for.
+    — `fgcycle-alice-202609051530` — while the state file keeps the stable logical names the
+    other stages ask for (`dev-alice`, `dev-bob`, `dev-carol`).
 
     -Reuse keeps whatever ids the state file already holds, for re-running a later stage
     against the counters an earlier one built up.
@@ -32,6 +40,10 @@
 
 .EXAMPLE
     pwsh scripts/cycle/subscriptions.ps1
+
+.EXAMPLE
+    # After a run against a shared environment: remove every fixture key this harness made.
+    pwsh scripts/cycle/subscriptions.ps1 -Environment dev -Cleanup
 #>
 [CmdletBinding()]
 param(
@@ -40,7 +52,12 @@ param(
     [Parameter(HelpMessage = 'Print the subscription keys. Local use only.')]
     [switch] $ShowKeys,
     [Parameter(HelpMessage = 'Keep the subscription ids already in the state file instead of minting fresh ones.')]
-    [switch] $Reuse
+    [switch] $Reuse,
+    [Parameter(HelpMessage = 'Delete every fgcycle-* APIM subscription on this environment and create none.')]
+    [switch] $Cleanup,
+    [Parameter(HelpMessage = 'Name prefix for the fixture subscriptions. Changing it breaks -Cleanup''s guarantee; there is no good reason to.')]
+    [ValidatePattern('^[a-z][a-z0-9-]*$')]
+    [string] $Prefix = 'fgcycle'
 )
 
 Set-StrictMode -Version Latest
@@ -56,12 +73,46 @@ $apimName = $state.outputs.apimName
 $rg = $state.resourceGroup
 $apimId = "/subscriptions/$azSubId/resourceGroups/$rg/providers/Microsoft.ApiManagement/service/$apimName"
 
-# name -> tier product. The names are also the display names, so a human opening the APIM
-# blade during a cycle sees who is who.
+# Logical name -> tier product. The logical names are what every later stage asks the state
+# file for; the APIM ids are built from $Prefix below.
 $developers = [ordered]@{
     'dev-alice' = 'standard'
     'dev-bob'   = 'standard'
     'dev-carol' = 'power'
+}
+# 'dev-alice' -> 'alice'. The logical names predate the prefix and are load-bearing in
+# smoke.ps1/codex-test.ps1; stripping the old prefix here keeps the APIM id from reading
+# `fgcycle-dev-alice-...`, which on the dev environment is actively confusing.
+function Get-ShortName { param([string] $Logical) return ($Logical -replace '^dev-', '') }
+
+# ---- Cleanup ---------------------------------------------------------------------
+# Deletes by PREFIX, not from the state file: a run that was interrupted, or one from another
+# machine, left keys the state file here has never heard of, and those are exactly the ones
+# that go on quietly holding a spent monthly counter on a shared gateway.
+if ($Cleanup) {
+    Write-CycleHeading "Removing $Prefix-* subscriptions from $apimName"
+    $all = Invoke-Az -Subscription $Subscription -Arguments @(
+        'rest', '--method', 'get',
+        '--url', "https://management.azure.com$apimId/subscriptions?api-version=$apiVersion"
+    )
+    $ours = @(@($all.value) | Where-Object { $_.name -like "$Prefix-*" })
+    if ($ours.Count -eq 0) {
+        Write-Host "  Nothing to remove — no $Prefix-* subscriptions on $apimName." -ForegroundColor Green
+    }
+    foreach ($s in $ours) {
+        Invoke-Az -Subscription $Subscription -Arguments @(
+            'rest', '--method', 'delete',
+            '--url', "https://management.azure.com$apimId/subscriptions/$($s.name)?api-version=$apiVersion"
+        ) | Out-Null
+        Write-Host "  deleted $($s.name)" -ForegroundColor Yellow
+    }
+    # The keys are dead; leaving them in the state file leaves live-looking secrets behind and
+    # invites a later stage to run against subscriptions that no longer exist.
+    if ($state.ContainsKey('apimSubscriptions')) { $state.Remove('apimSubscriptions') }
+    $state.subscriptionsCleanedUpUtc = Get-CycleTimestamp
+    Save-CycleState -State $state
+    Write-Host "Removed $($ours.Count) fixture subscription(s)." -ForegroundColor Green
+    exit 0
 }
 
 Write-CycleHeading "Provisioning developer keys on $apimName"
@@ -81,13 +132,13 @@ foreach ($name in $developers.Keys) {
         Write-CycleInfo "reusing $name -> $subscriptionId"
     }
     else {
-        $subscriptionId = "$name-$stamp"
+        $subscriptionId = "$Prefix-$(Get-ShortName $name)-$stamp"
     }
 
     $body = @{
         properties = @{
             scope       = "$apimId/products/$product"
-            displayName = "FoundryGate cycle demo — $name ($product)"
+            displayName = "FoundryGate cycle fixture — $(Get-ShortName $name) ($product)"
             state       = 'active'
             # allowTracing is deliberately left default: tracing writes request bodies to
             # the APIM trace, which is exactly the prompt content this gateway should not

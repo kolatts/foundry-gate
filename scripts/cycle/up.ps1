@@ -70,6 +70,19 @@ param(
     [Parameter(HelpMessage = 'Run az deployment sub what-if before deploying (adds ~2 min).')]
     [switch] $WhatIf,
 
+    <#
+      Deploy NOTHING. Read the addresses, tier limits and model deployments off the
+      environment that is already there and write them into the state file, so every later
+      stage runs against it unchanged.
+
+      This is how the cycle runs against dev and prod, which CI owns: `Deploy All` re-deploys
+      dev on every merge to main, the template needs FG_API_IMAGE and FG_ENTRA_API_CLIENT_ID
+      that only the workflow supplies, and a local deploy would fight both. It is implied
+      (and cannot be turned off) for those environments.
+    #>
+    [Parameter(HelpMessage = 'Attach to an already-deployed environment instead of deploying. Implied for dev/prod.')]
+    [switch] $AttachOnly,
+
     [string] $DeploymentName
 )
 
@@ -80,9 +93,18 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Get-CycleRepoRoot
 $started = Get-Date
 $resourceGroup = "rg-foundrygate-$Environment"
-$paramFile = Join-Path $repoRoot 'infra' 'parameters' "$Environment.bicepparam"
-if (-not (Test-Path $paramFile)) { throw "No parameter file at $paramFile" }
 if (-not $DeploymentName) { $DeploymentName = "foundrygate-$Environment" }
+
+$managed = Test-CycleManagedEnvironment -Environment $Environment
+if ($managed -and -not $AttachOnly) {
+    Write-Host "  '$Environment' is deployed by CI (deploy-all.yml). Attaching to it instead of deploying — -AttachOnly is implied." -ForegroundColor Yellow
+    $AttachOnly = $true
+}
+
+if (-not $AttachOnly) {
+    $paramFile = Join-Path $repoRoot 'infra' 'parameters' "$Environment.bicepparam"
+    if (-not (Test-Path $paramFile)) { throw "No parameter file at $paramFile" }
+}
 
 $state = Get-CycleState -Environment $Environment
 $state.environment = $Environment
@@ -93,6 +115,146 @@ $state.deploymentName = $DeploymentName
 if (-not $state.ContainsKey('checks')) { $state.checks = @() }
 $state.upStartedUtc = Get-CycleTimestamp -When $started
 Save-CycleState -State $state
+
+<#
+ Reads every model deployment's REAL provisioning state off every Foundry account, and
+ reports whether any Anthropic one is live. Shared by both paths: the template can report
+ success while an Anthropic deployment sits in Failed (ARM accepts the create and the
+ provider fails it asynchronously, E-007d), and an attached environment has the same
+ question to answer before the Claude-dependent checks decide PASS or SKIP.
+#>
+function Read-ModelDeploymentStates {
+    param([Parameter(Mandatory)][string[]] $AccountNames)
+    $states = @{}
+    $anyClaude = $false
+    foreach ($accountName in $AccountNames) {
+        $deployments = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+            'cognitiveservices', 'account', 'deployment', 'list',
+            '--name', $accountName, '--resource-group', $resourceGroup
+        )
+        $rows = @()
+        foreach ($d in @($deployments)) {
+            $row = @{
+                name              = $d.name
+                provisioningState = $d.properties.provisioningState
+                format            = $d.properties.model.format
+            }
+            $rows += $row
+            $ok = $row.provisioningState -eq 'Succeeded'
+            Write-Host ("  {0}/{1}: {2} ({3})" -f $accountName, $row.name, $row.provisioningState, $row.format) `
+                -ForegroundColor ($ok ? 'Green' : 'Red')
+            if ($ok -and $row.format -eq 'Anthropic') { $anyClaude = $true }
+        }
+        $states[$accountName] = $rows
+    }
+    return @{ states = $states; claudeAvailable = $anyClaude }
+}
+
+# ---- ATTACH ----------------------------------------------------------------------
+# Everything below this block deploys. None of it runs when attaching: the environment is
+# already there, CI owns it, and the only job here is to learn its addresses and its real
+# limits accurately enough that the enforcement checks assert against the right walls.
+if ($AttachOnly) {
+    Write-CycleHeading "Attaching to the deployed environment '$Environment' (nothing will be deployed)"
+
+    $rg = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @('group', 'show', '--name', $resourceGroup)
+    if ($null -eq $rg) { throw "Resource group $resourceGroup does not exist in '$Subscription'. There is nothing to attach to." }
+
+    $deployment = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+        'deployment', 'sub', 'show', '--name', $DeploymentName
+    )
+    if ($null -eq $deployment) {
+        throw "No subscription-scope deployment named '$DeploymentName'. Attaching reads the addresses out of the deployment's OUTPUTS, so this is fatal — check the environment name."
+    }
+    if ($deployment.properties.provisioningState -ne 'Succeeded') {
+        # Not fatal: the outputs of the last successful deploy are still what is running. But
+        # it is exactly the thing that explains a confusing result later, so say it loudly.
+        Write-Host "  WARNING: deployment $DeploymentName is $($deployment.properties.provisioningState). Attaching to the outputs it last recorded." -ForegroundColor Yellow
+    }
+
+    $outputs = @{}
+    foreach ($key in $deployment.properties.outputs.Keys) {
+        $outputs[$key] = $deployment.properties.outputs[$key].value
+    }
+    $state.outputs = $outputs
+    $state.attached = $true
+    $state.deploymentProvisioningState = [string]$deployment.properties.provisioningState
+
+    $apimName = [string]$outputs.apimName
+    $azSubId = (Invoke-Az -Subscription $Subscription -Arguments @('account', 'show')).id
+    $apimId = "/subscriptions/$azSubId/resourceGroups/$resourceGroup/providers/Microsoft.ApiManagement/service/$apimName"
+
+    $apimState = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+        'apim', 'show', '--name', $apimName, '--resource-group', $resourceGroup, '--query', 'provisioningState'
+    )
+    if ($apimState -ne 'Succeeded') { throw "APIM $apimName is '$apimState', not Succeeded. Wait for CI's deploy to finish before running the cycle against it." }
+
+    # ---- The tiers, from the policies the gateway is actually running ----------------
+    Write-CycleHeading 'Reading the tier limits off the live product policies'
+    $displayNames = @{}
+    if ($outputs.ContainsKey('quotaTierRows')) {
+        foreach ($row in @($outputs.quotaTierRows)) { $displayNames[[string]$row.productId] = [string]$row.displayName }
+    }
+    $tiers = @()
+    foreach ($productId in @($outputs.productIds)) {
+        $tier = Get-CycleTierFromPolicy -Subscription $Subscription -ApimResourceId $apimId -ProductId $productId `
+            -DisplayName ($displayNames.ContainsKey($productId) ? $displayNames[$productId] : $productId)
+        $burn = Get-CycleQuotaBurnMinutes -Tier $tier
+        $burnText = [double]::IsPositiveInfinity($burn) ? 'no monthly quota' : "$burn min at full rate to exhaust"
+        Write-Host ("  {0,-12} {1,10} tokens/month  {2,8} TPM   ({3})" -f $tier.name, $tier.monthlyTokenQuota, $tier.tpm, $burnText)
+        $tiers += $tier
+    }
+    $state.quotaTiers = $tiers
+
+    # ---- #244 regression guard -------------------------------------------------------
+    # Without logAnalyticsDestinationType='Dedicated' the gateway's LLM rows go to the legacy
+    # AzureDiagnostics catch-all and ApiManagementGatewayLlmLog stays empty forever while
+    # every resource reports healthy. Reading it here turns a four-hour "ingestion lag" hunt
+    # in measure.ps1 into one line at attach time.
+    Write-CycleHeading 'Diagnostic setting destination type (#244)'
+    $settings = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+        'monitor', 'diagnostic-settings', 'list', '--resource', $apimId
+    )
+    $dedicated = @(@($settings.value) | Where-Object { $_.logAnalyticsDestinationType -eq 'Dedicated' })
+    $llmCategories = @(@($settings.value) | ForEach-Object { @($_.logs) } | Where-Object { $_.category -eq 'GatewayLlmLogs' -and $_.enabled })
+    Add-CycleCheck -State $state -Id 'UP-3' -Name 'APIM diagnostic setting sends LLM logs to the dedicated table (#244)' `
+        -Status (($dedicated.Count -gt 0 -and $llmCategories.Count -gt 0) ? 'PASS' : 'FAIL') `
+        -Detail ("{0} diagnostic setting(s), {1} with logAnalyticsDestinationType=Dedicated, {2} with GatewayLlmLogs enabled" -f `
+            @($settings.value).Count, $dedicated.Count, $llmCategories.Count)
+
+    Write-CycleHeading 'Model deployment states'
+    $models = Read-ModelDeploymentStates -AccountNames @($outputs.foundryAccountNames)
+    $state.modelDeployments = $models.states
+    $state.claudeAvailable = $models.claudeAvailable
+
+    $state.createModelDeploymentsUsed = $false
+    $state.skipClaude = $true
+    $state.upCompletedUtc = Get-CycleTimestamp
+    $state.upElapsedSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds)
+    $state.deployElapsedSeconds = 0
+    Save-CycleState -State $state
+
+    Add-CycleCheck -State $state -Id 'UP-1' -Name 'Gateway deployed' -Status 'PASS' `
+        -Detail "Attached to the existing '$Environment' deployment $DeploymentName ($($outputs.apimGatewayUrl)); nothing was deployed."
+    $claudeDetail = if ($models.claudeAvailable) {
+        'At least one Anthropic deployment in Succeeded.'
+    }
+    else {
+        "No Anthropic deployment on '$Environment'. This run made NO create attempt — attaching never deploys a model (#231, E-007). Claude-dependent checks report SKIP."
+    }
+    Add-CycleCheck -State $state -Id 'UP-2' -Name 'Anthropic (Claude) deployment provisioned' `
+        -Status ($models.claudeAvailable ? 'PASS' : 'SKIP') -Detail $claudeDetail
+
+    Write-CycleHeading "Attached to '$Environment'"
+    Write-Host "  Gateway URL : $($outputs.apimGatewayUrl)"
+    Write-Host "  Anthropic   : $($outputs.anthropicApiUrl)"
+    Write-Host "  OpenAI      : $($outputs.openaiApiUrl)"
+    Write-Host "  APIM        : $apimName"
+    Write-Host "  Products    : $(@($outputs.productIds) -join ', ')"
+    Write-Host "  Workspace   : $($outputs.logAnalyticsWorkspaceName) ($($outputs.logAnalyticsWorkspaceCustomerId))"
+    Write-Host "  State file  : $(Get-CycleStatePath -Environment $Environment)"
+    exit 0
+}
 
 # ---- 1. Offline policy validation ------------------------------------------------
 # Cheap, and it is the only thing that catches a malformed policy before a 10-minute
@@ -328,29 +490,9 @@ foreach ($m in @(@{ name = 'gpt-4-1-mini'; model = 'gpt-4.1-mini'; version = '20
 # accepts the create and the provider fails it asynchronously (E-007d). Read the real
 # provisioning state off every account so later stages know whether Claude exists.
 Write-CycleHeading 'Model deployment states'
-$modelStates = @{}
-$claudeOk = $false
-foreach ($accountName in @($outputs.foundryAccountNames)) {
-    $deployments = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
-        'cognitiveservices', 'account', 'deployment', 'list',
-        '--name', $accountName, '--resource-group', $resourceGroup
-    )
-    $rows = @()
-    foreach ($d in @($deployments)) {
-        $row = @{
-            name              = $d.name
-            provisioningState = $d.properties.provisioningState
-            format            = $d.properties.model.format
-        }
-        $rows += $row
-        $ok = $row.provisioningState -eq 'Succeeded'
-        $color = if ($ok) { 'Green' } else { 'Red' }
-        Write-Host ("  {0}/{1}: {2} ({3})" -f $accountName, $row.name, $row.provisioningState, $row.format) -ForegroundColor $color
-        if ($ok -and $row.format -eq 'Anthropic') { $claudeOk = $true }
-    }
-    $modelStates[$accountName] = $rows
-}
-$state.modelDeployments = $modelStates
+$models = Read-ModelDeploymentStates -AccountNames @($outputs.foundryAccountNames)
+$claudeOk = $models.claudeAvailable
+$state.modelDeployments = $models.states
 $state.claudeAvailable = $claudeOk
 
 if (-not $claudeOk) {

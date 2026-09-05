@@ -31,6 +31,25 @@ $script:CycleStateDir = Join-Path $PSScriptRoot '.state'
 
 function Get-CycleRepoRoot { $script:CycleRepoRoot }
 
+<#
+ Environments this harness ATTACHES to rather than owns.
+
+ `dev` and `prod` are deployed and re-deployed by CI (`Deploy All` runs on every merge to
+ main) and hold a control plane — SQL, the Container App, the Static Web App, Key Vault.
+ The cycle scripts must therefore never deploy over them (the deploy would fight CI and
+ would need the `FG_API_IMAGE` / `FG_ENTRA_API_CLIENT_ID` variables the workflow supplies)
+ and must never tear them down (`infra-destroy.yml`, with its typed confirmation and its
+ environment approval gate, is the sanctioned path).
+
+ up.ps1 attaches instead of deploying on these; down.ps1 refuses outright.
+#>
+$script:CycleManagedEnvironments = @('dev', 'prod')
+
+function Test-CycleManagedEnvironment {
+    param([Parameter(Mandatory)][string] $Environment)
+    return $script:CycleManagedEnvironments -contains $Environment.ToLowerInvariant()
+}
+
 function Get-CycleStatePath {
     param([Parameter(Mandatory)][string] $Environment)
     if (-not (Test-Path $script:CycleStateDir)) {
@@ -290,6 +309,80 @@ function Get-ResponseHeader {
         if ($k -ieq $Name) { return [string]$Response.Headers[$k] }
     }
     return ''
+}
+
+<#
+ Reads the limits a tier ACTUALLY enforces, off the product policy on the live APIM service.
+
+ When the cycle deploys the gateway itself it knows the tiers because it passed them as a
+ parameter. When it ATTACHES to an environment CI deployed, it does not: the tier shapes are
+ whatever `main.bicep`'s `quotaTiers` default happened to be at the last merge to main, and
+ guessing is how a test asserts against the wrong wall. The deployment outputs carry
+ `quotaTierRows` (product id, display name, monthlyTokenQuota) but NOT the per-minute cap —
+ tpm exists only inside the rendered `llm-token-limit` element — so the policy document is
+ the only complete source, and it is also the authority: it is the thing the gateway runs.
+
+ `az rest` on a policy returns raw XML, not JSON, and it is UTF-8 with a BOM, which az cannot
+ print to a cp1252 console ("'charmap' codec can't encode character '﻿'"). --output-file
+ sidesteps both: the bytes land in a file and we read them ourselves.
+
+ Returns @{ name; monthlyTokenQuota; tpm } with 0 for an attribute the tier does not set —
+ the unlimited tier omits token-quota entirely, and 0 is what the deploy-side code already
+ means by "no monthly quota".
+#>
+function Get-CycleTierFromPolicy {
+    param(
+        [Parameter(Mandatory)][string] $Subscription,
+        [Parameter(Mandatory)][string] $ApimResourceId,
+        [Parameter(Mandatory)][string] $ProductId,
+        [string] $DisplayName = ''
+    )
+    $file = [System.IO.Path]::GetTempFileName()
+    try {
+        Invoke-Az -Subscription $Subscription -AllowFailure -Raw -Arguments @(
+            'rest', '--method', 'get',
+            '--url', "https://management.azure.com$ApimResourceId/products/$ProductId/policies/policy?api-version=2024-06-01-preview",
+            '--output-file', $file
+        ) | Out-Null
+        $xml = Get-Content -Path $file -Raw -ErrorAction SilentlyContinue
+    }
+    finally {
+        Remove-Item -Path $file -Force -ErrorAction SilentlyContinue
+    }
+    if ([string]::IsNullOrWhiteSpace($xml)) {
+        throw "Could not read the product policy for '$ProductId' on $ApimResourceId. Without it the tier's real limits are unknown and the enforcement checks would assert against a guess."
+    }
+
+    $tpm = 0
+    $quota = 0
+    if ($xml -match 'tokens-per-minute\s*=\s*"(\d+)"') { $tpm = [int]$Matches[1] }
+    # `token-quota="N"`, not `token-quota-period` — the negative lookahead keeps the period
+    # attribute from matching first and yielding a nonsense number.
+    if ($xml -match 'token-quota\s*=\s*"(\d+)"') { $quota = [int]$Matches[1] }
+
+    return @{
+        name              = $ProductId
+        displayName       = ($DisplayName ? $DisplayName : $ProductId)
+        description       = "Read from the live product policy on $ProductId."
+        monthlyTokenQuota = $quota
+        tpm               = $tpm
+    }
+}
+
+<#
+ How many minutes of wall clock it would take to burn a monthly budget through a per-minute
+ cap, at best. Purely arithmetic, and it is what decides whether the 403 wall is reachable on
+ an environment at all: dev's standard tier is 5,000,000 tokens behind a 20,000/min cap, so
+ the monthly quota is four hours away and no timeout a test may reasonably wait will see it.
+ Returns [double]::PositiveInfinity for a tier with no monthly quota.
+#>
+function Get-CycleQuotaBurnMinutes {
+    param([Parameter(Mandatory)] $Tier)
+    $quota = [double]$Tier.monthlyTokenQuota
+    $tpm = [double]$Tier.tpm
+    if ($quota -le 0) { return [double]::PositiveInfinity }
+    if ($tpm -le 0) { return 0 }
+    return [math]::Round($quota / $tpm, 1)
 }
 
 <# Truncated single-line form of a response body, for evidence lines. #>

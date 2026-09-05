@@ -68,9 +68,18 @@ if ($state.ContainsKey('outputs')) {
     Add-Line ('| Log Analytics workspace | {0} ({1}) |' -f (Format-Code $state.outputs.logAnalyticsWorkspaceName), (Format-Code $state.outputs.logAnalyticsWorkspaceCustomerId))
     Add-Line ('| Foundry accounts | {0} |' -f (Format-CodeList $state.outputs.foundryAccountNames))
 }
+$attached = $state.ContainsKey('attached') -and [bool]$state.attached
+$modeText = if ($attached) { "**attached** to the already-deployed ``$($state.environment)`` environment — nothing deployed, nothing torn down" } else { 'deployed by this run' }
+Add-Line "| Mode | $modeText |"
 if ($state.ContainsKey('quotaTiers')) {
-    $std = @($state.quotaTiers | Where-Object { $_.name -eq 'standard' })[0]
-    Add-Line "| Standard tier under test | $($std.monthlyTokenQuota) tokens/month, $($std.tpm) TPM |"
+    # Every tier, not just standard. When the cycle deploys the gateway it also chose the
+    # tiers, so "standard tier under test" said everything; attached to an environment it did
+    # not shape, the tiers are a finding — they are what decides which walls are reachable at
+    # all, and reading them back is how the SKIP-by-design rows below can be checked.
+    foreach ($t in @($state.quotaTiers)) {
+        $quotaText = ([int]$t.monthlyTokenQuota -gt 0) ? "$($t.monthlyTokenQuota) tokens/month" : 'no monthly quota'
+        Add-Line ("| Tier {0} | {1}, {2} TPM |" -f (Format-Code $t.name), $quotaText, $t.tpm)
+    }
 }
 # ContainsKey-guarded: up.ps1 writes claudeAvailable only after a successful deploy, and under
 # Set-StrictMode a missing hashtable key THROWS. Unguarded, a failed `up` made report.ps1 throw

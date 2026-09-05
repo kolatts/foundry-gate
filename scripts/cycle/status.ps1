@@ -72,7 +72,19 @@ foreach ($r in ($resources | Sort-Object type, name)) {
 Write-Host ''
 Write-Host ("  Estimated idle cost: ~`$" + ('{0:N2}' -f $hourly) + "/hr (~`$" + ('{0:N0}' -f ($hourly * 24 * 30)) + "/month if left up)")
 
-if ($state.ContainsKey('upCompletedUtc') -and $state.upCompletedUtc) {
+# "Up since" and "spent so far" are claims about resources THIS harness created, and on an
+# attached environment neither is true: the timestamp is when the cycle attached, and the APIM
+# meter has been running since long before that and will keep running afterwards. Printing a
+# running total against it would invite exactly the wrong reaction — turning it off.
+$attached = $state.ContainsKey('attached') -and [bool]$state.attached
+if ($attached) {
+    Write-Host "  ATTACHED environment: '$($state.environment)' is deployed and owned by CI (deploy-all.yml)."
+    if ($state.ContainsKey('upCompletedUtc') -and $state.upCompletedUtc) {
+        Write-Host ("  Cycle attached at {0:u}. The costs above are this environment's own; the cycle did not create them and must not stop them." -f (ConvertFrom-CycleTimestamp $state.upCompletedUtc))
+    }
+    Write-Host '  scripts/cycle/down.ps1 refuses this environment. Destroying it is the infra-destroy.yml workflow.' -ForegroundColor Yellow
+}
+elseif ($state.ContainsKey('upCompletedUtc') -and $state.upCompletedUtc) {
     $up = ConvertFrom-CycleTimestamp $state.upCompletedUtc
     $age = [datetimeoffset]::UtcNow - $up
     Write-Host ("  Up since {0:u} ({1:%d}d {1:%h}h {1:%m}m)" -f $up, $age)
@@ -82,7 +94,14 @@ if ($state.ContainsKey('upCompletedUtc') -and $state.upCompletedUtc) {
 }
 
 Write-Host ''
-if ($apimCount -eq 0 -and $foundryCount -gt 0) {
+if ($attached) {
+    Write-Host '  State: ATTACHED. Nothing here belongs to the cycle except the fgcycle-* APIM subscriptions.' -ForegroundColor Cyan
+    if ($state.ContainsKey('outputs') -and $state.outputs.ContainsKey('apimGatewayUrl')) {
+        Write-Host "  Gateway: $($state.outputs.apimGatewayUrl)"
+    }
+    Write-Host "  Remove the fixtures: pwsh scripts/cycle/subscriptions.ps1 -Environment $($state.environment) -Cleanup"
+}
+elseif ($apimCount -eq 0 -and $foundryCount -gt 0) {
     Write-Host "  State: TORN DOWN (KeepFoundry). $foundryCount Foundry account(s) and the telemetry stores remain, none of which bill at rest." -ForegroundColor Green
     Write-Host '  Next up.ps1 will re-run the template with createModelDeployments=false over them.'
 }
