@@ -212,15 +212,19 @@ if ($AttachOnly) {
     # every resource reports healthy. Reading it here turns a four-hour "ingestion lag" hunt
     # in measure.ps1 into one line at attach time.
     Write-CycleHeading 'Diagnostic setting destination type (#244)'
-    $settings = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+    $listed = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
         'monitor', 'diagnostic-settings', 'list', '--resource', $apimId
     )
-    $dedicated = @(@($settings.value) | Where-Object { $_.logAnalyticsDestinationType -eq 'Dedicated' })
-    $llmCategories = @(@($settings.value) | ForEach-Object { @($_.logs) } | Where-Object { $_.category -eq 'GatewayLlmLogs' -and $_.enabled })
+    # az has returned this command's payload both ways across versions: a bare array of
+    # settings, and an ARM-shaped { "value": [...] } envelope. Under Set-StrictMode reaching
+    # for the wrong one is a terminating error, so accept either rather than pinning a version.
+    $settings = @(($listed -is [System.Collections.IDictionary] -and $listed.ContainsKey('value')) ? $listed.value : $listed)
+    $dedicated = @($settings | Where-Object { $_.logAnalyticsDestinationType -eq 'Dedicated' })
+    $llmCategories = @($settings | ForEach-Object { @($_.logs) } | Where-Object { $_.category -eq 'GatewayLlmLogs' -and $_.enabled })
     Add-CycleCheck -State $state -Id 'UP-3' -Name 'APIM diagnostic setting sends LLM logs to the dedicated table (#244)' `
         -Status (($dedicated.Count -gt 0 -and $llmCategories.Count -gt 0) ? 'PASS' : 'FAIL') `
         -Detail ("{0} diagnostic setting(s), {1} with logAnalyticsDestinationType=Dedicated, {2} with GatewayLlmLogs enabled" -f `
-            @($settings.value).Count, $dedicated.Count, $llmCategories.Count)
+            $settings.Count, $dedicated.Count, $llmCategories.Count)
 
     Write-CycleHeading 'Model deployment states'
     $models = Read-ModelDeploymentStates -AccountNames @($outputs.foundryAccountNames)

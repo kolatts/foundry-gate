@@ -278,10 +278,17 @@ function Invoke-GatewayRequest {
             $response = Invoke-WebRequest @params
             $headers = @{}
             foreach ($k in $response.Headers.Keys) { $headers[$k] = ($response.Headers[$k] -join ', ') }
+            # .Content is normally a string, but Invoke-WebRequest hands back a byte[] when
+            # the response declares no charset — which some of the gateway's own error
+            # bodies do. `[string]$bytes` then renders "123 10 32 32 34 101..." into the
+            # evidence report, i.e. the decimal codes of the very message the check exists
+            # to show. Observed live on a 404 DeploymentNotFound from the dev gateway.
+            $content = $response.Content
+            $body = ($content -is [byte[]]) ? [System.Text.Encoding]::UTF8.GetString($content) : [string]$content
             return [pscustomobject]@{
                 StatusCode = [int]$response.StatusCode
                 Headers    = $headers
-                Body       = [string]$response.Content
+                Body       = $body
                 Transport  = $null
             }
         }

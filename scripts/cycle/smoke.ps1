@@ -186,8 +186,34 @@ while ($tpmAttempts -lt 30 -and $null -eq $tpm429) {
 
 if ($null -ne $tpm429) {
     $retryAfter = Get-ResponseHeader $tpm429 'Retry-After'
-    Assert-Check -Id 'T4a' -Name 'TPM cap returns 429 with Retry-After' -Condition ($retryAfter -ne '') `
-        -Detail "HTTP 429 after $tpmAttempts requests, Retry-After=$retryAfter, last x-fg-remaining-tpm=$lastRemainingTpm — $(Format-BodyExcerpt $tpm429.Body 160)"
+
+    # WHOSE 429 IS THIS? T4b has always had to tell the two apart; T4a did not, and on an
+    # environment where the shared Foundry deployment is smaller than the tier's TPM cap that
+    # is the difference between proving the gateway's meter and proving Azure OpenAI's.
+    #
+    #   gateway  llm-token-limit refusing this subscription's own bucket
+    #            -> x-fg-remaining-tpm = 0 on the refusal. This is what T4a is for.
+    #   backend  the Foundry deployment saturating (capacity units, not the developer's
+    #            budget), passed straight through because the OpenAI API policy deliberately
+    #            does not retry a single backend
+    #            -> x-fg-remaining-tpm still has headroom, and the body names the model.
+    #
+    # Observed live on dev 2026-09-05: a 429 with remaining-tpm=6413 and the body "Your
+    # requests to gpt-4.1-mini for gpt-4-1-mini in eastus2 have exceeded rate limit" — the
+    # deployment was 10 capacity units (~10K TPM) behind a 20K TPM tier, so the backend wall
+    # sits in FRONT of the gateway wall and the developer's own meter can never be reached.
+    # That is a finding about the environment, not a pass, so it is reported as one.
+    $refusalRemaining = Get-ResponseHeader $tpm429 'x-fg-remaining-tpm'
+    $isGatewayMeter = $refusalRemaining -eq '0'
+    if ($isGatewayMeter) {
+        Assert-Check -Id 'T4a' -Name 'TPM cap returns 429 with Retry-After' -Condition ($retryAfter -ne '') `
+            -Detail "gateway meter: HTTP 429 after $tpmAttempts requests, Retry-After=$retryAfter, x-fg-remaining-tpm=0 on the refusal — $(Format-BodyExcerpt $tpm429.Body 160)"
+    }
+    else {
+        Add-CycleCheck -State $state -Id 'T4a' -Name 'TPM cap returns 429 with Retry-After' -Status 'SKIP' `
+            -Detail ("The 429 came from the BACKEND, not the gateway's meter: x-fg-remaining-tpm=$refusalRemaining still has headroom on the refusal (Retry-After=$retryAfter) and the body names the deployment — $(Format-BodyExcerpt $tpm429.Body 200). " +
+                "The shared Foundry deployment saturates before this tier's $($standardTier.tpm) TPM cap binds, so the developer's own meter is unreachable here. Raise the deployment's capacity above the tier's TPM to make it reachable.")
+    }
 
     # Counter isolation: bob is the SAME tier, so a SHARED counter would refuse him too.
     #
