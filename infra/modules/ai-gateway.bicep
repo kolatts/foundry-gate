@@ -363,23 +363,24 @@ resource tierProducts 'Microsoft.ApiManagement/service/products@2024-06-01-previ
   }
 ]
 
-resource tierProductAnthropicLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
+// Which APIs each tier product exposes. Deliberately `products/apis` and NOT the newer
+// `products/apiLinks`: `apiLinks` is not idempotent. Its identity is the link name, but
+// APIM additionally enforces uniqueness on the (product, api) PAIR, so a second PUT of an
+// already-linked pair fails with `Conflict — Link already exists between specified Product
+// and Api` even though nothing changed. That makes the whole template single-use, which
+// broke the first re-run of the dev deploy (#239). `products/apis` names the association by
+// the API itself, so a re-PUT is a genuine no-op. Verified against APIM BasicV2, 2026-09-05.
+resource tierProductAnthropicApis 'Microsoft.ApiManagement/service/products/apis@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
-    name: 'anthropic-link'
-    properties: {
-      apiId: anthropicApi.id
-    }
+    name: anthropicApi.name
   }
 ]
 
-resource tierProductOpenaiLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
+resource tierProductOpenaiApis 'Microsoft.ApiManagement/service/products/apis@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
-    name: 'openai-link'
-    properties: {
-      apiId: openaiApi.id
-    }
+    name: openaiApi.name
   }
 ]
 
