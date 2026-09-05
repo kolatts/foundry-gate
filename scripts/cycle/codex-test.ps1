@@ -250,7 +250,7 @@ else {
     }
 }
 
-$state.harnessCompletedUtc = (Get-Date).ToUniversalTime().ToString('o')
+$state.harnessCompletedUtc = Get-CycleTimestamp
 Save-CycleState -State $state
 
 if ($failures -gt 0) { Write-Host "$failures harness check(s) FAILED." -ForegroundColor Red; exit 1 }

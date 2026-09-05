@@ -60,7 +60,7 @@ $rg = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @('group', 
 if ($null -eq $rg) {
     Write-Host "Resource group $rgName does not exist — nothing to tear down." -ForegroundColor Green
     $state.teardownMode = $Mode
-    $state.downCompletedUtc = (Get-Date).ToUniversalTime().ToString('o')
+    $state.downCompletedUtc = Get-CycleTimestamp
     Save-CycleState -State $state
     exit 0
 }
@@ -126,7 +126,7 @@ else {
 }
 
 $state.teardownMode = $Mode
-$state.downCompletedUtc = (Get-Date).ToUniversalTime().ToString('o')
+$state.downCompletedUtc = Get-CycleTimestamp
 # The gateway is gone, so the keys are dead. Drop them rather than leaving live-looking
 # secrets in a file whose whole point is that the next stage can read them.
 if ($state.ContainsKey('apimSubscriptions')) { $state.Remove('apimSubscriptions') }

@@ -82,7 +82,7 @@ $state.resourceGroup = $resourceGroup
 $state.location = $Location
 $state.deploymentName = $DeploymentName
 if (-not $state.ContainsKey('checks')) { $state.checks = @() }
-$state.upStartedUtc = $started.ToUniversalTime().ToString('o')
+$state.upStartedUtc = Get-CycleTimestamp -When $started
 Save-CycleState -State $state
 
 # ---- 1. Offline policy validation ------------------------------------------------
@@ -190,7 +190,7 @@ $state.outputs = $outputs
 $state.quotaTiers = $quotaTiers
 $state.createModelDeploymentsUsed = $create
 $state.skipClaude = [bool]$SkipClaude
-$state.upCompletedUtc = (Get-Date).ToUniversalTime().ToString('o')
+$state.upCompletedUtc = Get-CycleTimestamp
 $state.upElapsedSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds)
 $state.deployElapsedSeconds = [math]::Round($deployElapsed.TotalSeconds)
 

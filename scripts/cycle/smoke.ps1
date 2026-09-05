@@ -219,7 +219,7 @@ else {
         -Detail "No quota 403 within $QuotaBurnTimeoutMinutes min / $quotaAttempts requests; last x-fg-remaining-quota=$lastRemainingQuota"
 }
 
-$state.smokeCompletedUtc = (Get-Date).ToUniversalTime().ToString('o')
+$state.smokeCompletedUtc = Get-CycleTimestamp
 Save-CycleState -State $state
 
 Write-CycleHeading 'Smoke summary'

@@ -27,7 +27,7 @@ $state = Get-CycleState -Environment $Environment -Required
 $sb = [System.Text.StringBuilder]::new()
 function Add-Line { param([string] $Text = '') [void]$sb.AppendLine($Text) }
 
-$when = if ($state.ContainsKey('upStartedUtc')) { [datetimeoffset]::Parse($state.upStartedUtc) } else { [datetimeoffset]::UtcNow }
+$when = if ($state.ContainsKey('upStartedUtc')) { ConvertFrom-CycleTimestamp $state.upStartedUtc } else { [datetimeoffset]::UtcNow }
 
 Add-Line "# Gateway cycle — live evidence, $($when.ToString('yyyy-MM-dd'))"
 Add-Line ''

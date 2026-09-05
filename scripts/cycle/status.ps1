@@ -73,7 +73,7 @@ Write-Host ''
 Write-Host ("  Estimated idle cost: ~`$" + ('{0:N2}' -f $hourly) + "/hr (~`$" + ('{0:N0}' -f ($hourly * 24 * 30)) + "/month if left up)")
 
 if ($state.ContainsKey('upCompletedUtc') -and $state.upCompletedUtc) {
-    $up = [datetimeoffset]::Parse($state.upCompletedUtc)
+    $up = ConvertFrom-CycleTimestamp $state.upCompletedUtc
     $age = [datetimeoffset]::UtcNow - $up
     Write-Host ("  Up since {0:u} ({1:%d}d {1:%h}h {1:%m}m)" -f $up, $age)
     if ($apimCount -gt 0) {

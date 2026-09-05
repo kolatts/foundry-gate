@@ -70,6 +70,29 @@ function Save-CycleState {
     $State | ConvertTo-Json -Depth 12 | Set-Content -Path $path -Encoding utf8
 }
 
+<#
+ Timestamps for the state file.
+
+ They are deliberately NOT ISO-8601 round-trip ('o') format. `ConvertFrom-Json` silently
+ converts any string it recognises as ISO-8601 into a [datetime], and `ConvertTo-Json` then
+ writes that back in LOCAL time — so every save/load cycle shifted every stored timestamp by
+ the UTC offset. The visible symptom was status.ps1 reporting a gateway deployed four hours
+ in the future and a negative amount spent on APIM.
+
+ A space instead of the 'T' keeps it human-readable and keeps ConvertFrom-Json's hands off
+ it, while [datetimeoffset]::Parse still reads it correctly because of the trailing Z.
+#>
+function Get-CycleTimestamp {
+    param([datetime] $When = (Get-Date))
+    return $When.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss'Z'")
+}
+
+function ConvertFrom-CycleTimestamp {
+    param([Parameter(Mandatory)] $Value)
+    if ($Value -is [datetime]) { return [datetimeoffset]$Value }
+    return [datetimeoffset]::Parse([string]$Value, [cultureinfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal)
+}
+
 function Write-CycleHeading {
     param([Parameter(Mandatory)][string] $Text)
     Write-Host ''
@@ -102,7 +125,7 @@ function Add-CycleCheck {
         name     = $Name
         status   = $Status
         detail   = Protect-CycleSecret -Text $Detail -State $State
-        recorded = (Get-Date).ToUniversalTime().ToString('o')
+        recorded = Get-CycleTimestamp
     }
     $color = switch ($Status) { 'PASS' { 'Green' } 'FAIL' { 'Red' } default { 'Yellow' } }
     Write-Host ("  [{0}] {1} — {2}" -f $Status, $Id, $Name) -ForegroundColor $color

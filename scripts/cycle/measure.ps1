@@ -108,7 +108,7 @@ if ($rowCount -eq 0) {
     Write-Host "  No LLM log rows within $TimeoutMinutes min. Ingestion lag can exceed that; re-run measure.ps1 later against the same state file." -ForegroundColor Yellow
     Add-CycleCheck -State $state -Id 'M2' -Name 'Reconciliation KQL returns per-developer totals' -Status 'SKIP' -Detail 'No rows to reconcile.'
     Add-CycleCheck -State $state -Id 'M3' -Name 'D-017 de-duplication assumption checked against live data' -Status 'SKIP' -Detail 'No rows to inspect.'
-    $state.measureCompletedUtc = (Get-Date).ToUniversalTime().ToString('o')
+    $state.measureCompletedUtc = Get-CycleTimestamp
     Save-CycleState -State $state
     exit ($failures -gt 0 ? 1 : 0)
 }
@@ -199,7 +199,7 @@ else {
     Write-CycleInfo 'No customMetrics rows (the metric flows to Azure Monitor metrics, and App Insights ingestion lags too). Not a failure.'
 }
 
-$state.measureCompletedUtc = (Get-Date).ToUniversalTime().ToString('o')
+$state.measureCompletedUtc = Get-CycleTimestamp
 Save-CycleState -State $state
 
 if ($failures -gt 0) { Write-Host "$failures measurement check(s) FAILED." -ForegroundColor Red; exit 1 }
