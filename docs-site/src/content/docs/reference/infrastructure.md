@@ -200,7 +200,7 @@ A fork that enables the gateway's GenAI diagnostic setting by hand needs the sam
 | `sqlZoneRedundant` | `false` | `true` | survives the loss of one availability zone without a restore; adds ~60% to the SQL compute meter (see [Cost & capacity](/foundry-gate/reference/cost-and-capacity/)) |
 | `entraTenantId` | tenant | tenant | `AzureAd__TenantId` |
 | `entraApiClientId` | `$FG_ENTRA_API_CLIENT_ID` | same | `AzureAd__ClientId`; zero GUID until the app registration exists |
-| `entraApiAudience` | `api://{clientId}` | same | `AzureAd__Audience` |
+| `entraApiAudience` | `api://{clientId}` | same | `AzureAd__Audience`; the API accepts the bare client id too, because v2 tokens carry that as `aud` ([#102](https://github.com/kolatts/foundry-gate/issues/102)) |
 | `apiContainerImage` | `$FG_API_IMAGE` (required) | same | see re-run invariant 2 |
 | `containerAppMinReplicas` / `MaxReplicas` | 1 / 2 | 1 / 3 | min 1 — the admin API is the UI's only backend |
 | `containerAppCpu` / `containerAppMemory` | `0.25` / `0.5Gi` | `0.5` / `1.0Gi` | only the Consumption profile pairs are valid (0.25/0.5Gi, 0.5/1.0Gi, 0.75/1.5Gi, 1.0/2.0Gi, …) |

@@ -211,7 +211,7 @@ actually consumes each value.
 | `AzureAd__Instance` | Entra cloud instance (`https://login.microsoftonline.com/` in the public cloud) |
 | `AzureAd__TenantId` | Entra tenant ID for bearer token validation |
 | `AzureAd__ClientId` | Entra App Registration client ID |
-| `AzureAd__Audience` | Token audience (usually `api://{clientId}`) |
+| `AzureAd__Audience` | Token audience (usually `api://{clientId}`). The API accepts **both** `{clientId}` and `api://{clientId}` whatever this is set to — the app registration requests v2 access tokens, whose `aud` is the bare client id, and pinning validation to the `api://` form alone rejected every real token ([#102](https://github.com/kolatts/foundry-gate/issues/102)) |
 | `Cors__AllowedOrigins__0` | The Static Web App origin allowed to call `/api/v1` |
 | `KeyProtection__Provider` | `KeyVault` (default; cloud) or `DataProtection` (machine-local key ring — accepted in the `local` environment only; the API refuses to start with it anywhere else) |
 | `Security__RateLimits__Reveal__PermitLimit` / `__WindowSeconds` | The `POST /keys/me/reveal` cap, per caller `oid`. Defaults to **5 per 60 seconds** — the values that shipped as constants ([#181](https://github.com/kolatts/foundry-gate/issues/181)). Validated at startup (`1–10000` permits, `1–3600` seconds) |

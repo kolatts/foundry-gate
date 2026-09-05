@@ -76,7 +76,10 @@ az rest --method PATCH --uri "https://graph.microsoft.com/v1.0/applications/$API
 ```
 
 `requestedAccessTokenVersion: 2` matters: the API validates v2.0 tokens, and a v1 token
-carries the wrong `iss` and no `oid` in the short claim form.
+carries the wrong `iss` and no `oid` in the short claim form. It also decides the audience —
+a v2 token's `aud` is the bare client id, **not** `api://{clientId}`, which is what
+`AzureAd__Audience` is set to. The API therefore accepts both forms
+([#102](https://github.com/kolatts/foundry-gate/issues/102)); do not narrow it to one.
 
 An app role is only assignable once a **service principal** exists for the app:
 
@@ -403,3 +406,45 @@ top-to-bottom in one shell.
 
 4. **The managed identities' Graph app roles** — step 6 above, which could not run before
    the identities existed.
+
+## 9. Calling the deployed API from a terminal
+
+Useful for smoke-testing a deploy, and required by the token-gated half of
+`FoundryGate.Tests.Postdeployment` ([#102](https://github.com/kolatts/foundry-gate/issues/102)).
+Pre-authorize the Azure CLI's own public client for the API's scope, once per environment,
+so no consent prompt stands between you and a token:
+
+```bash
+CLI_APP_ID=04b07795-8ddb-461a-bbee-02f9e1bf7b46   # Microsoft Azure CLI, the same in every tenant
+az rest --method PATCH \
+  --uri "https://graph.microsoft.com/v1.0/applications/$API_OBJ_ID" \
+  --headers "Content-Type=application/json" \
+  --body "{\"api\":{\"preAuthorizedApplications\":[{\"appId\":\"$WEB_APP_ID\",\"delegatedPermissionIds\":[\"$SCOPE_ID\"]},{\"appId\":\"$CLI_APP_ID\",\"delegatedPermissionIds\":[\"$SCOPE_ID\"]}]}}"
+```
+
+`preAuthorizedApplications` is replaced wholesale, so list the SPA alongside the CLI or the
+UI loses its consent-free sign-in.
+
+Then:
+
+```bash
+TOKEN=$(az account get-access-token \
+  --scope "api://$API_APP_ID/access_as_user" --query accessToken -o tsv)
+curl -s -H "Authorization: Bearer $TOKEN" "https://$API_FQDN/api/v1/users/me"
+```
+
+Use `--scope`, not `--resource`: `--resource api://…` asks the CLI for a token it holds no
+refresh token for and fails with `Status_InteractionRequired`, telling you to run
+`az login --scope …`. The `--scope` form succeeds against the session you already have.
+
+To run the postdeployment auth tests:
+
+```bash
+export FG_API_BASE_URL="https://$API_FQDN"
+export FG_ADMIN_TOKEN="$TOKEN"
+dotnet test src/FoundryGate.Tests.Postdeployment
+```
+
+`FG_NONADMIN_TOKEN` is the same thing for a principal **without** the `FoundryGate.Admin`
+app-role assignment — a second tenant account, or the same account with the assignment
+temporarily removed. A test whose token is unset reports as *skipped*, never as passed.

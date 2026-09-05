@@ -1,13 +1,18 @@
 name: Postdeployment Tests (Reusable)
 
 # Reusable workflow_call: runs FoundryGate.Tests.Postdeployment against a deployed environment
-# after the app deploys (deploy-all.yml). Today the project holds only the scaffold smoke test,
-# so the run is NOT gating (`continue-on-error`) — it reports. #139 makes it gating once the
-# Playwright scenarios exist.
+# after the app deploys (deploy-all.yml). The run is NOT gating (`continue-on-error`) — it
+# reports. #139 makes it gating once the Playwright scenarios exist.
 #
 # The tests receive the live URLs through environment variables read from the infra outputs:
 #   FG_API_BASE_URL   https://<container app fqdn>
 #   FG_UI_BASE_URL    https://<static web app hostname>
+#
+# The unauthenticated half of ApiAuthenticationTests (#102) runs here on FG_API_BASE_URL alone.
+# The 403/200 half needs delegated Entra tokens (FG_ADMIN_TOKEN / FG_NONADMIN_TOKEN) and reports
+# as *skipped* without them — a CI principal signs in with OIDC as an application and cannot mint
+# a user token, and an access token expires in an hour, so there is nothing durable to store. Run
+# that half from a developer machine per docs reference/owner-setup.md.
 
 on:
   workflow_call:
@@ -112,7 +117,7 @@ jobs:
             echo ""
             echo "- \`dotnet test\` outcome: **${OUTCOME}**"
             echo "- Result: **${summary}**"
-            echo "- Coverage today is the scaffold smoke test only, and the result is **not gating** — a green line here does NOT mean the stack is verified (#139)."
+            echo "- Coverage today is the unauthenticated 401 contract plus the scaffold smoke test; the token-gated 403/200 assertions report as **skipped** here (no user token in CI). The result is **not gating** — a green line does NOT mean the stack is verified (#139)."
             echo "- API: ${API}"
             echo "- UI: ${UI}"
           } >> "$GITHUB_STEP_SUMMARY"
