@@ -32,6 +32,12 @@ param sqlDatabaseName string
 // `RegionDoesNotAllowProvisioning`, not a quota error. Both `eastus2` and `eastus` were
 // closed to this subscription on 2026-09-05, which is what pushed dev's SQL to `centralus`
 // (#241). Existing servers in a closed region keep working; only creation is blocked.
+//
+// IMMUTABLE ONCE DEPLOYED. `Microsoft.Sql/servers.location` cannot be changed in place, so
+// this is a one-shot decision per environment: changing it later makes the incremental
+// deployment FAIL rather than move anything, and the recovery is exporting the database and
+// re-creating it on a new server. Choose it deliberately before an environment's first
+// deploy — after that it is a migration, not a parameter.
 param location string
 param tags object = {}
 

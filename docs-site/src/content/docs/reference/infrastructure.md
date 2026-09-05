@@ -172,6 +172,18 @@ so a prod day-0 does not discover this the way dev did
 request (Issue type *Service and subscription limits*) to reopen the primary region — worth
 it when co-location matters, not worth blocking a first deploy on.
 
+:::danger[`sqlLocation` is immutable once the server exists]
+`Microsoft.Sql/servers.location` cannot be changed in place. Setting it is a **one-shot
+decision per environment**: change it after the first deploy and the incremental deployment
+*fails* rather than moving anything, and the recovery is exporting the database and
+re-creating it on a new server. Pick it before an environment's first deploy — afterwards it
+is a migration, not a parameter.
+
+Two things must agree with it: `sqlZoneRedundant` requires a region that actually has
+availability zones, and `sqlBackupStorageRedundancy = 'Geo'` geo-pairs from *this* region,
+not from `location`.
+:::
+
 ## Role assignments
 
 All scoped to the individual resource, never the resource group; names are
