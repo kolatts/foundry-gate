@@ -515,6 +515,59 @@ both hosts yield it. The Graph client also had to stop reading `AzureAd:ClientId
 binds no `AzureAd` section — nothing there serves a request), so the app registration id travels on
 `Entra:ApplicationClientId`, set by infra on both hosts and defaulted from `AzureAd:ClientId` on the Api.
 
+### D-022: The gateway cycle is scripted, and the second run is what the scripts are for
+**Date:** 2026-09-05 (#219)
+**Decision:** `scripts/cycle/` + the `gateway-cycle` skill automate spin-up → test →
+spin-down, with teardown defaulting to **KeepFoundry** (delete everything except the
+Cognitive Services accounts, and purge the soft-deleted APIM).
+**Why KeepFoundry is the default:** Anthropic deployments are create-once per account
+(E-006/E-007), so a teardown that destroys the Foundry accounts spends the next spin-up's
+only Claude create attempt. Keeping them is what makes "frequently" survivable.
+**What the live run found that a first run never would.** Every one of these is a bug that
+only appears on the *second* cycle, which is exactly the case the hand-run 2026-09-01
+validation could not have exercised:
+
+- **APIM soft-delete blocks the next spin-up.** Deleting an APIM service reserves its name;
+  the next deploy dies with `ServiceAlreadyExistsInSoftDeletedState`. Both `down.ps1` (on the
+  way out) and `up.ps1` (on the way in) now purge it. Without this the cycle works exactly
+  once. Purging APIM is unrelated to the Anthropic problem, which is about Cognitive Services
+  accounts.
+- **The monthly quota counter cannot be reset.** It is keyed on the APIM subscription, so
+  reusing `dev-alice` means the second cycle in a calendar month starts her at 403 and can
+  demonstrate neither wall. Subscription ids now carry a cycle stamp.
+- **A freshly created APIM key is not immediately usable** — it has to propagate to the
+  gateway nodes, and until it does the gateway answers `401 invalid subscription key` on a
+  key that works a minute later. `subscriptions.ps1` waits for it.
+
+**E-011 (`apiLinkId` is unique per SERVICE, not per product):** naming all three tier
+products' links `anthropic-link` made the first win and the rest fail with `Conflict: Link
+already exists between specified Product and Api` on a CLEAN deploy. The dangerous part is
+the partial success — the tier products existed and looked right in the portal with no APIs
+attached, and every key issued against them would have been dead on arrival while every
+policy still read as configured. Fixed with tier-prefixed ids (#230).
+
+**E-012 (a tier's TPM has a floor, and it is one agent turn):** `codex exec` spends ~9-10K
+tokens on its system prompt before doing anything. With the per-minute cap *below* that, the
+harness deadlocks — codex 429s, retries, keeps the bucket empty, gives up without finishing,
+and therefore never spends its monthly budget, making the 403 unreachable. Verified across 25
+consecutive execs at both 8000 and 12000 TPM. So the two demo tiers now have opposite shapes:
+`standard` (tight TPM) proves the 429 wall, `power` (generous TPM, small monthly budget)
+proves the 403 wall. Shipped defaults in `main.bicep` are unaffected; the missing piece is the
+written-down rule (#237).
+
+**E-013 (two different 429s on the same path):** a 429 with `x-fg-remaining-tpm: 0` is the
+gateway's per-subscription meter; a 429 with the header still FULL is the shared Foundry
+deployment saturating and being passed through, since the OpenAI policy deliberately does not
+retry a single backend. Reading the status code alone conflates a developer being over budget
+with a deployment being too small.
+
+**E-007 restated, and worse than recorded.** The single day-0 Claude create attempt failed
+with an opaque `InternalServerError` on a **completely fresh account, in a fresh resource
+group, with nothing soft-deleted** (correlation id `46e5db9d-54ea-4b23-9ef4-b895bca3e3b5`).
+E-007 described post-churn failures; this suggests a subscription-level Marketplace
+entitlement problem instead, which no agent can fix from the CLI — filed as `needs-human`
+(#231). Not retried, not deleted/recreated. The demo continued on the OpenAI path.
+
 ### D-021: Session handoff — 2026-09-01/02 implementation pass summarised, nothing live yet
 **Date:** 2026-09-02
 **Decision:** Record the pass as done rather than keep expanding issue #101's comment thread.
