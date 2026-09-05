@@ -1,0 +1,221 @@
+@* Add or retarget one row of a tier's model allowlist (#225). The gateway's alias map IS the
+   allowlist (#86), so this dialog is where a model becomes usable by a tier — and where it stops
+   being usable, by pointing the same alias somewhere else.
+
+   Two of the four fields are derived, not asked: `provider` and `pool` both follow from the chosen
+   deployment's ARM model.format, and getting either wrong produces a failure that looks like
+   something else (a Claude alias routed at the OpenAI backend dies as an opaque 404). They are shown
+   so the admin can see what will be written, and are not editable. *@
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary mb-4" Style="max-width: 34rem;">
+            An alias is the model name developers put in their CLI. The gateway rewrites it to the
+            deployment below and refuses anything this tier doesn't list.
+        </MudText>
+
+        @if (_deploymentNames.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-4" data-testid="alias-no-deployments">
+                There are no Foundry deployments to point an alias at yet. Provision one first.
+            </MudAlert>
+        }
+
+        <MudForm @ref="_form">
+            <MudSelect T="string"
+                       Value="@_tier"
+                       ValueChanged="@OnTierChanged"
+                       Label="Tier"
+                       Variant="Variant.Outlined"
+                       Disabled="@IsRetarget"
+                       data-testid="alias-tier">
+                @foreach (var tier in Tiers)
+                {
+                    <MudSelectItem T="string" Value="@tier.Tier">@tier.DisplayName</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField @bind-Value="_alias"
+                          Label="Alias"
+                          Variant="Variant.Outlined"
+                          Class="mt-4"
+                          Disabled="@IsRetarget"
+                          Required="true"
+                          RequiredError="An alias needs a name."
+                          MaxLength="@ValidationConstants.FoundryDeploymentNameMaxLength"
+                          HelperText="Lower-case: letters, digits, and . _ - after the first character. e.g. sonnet"
+                          data-testid="alias-name" />
+
+            <MudSelect T="string"
+                       Value="@_deploymentName"
+                       ValueChanged="@OnDeploymentChanged"
+                       Label="Deployment"
+                       Variant="Variant.Outlined"
+                       Class="mt-4"
+                       Required="true"
+                       RequiredError="Pick the deployment this alias resolves to."
+                       data-testid="alias-deployment">
+                @foreach (var name in _deploymentNames)
+                {
+                    <MudSelectItem T="string" Value="@name">@name</MudSelectItem>
+                }
+            </MudSelect>
+
+            @if (_deploymentName.Length > 0)
+            {
+                <div class="d-flex align-center gap-2 mt-4" data-testid="alias-derived">
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info">
+                        @Provider front door
+                    </MudChip>
+                    <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default">
+                        @Pool backend
+                    </MudChip>
+                </div>
+
+                @if (MissingFrom.Count > 0 && Pool == GatewayModelMap.AnthropicPool)
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true" Class="mt-4" data-testid="alias-missing-regions">
+                        '@_deploymentName' is missing from @string.Join(", ", MissingFrom). A pooled model has to
+                        exist in every region — the pool sends a throttled request to another one, and a region
+                        without the deployment turns that throttle into a 404. The API will refuse this.
+                    </MudAlert>
+                }
+
+                @if (_alias.Length > 0 && ExistingAliases.Contains(_alias, StringComparer.OrdinalIgnoreCase) && !IsRetarget)
+                {
+                    <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-4" data-testid="alias-replaces">
+                        This tier already allows '@_alias'. Saving re-points it at '@_deploymentName'.
+                    </MudAlert>
+                }
+            }
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@Cancel" data-testid="alias-cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="@(_deploymentNames.Count == 0)"
+                   OnClick="@SubmitAsync"
+                   data-testid="alias-save">@(IsRetarget ? "Retarget" : "Allow")</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance Instance { get; set; } = default!;
+
+    /// <summary>Tiers whose allowlist this dialog may write to. Fixed to one when retargeting.</summary>
+    [Parameter]
+    public IReadOnlyList<GatewayTierResponse> Tiers { get; set; } = [];
+
+    /// <summary>Every deployment in every configured account — the source of the deployment picker and of the derived fields.</summary>
+    [Parameter]
+    public IReadOnlyList<FoundryDeploymentResponse> Deployments { get; set; } = [];
+
+    /// <summary>The gateway's configured accounts, in pool order, so "missing from" names them all.</summary>
+    [Parameter]
+    public IReadOnlyList<string> ConfiguredAccounts { get; set; } = [];
+
+    /// <summary>Aliases the chosen tier already allows — so adding one that exists says it is a replacement.</summary>
+    [Parameter]
+    public IReadOnlyList<string> ExistingAliases { get; set; } = [];
+
+    /// <summary>Tier to start on.</summary>
+    [Parameter]
+    public string Tier { get; set; } = string.Empty;
+
+    /// <summary>Alias to start with — set when retargeting, or when a deep link named one.</summary>
+    [Parameter]
+    public string Alias { get; set; } = string.Empty;
+
+    /// <summary>Deployment to start with — what <c>/foundry</c>'s "allow this model" link pre-fills.</summary>
+    [Parameter]
+    public string DeploymentName { get; set; } = string.Empty;
+
+    /// <summary>True when the alias and tier are fixed and only the deployment moves.</summary>
+    [Parameter]
+    public bool IsRetarget { get; set; }
+
+    private MudForm? _form;
+    private string _tier = string.Empty;
+    private string _alias = string.Empty;
+    private string _deploymentName = string.Empty;
+    private List<string> _deploymentNames = [];
+
+    /// <summary>The ARM model format of the chosen deployment — what both derived fields follow from.</summary>
+    private string? ChosenFormat =>
+        Deployments.FirstOrDefault(d => string.Equals(d.DeploymentName, _deploymentName, StringComparison.OrdinalIgnoreCase))?.ModelFormat;
+
+    private ModelProviderType Provider => ModelAliasDerivation.ProviderFor(ChosenFormat);
+
+    private string Pool => ModelAliasDerivation.PoolFor(ChosenFormat);
+
+    /// <summary>Configured accounts that don't carry the chosen deployment — fatal for a pooled model.</summary>
+    private IReadOnlyList<string> MissingFrom
+    {
+        get
+        {
+            var carrying = Deployments
+                .Where(d => string.Equals(d.DeploymentName, _deploymentName, StringComparison.OrdinalIgnoreCase))
+                .Select(d => d.AccountName)
+                .ToList();
+
+            return [.. ConfiguredAccounts.Where(account => !carrying.Contains(account, StringComparer.OrdinalIgnoreCase))];
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        _tier = Tier.Length > 0 ? Tier : Tiers.FirstOrDefault()?.Tier ?? string.Empty;
+        _alias = Alias;
+        _deploymentName = DeploymentName;
+        _deploymentNames = [.. Deployments
+            .Select(d => d.DeploymentName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    private void OnTierChanged(string? tier) => _tier = tier ?? string.Empty;
+
+    private void OnDeploymentChanged(string? deploymentName)
+    {
+        _deploymentName = deploymentName ?? string.Empty;
+
+        // A blank alias follows the deployment: "claude-sonnet-4-5" is a fine first guess at what the
+        // alias should be called, and an admin who wants "sonnet" only has to shorten it. An alias
+        // they have already typed is theirs and is left alone.
+        if (_alias.Length == 0)
+        {
+            _alias = _deploymentName.ToLowerInvariant();
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        if (_form is not null)
+        {
+            await _form.ValidateAsync();
+            if (!_form.IsValid)
+            {
+                return;
+            }
+        }
+
+        if (_tier.Length == 0 || _deploymentName.Length == 0)
+        {
+            return;
+        }
+
+        var row = new TierModelAliasRequest
+        {
+            Alias = _alias.Trim().ToLowerInvariant(),
+            DeploymentName = _deploymentName.Trim(),
+            Pool = Pool,
+            Provider = Provider,
+        };
+
+        Instance.Close(DialogResult.Ok(new ModelAliasEdit(_tier, row)));
+    }
+
+    private void Cancel() => Instance.Cancel();
+}

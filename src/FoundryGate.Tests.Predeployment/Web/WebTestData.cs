@@ -6,6 +6,7 @@ using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Dashboard.Contracts;
 using FoundryGate.Domain.Foundry;
 using FoundryGate.Domain.Foundry.Contracts;
+using FoundryGate.Domain.Gateway.Contracts;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Keys.Contracts;
 using FoundryGate.Domain.Quota;
@@ -35,6 +36,28 @@ public static class WebTestData
         new(GatewayTiers.Power, "Power", 20_000_000, false),
         new(GatewayTiers.Unlimited, "Unlimited", null, true),
     ];
+
+    /// <summary>
+    /// The same three tiers as <see cref="Tiers"/>, in the shape <c>GET /gateway/tiers</c> answers
+    /// (#225) — what <c>/models</c> lists down its left-hand side. Allowlist sizes are 0 by default;
+    /// a test arranges the rows it cares about with <c>ArrangeTierModels</c>.
+    /// </summary>
+    public static IReadOnlyList<GatewayTierResponse> AllowlistTiers { get; } =
+    [
+        new(GatewayTiers.Standard, "Standard", 5_000_000, false, 0),
+        new(GatewayTiers.Power, "Power", 20_000_000, false, 0),
+        new(GatewayTiers.Unlimited, "Unlimited", null, true, 0),
+    ];
+
+    /// <summary>One row of a tier's model allowlist, healthy unless <paramref name="missingFromAccounts"/> says otherwise.</summary>
+    public static GatewayModelAliasResponse ModelAlias(
+        string alias = "sonnet",
+        string deploymentName = "claude-sonnet-4-5",
+        string pool = GatewayModelMap.AnthropicPool,
+        ModelProviderType provider = ModelProviderType.Anthropic,
+        bool deploymentExists = true,
+        IReadOnlyList<string>? missingFromAccounts = null) =>
+        new(alias, deploymentName, pool, provider, deploymentExists, missingFromAccounts ?? []);
 
     public static UserResponse User(
         int userId = 7,

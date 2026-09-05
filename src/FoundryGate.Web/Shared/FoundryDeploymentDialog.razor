@@ -45,6 +45,30 @@
                              HelperText="One account per region. Pick an existing one, or type a configured account that has no deployments yet."
                              data-testid="deployment-account" />
 
+            @if (OtherAccounts.Count > 0)
+            {
+                @* A model that has to survive a pool failover must exist in every region — the Anthropic
+                   pool sends a throttled request to another account, and an account without the
+                   deployment turns that throttle into a 404 (infra/main.bicep's contract). This form
+                   creates OpenAI-format deployments, which are primary-only by that same split, so the
+                   extra accounts are offered rather than pre-selected: one create per account, each one
+                   an explicit decision (E-007: never a loop the API drives on your behalf). *@
+                <MudSelect T="string"
+                           MultiSelection="true"
+                           SelectedValues="@_additionalAccounts"
+                           SelectedValuesChanged="@OnAdditionalAccountsChanged"
+                           Label="Also create in"
+                           Variant="Variant.Outlined"
+                           Class="mt-4"
+                           HelperText="Optional. One create per account, run in order — pick every region for a model that has to survive a pool failover."
+                           data-testid="deployment-extra-accounts">
+                    @foreach (var account in OtherAccounts)
+                    {
+                        <MudSelectItem T="string" Value="@account">@account</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+
             <MudTextField @bind-Value="_deploymentName"
                           Label="Deployment name"
                           Variant="Variant.Outlined"
@@ -160,6 +184,7 @@
     private bool _includeRetired;
     private int _retiredCount;
     private string _accountName = string.Empty;
+    private IReadOnlyCollection<string> _additionalAccounts = [];
     private string _deploymentName = string.Empty;
     private string _modelName = string.Empty;
     private string _modelVersion = string.Empty;
@@ -223,6 +248,13 @@
                 : null;
         }
     }
+
+    /// <summary>Known accounts other than the one already chosen — the only ones "also create in" can add.</summary>
+    private IReadOnlyList<string> OtherAccounts =>
+        [.. KnownAccounts.Where(account => !string.Equals(account, _accountName, StringComparison.OrdinalIgnoreCase))];
+
+    private void OnAdditionalAccountsChanged(IReadOnlyCollection<string> accounts) =>
+        _additionalAccounts = accounts ?? [];
 
     private Task<IEnumerable<string>> SearchAccountsAsync(string value, CancellationToken cancellationToken) =>
         Task.FromResult(Filter(KnownAccounts, value));
@@ -356,7 +388,14 @@
             Capacity = _capacity,
         };
 
-        Instance.Close(DialogResult.Ok(request));
+        // The chosen account first, then any extras — the page creates them in this order and reports
+        // each one separately, so a second-region failure never looks like the first one failing too.
+        var accounts = new List<string> { request.AccountName };
+        accounts.AddRange(_additionalAccounts
+            .Select(account => account.Trim())
+            .Where(account => account.Length > 0 && !accounts.Contains(account, StringComparer.OrdinalIgnoreCase)));
+
+        Instance.Close(DialogResult.Ok(new FoundryProvisionPlan(accounts, request)));
     }
 
     private void Cancel() => Instance.Cancel();

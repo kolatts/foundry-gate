@@ -1,5 +1,6 @@
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Foundry.Contracts;
+using FoundryGate.Domain.Gateway.Contracts;
 using FoundryGate.Domain.Groups.Contracts;
 using FoundryGate.Domain.Users.Contracts;
 using FoundryGate.Web.Services;
@@ -28,6 +29,28 @@ public sealed partial class FakeFoundryGateApiClient
 
     public ApiCallResult<FoundryDeploymentResponse> CreateFoundryDeploymentResult { get; set; } =
         ApiCallResult<FoundryDeploymentResponse>.Fail(ApiCallStatus.Error, "No create result arranged for this test.");
+
+    /// <summary>
+    /// What <c>GET /foundry/deployments/{account}/{name}</c> answers — what <c>/foundry</c> polls after
+    /// a create (#225). Defaults to a failure, which the page reads as "polling will not answer this"
+    /// and stops, so a test that is not about polling never waits for it.
+    /// </summary>
+    public ApiCallResult<FoundryDeploymentResponse> FoundryDeploymentResult { get; set; } =
+        ApiCallResult<FoundryDeploymentResponse>.Fail(ApiCallStatus.Error, "No single-deployment result arranged for this test.");
+
+    /// <summary>What <c>GET /gateway/tiers</c> answers (#225). Defaults to the three tiers infra ships.</summary>
+    public ApiCallResult<IReadOnlyList<GatewayTierResponse>> GatewayTiersResult { get; set; } =
+        ApiCallResult<IReadOnlyList<GatewayTierResponse>>.Ok(WebTestData.AllowlistTiers);
+
+    /// <summary>
+    /// What <c>GET /gateway/tiers/{tier}/models</c> answers, per tier. A tier with no arrangement
+    /// answers an empty allowlist — which is a real state (a tier with no map permits nothing), not a
+    /// missing arrangement.
+    /// </summary>
+    public Dictionary<string, ApiCallResult<GatewayTierModelsResponse>> GatewayTierModelsResults { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>What <c>PUT /gateway/tiers/{tier}/models</c> answers. Defaults to echoing what was sent.</summary>
+    public ApiCallResult<GatewayTierModelsResponse>? ReplaceGatewayTierModelsResult { get; set; }
 
     /// <summary>
     /// What <c>POST /groups/sync-entra</c> answers. A summary, not a status: the run keeps going
@@ -59,6 +82,12 @@ public sealed partial class FakeFoundryGateApiClient
 
     public RecordedCalls<(string AccountName, string DeploymentName)> DeletedDeployments { get; } = new();
 
+    /// <summary>Every single-deployment read the page made — the poll loop's calls, in order.</summary>
+    public RecordedCalls<(string AccountName, string DeploymentName)> ReadDeployments { get; } = new();
+
+    /// <summary>Every allowlist replace the page sent, with the tier it targeted.</summary>
+    public RecordedCalls<(string Tier, ReplaceTierModelsRequest Request)> ReplacedTierModels { get; } = new();
+
     // -- Fluent arrange helpers -----------------------------------------------------------------
 
     /// <summary>What <c>GET /foundry/deployments</c> returns.</summary>
@@ -72,6 +101,17 @@ public sealed partial class FakeFoundryGateApiClient
     public FakeFoundryGateApiClient ArrangeCatalog(params FoundryCatalogEntryResponse[] entries)
     {
         FoundryCatalogResult = ApiCallResult<IReadOnlyList<FoundryCatalogEntryResponse>>.Ok(entries);
+        return this;
+    }
+
+    /// <summary>What <c>GET /gateway/tiers/{tier}/models</c> returns for one tier.</summary>
+    public FakeFoundryGateApiClient ArrangeTierModels(string tier, params GatewayModelAliasResponse[] aliases)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tier);
+        ArgumentNullException.ThrowIfNull(aliases);
+
+        GatewayTierModelsResults[tier] = ApiCallResult<GatewayTierModelsResponse>.Ok(
+            new GatewayTierModelsResponse(tier, tier, aliases));
         return this;
     }
 
@@ -111,5 +151,50 @@ public sealed partial class FakeFoundryGateApiClient
     {
         DeletedDeployments.Add((accountName, deploymentName));
         return RespondAsync(nameof(DeleteFoundryDeploymentAsync), MutationResult);
+    }
+
+    public Task<ApiCallResult<FoundryDeploymentResponse>> GetFoundryDeploymentAsync(string accountName, string deploymentName, CancellationToken ct = default)
+    {
+        ReadDeployments.Add((accountName, deploymentName));
+        return RespondAsync(nameof(GetFoundryDeploymentAsync), FoundryDeploymentResult);
+    }
+
+    public Task<ApiCallResult<IReadOnlyList<GatewayTierResponse>>> GetGatewayTiersAsync(CancellationToken ct = default) =>
+        RespondAsync(nameof(GetGatewayTiersAsync), GatewayTiersResult);
+
+    public Task<ApiCallResult<GatewayTierModelsResponse>> GetGatewayTierModelsAsync(string tier, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tier);
+
+        var arranged = GatewayTierModelsResults.TryGetValue(tier, out var result)
+            ? result
+            : ApiCallResult<GatewayTierModelsResponse>.Ok(new GatewayTierModelsResponse(tier, tier, []));
+
+        return RespondAsync(nameof(GetGatewayTierModelsAsync), arranged);
+    }
+
+    public Task<ApiCallResult<GatewayTierModelsResponse>> ReplaceGatewayTierModelsAsync(string tier, ReplaceTierModelsRequest request, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tier);
+        ArgumentNullException.ThrowIfNull(request);
+
+        ReplacedTierModels.Add((tier, request));
+
+        // Echoing the request back is what a real PUT does, so a page that renders its response
+        // renders what it just asked for — and a test that wants a refusal sets the property instead.
+        var echoed = ReplaceGatewayTierModelsResult
+            ?? ApiCallResult<GatewayTierModelsResponse>.Ok(new GatewayTierModelsResponse(
+                tier,
+                tier,
+                [.. request.Aliases.Select(alias => new GatewayModelAliasResponse(
+                    alias.Alias,
+                    alias.DeploymentName,
+                    alias.Pool,
+                    alias.Provider,
+                    true,
+                    []))]));
+
+        GatewayTierModelsResults[tier] = echoed;
+        return RespondAsync(nameof(ReplaceGatewayTierModelsAsync), echoed);
     }
 }

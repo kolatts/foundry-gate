@@ -1,5 +1,6 @@
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Foundry.Contracts;
+using FoundryGate.Domain.Gateway.Contracts;
 using FoundryGate.Domain.Users.Contracts;
 
 namespace FoundryGate.Web.Services;
@@ -58,6 +59,33 @@ public sealed partial class FoundryGateApiClient
             $"foundry/deployments/{Uri.EscapeDataString(accountName)}/{Uri.EscapeDataString(deploymentName)}",
             body: null,
             ct);
+    }
+
+    public Task<ApiCallResult<FoundryDeploymentResponse>> GetFoundryDeploymentAsync(string accountName, string deploymentName, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(deploymentName);
+        return GetAsync<FoundryDeploymentResponse>(
+            $"foundry/deployments/{Uri.EscapeDataString(accountName)}/{Uri.EscapeDataString(deploymentName)}",
+            ct);
+    }
+
+    // Gateway model allowlist — api.md §Gateway (#225)
+
+    public Task<ApiCallResult<IReadOnlyList<GatewayTierResponse>>> GetGatewayTiersAsync(CancellationToken ct = default) =>
+        GetAsync<IReadOnlyList<GatewayTierResponse>>("gateway/tiers", ct);
+
+    public Task<ApiCallResult<GatewayTierModelsResponse>> GetGatewayTierModelsAsync(string tier, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tier);
+        return GetAsync<GatewayTierModelsResponse>($"gateway/tiers/{Uri.EscapeDataString(tier)}/models", ct);
+    }
+
+    public Task<ApiCallResult<GatewayTierModelsResponse>> ReplaceGatewayTierModelsAsync(string tier, ReplaceTierModelsRequest request, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tier);
+        ArgumentNullException.ThrowIfNull(request);
+        return SendAsync<GatewayTierModelsResponse>(HttpMethod.Put, $"gateway/tiers/{Uri.EscapeDataString(tier)}/models", request, ct);
     }
 
     // ── Query-string helpers ───────────────────────────────────────────────────
