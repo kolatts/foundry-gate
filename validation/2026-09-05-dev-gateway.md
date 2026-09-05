@@ -131,6 +131,10 @@ every model on every tier, with `Deploy All` green and every resource healthy.
 create-once, E-007), and nothing else owns creating the **OpenAI** deployment. Created out of band,
 which is the documented-safe exception (E-007e). No Anthropic create was attempted.
 
+*Resolved since (#273): the flag is now `createAnthropicModelDeployments` and guards only the Claude
+deployments, because an OpenAI-format deployment re-PUTs idempotently. ARM reconciles the OpenAI ones
+on every run, so a missing `gpt-4-1-mini` comes back on its own.*
+
 ### 2. The developer's own TPM meter was unreachable (#260)
 
 The first 429 on dev looked like a pass and was not:
@@ -145,6 +149,11 @@ developer's budget. `gpt-4-1-mini` was 10 capacity units (~10K TPM) behind a 20 
 backend wall sat **in front of** the gateway wall. Raised to 60 units; the gateway's own meter is now
 reachable and `T4a` refuses to pass on someone else's 429 (`x-fg-remaining-tpm=0` on the refusal, or
 it reports SKIP naming both numbers).
+
+*Resolved since (#273): `main.bicep` ships `gpt-4-1-mini` at 100 units — the highest tier TPM routed
+at it — so the by-hand 60 is superseded by the template, and the deploy now warns about any alias
+whose deployment cannot serve the tier that reaches it. The Claude aliases are still below the
+ceiling and the warning names them; raising a live Claude deployment is #205's call.*
 
 ### And one that had never worked at all (#261)
 
