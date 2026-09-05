@@ -394,4 +394,4 @@ ids.
 | `FoundryGate.Database` | SQL Server project (.sqlproj) — builds the dacpac for CI/CD |
 | `FoundryGate.Cli` | `foundrygate` dotnet tool — local setup, db deploy, db compare, seed |
 | `FoundryGate.Tests.Predeployment` | xUnit + SQLite in-memory + convention tests; gates every PR |
-| `FoundryGate.Tests.Postdeployment` | Playwright against a deployed environment, desktop + mobile |
+| `FoundryGate.Tests.Postdeployment` | xUnit over HTTP against a deployed environment — today the `/api/v1` 401/403/200 auth contract ([#102](https://github.com/kolatts/foundry-gate/issues/102)); Playwright scenarios, desktop + mobile, land with [#139](https://github.com/kolatts/foundry-gate/issues/139) |

@@ -16,12 +16,6 @@ public sealed class AdminTokenFactAttribute : FactAttribute
     public AdminTokenFactAttribute() => Skip = DeployedEnvironment.AdminSkipReason;
 }
 
-/// <summary>A fact that needs a deployed API and a bearer token for a principal without the admin role.</summary>
-public sealed class NonAdminTokenFactAttribute : FactAttribute
-{
-    public NonAdminTokenFactAttribute() => Skip = DeployedEnvironment.NonAdminSkipReason;
-}
-
 /// <summary>A theory that needs a deployed API (<c>FG_API_BASE_URL</c>).</summary>
 public sealed class DeployedApiTheoryAttribute : TheoryAttribute
 {

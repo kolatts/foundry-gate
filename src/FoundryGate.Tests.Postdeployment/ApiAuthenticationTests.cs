@@ -17,8 +17,10 @@ namespace FoundryGate.Tests.Postdeployment;
 public class ApiAuthenticationTests
 {
     /// <summary>
-    /// Every admin-only route in the API, one per controller/policy site. A route added without a
-    /// policy shows up here as a 200 for the non-admin token.
+    /// One admin-only GET per controller that has an addressable admin route with no path
+    /// parameters. Not exhaustive — Groups, Requests and the admin half of Keys are all keyed by a
+    /// user or request id and need fixtures this suite does not build yet (#139). A route listed
+    /// here that lost its policy shows up as a 200 for the non-admin token.
     /// </summary>
     public static TheoryData<string> AdminOnlyRoutes =>
     [
@@ -31,7 +33,12 @@ public class ApiAuthenticationTests
         "api/v1/gateway/tiers/standard/models",
     ];
 
-    /// <summary>Routes any authenticated developer may call.</summary>
+    /// <summary>
+    /// Routes any authenticated developer may call. <c>quota/allocations/me</c> answers 403 for a
+    /// principal with no <c>User</c> row yet, so a token for a developer who has never called
+    /// <c>GET /users/me</c> will fail here rather than 200 — provision first, or point
+    /// <c>FG_NONADMIN_TOKEN</c> at an established principal.
+    /// </summary>
     public static TheoryData<string> DeveloperRoutes =>
     [
         "api/v1/users/me",
@@ -141,6 +148,7 @@ public class ApiAuthenticationTests
     /// A provisioned key is only ever reported masked on this route — the plaintext lives behind
     /// <c>POST /keys/me/reveal</c>. A full key appearing here would leak it into every UI load.
     /// </summary>
+    /// <remarks>This and the self-provisioning fact above write to the deployed environment; #262 makes that explicit rather than incidental.</remarks>
     [AdminTokenFact]
     public async Task Users_me_reports_the_api_key_masked_only()
     {

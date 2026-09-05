@@ -15,6 +15,12 @@ namespace FoundryGate.Api.Configuration;
 /// Both forms name the same resource, so both are accepted. Nothing else is: an audience that is
 /// neither the client id nor its <c>api://</c> URI belongs to a different app registration.
 /// </para>
+/// <para>
+/// Deleting <c>AzureAd:Audience</c> would also have worked — Microsoft.Identity.Web falls back to
+/// exactly these two forms when the setting is absent. The setting stays because a fork can expose
+/// a custom application ID URI (<c>api://foundrygate.contoso.com</c>) that is derivable from
+/// nothing, and honouring it costs one more entry in the list.
+/// </para>
 /// </summary>
 public static class EntraAudiences
 {
