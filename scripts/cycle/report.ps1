@@ -135,6 +135,16 @@ if ($state.ContainsKey('modelDeployments')) {
 if ($state.ContainsKey('usageBySubscription') -and @($state.usageBySubscription).Count -gt 0) {
     Add-Line '## Measurement — `UsageBySubscription.kql` against the live workspace'
     Add-Line ''
+    # The stage timing above can legitimately say FAILED while every M row below says PASS:
+    # Log Analytics ingestion routinely lags the traffic by longer than the cycle takes, so
+    # measure.ps1 is re-run afterwards. That is exactly why KeepFoundry keeps the workspace.
+    if ($state.ContainsKey('stageResults') -and $state.stageResults.ContainsKey('measure') -and -not $state.stageResults['measure'].ok) {
+        Add-Line '> The `measure` stage is marked FAILED in the timings above but the checks below PASS:'
+        Add-Line '> Log Analytics had not finished ingesting when the stage ran inside the cycle, so'
+        Add-Line '> `measure.ps1` was re-run against the same state file afterwards. The workspace survives'
+        Add-Line '> a `KeepFoundry` teardown precisely so that is possible.'
+        Add-Line ''
+    }
     Add-Line '| APIM subscription | Prompt | Completion | Total | Requests |'
     Add-Line '|---|---|---|---|---|'
     foreach ($u in @($state.usageBySubscription)) {

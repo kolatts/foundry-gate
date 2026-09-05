@@ -37,8 +37,8 @@
 param(
     [string] $Environment = 'test',
     [int] $TimeoutMinutes = 15,
-    [Parameter(HelpMessage = 'How far back to query. Must cover the whole cycle.')]
-    [string] $Timespan = 'PT4H'
+    [Parameter(HelpMessage = 'How many hours back to query. Must cover the whole cycle.')]
+    [int] $LookbackHours = 4
 )
 
 Set-StrictMode -Version Latest
@@ -88,6 +88,19 @@ function Get-KqlValue {
 }
 
 <#
+ The query window, as an explicit `start/end` pair.
+
+ NOT an ISO-8601 duration. `az monitor log-analytics query --timespan PT4H` silently returns
+ a nearly-empty window: verified live, the same query answered 2 rows with `--timespan PT4H`
+ and 55 rows over the same data with an explicit range. A measurement stage that quietly
+ looks at the wrong four hours is worse than one that fails, so the range is computed here
+ and passed unambiguously.
+#>
+$script:Timespan = '{0}/{1}' -f `
+    (Get-Date).ToUniversalTime().AddHours(-$LookbackHours).ToString("yyyy-MM-ddTHH:mm:ssZ"),
+    (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+<#
  First row of a KQL result, or $null.
 
  PowerShell unrolls a single-element array on `return`, so a one-row result arrives as the
@@ -117,9 +130,18 @@ function Invoke-Kql {
         'monitor', 'log-analytics', 'query',
         '--workspace', $workspaceId,
         '--analytics-query', $flat,
-        '--timespan', $Timespan
+        '--timespan', $script:Timespan
     )
-    if ($null -eq $result) { Write-CycleInfo "KQL failed: $(Get-LastAzError)" }
+    # An empty result set and a failed query both arrive as $null (ConvertFrom-Json of "[]"
+    # yields an empty array, which `return` unrolls to nothing), so distinguish them by
+    # whether az actually said something on stderr. Reporting "KQL failed" for a query that
+    # ran fine and matched no rows sends the reader hunting for a syntax error that is not
+    # there.
+    if ($null -eq $result) {
+        $azErr = Get-LastAzError
+        if ([string]::IsNullOrWhiteSpace($azErr)) { Write-CycleInfo 'Query ran and matched no rows.' }
+        else { Write-CycleInfo "KQL failed: $azErr" }
+    }
     return $result
 }
 
@@ -154,7 +176,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 Assert-Check -Id 'M1' -Name 'ApiManagementGatewayLlmLog rows present in Log Analytics' -Condition ($rowCount -gt 0) `
-    -Detail "$rowCount log entries across $correlationCount distinct CorrelationIds within $Timespan"
+    -Detail "$rowCount log entries across $correlationCount distinct CorrelationIds in $script:Timespan"
 
 if ($rowCount -eq 0) {
     Write-Host "  No LLM log rows within $TimeoutMinutes min. Ingestion lag can exceed that; re-run measure.ps1 later against the same state file." -ForegroundColor Yellow
@@ -189,15 +211,25 @@ $state.usageBySubscription = $usageRows
 Assert-Check -Id 'M2' -Name 'Reconciliation KQL returns per-developer totals' -Condition ($usageRows.Count -gt 0) `
     -Detail (($usageRows | ForEach-Object { "$($_.apimSubscriptionId)=$($_.totalTokens) tokens/$($_.requestCount) req" }) -join '; ')
 
-# Sanity: the standard tier's monthly cap is what smoke.ps1 drove dev-alice into, so the
-# busiest subscription's total should be in the same neighbourhood as that cap. Reported,
-# not asserted — the LLM log is a floor by design (broken streams lose counts).
+# THE cross-check worth making: dev-alice is the subscription smoke.ps1 drove into the
+# standard tier's monthly 403, so her logged total should land just above that cap — the
+# gateway stops her *after* the request that crosses it. Comparing the busiest subscription
+# instead would compare dev-carol, who is on a different tier with a different cap, and the
+# ratio would mean nothing.
+# Reported, never asserted: the LLM log is a floor by design (a broken stream loses its
+# counts entirely), so an exact match is not the expectation — the right order of magnitude is.
 $standardQuota = @($state.quotaTiers | Where-Object { $_.name -eq 'standard' })[0].monthlyTokenQuota
-if ($usageRows.Count -gt 0) {
-    $top = ($usageRows | Sort-Object -Property totalTokens -Descending)[0]
-    $ratio = if ($standardQuota -gt 0) { [math]::Round($top.totalTokens / $standardQuota, 2) } else { 0 }
-    Write-CycleInfo "Busiest subscription $($top.apimSubscriptionId): $($top.totalTokens) tokens vs the $standardQuota standard-tier cap the gateway enforced (ratio $ratio)."
+$aliceId = if ($state.ContainsKey('apimSubscriptions') -and $state.apimSubscriptions.ContainsKey('dev-alice')) {
+    [string]$state.apimSubscriptions['dev-alice'].subscriptionId
+}
+else { '' }
+$aliceRow = @($usageRows | Where-Object { $_.apimSubscriptionId -eq $aliceId })
+if ($aliceRow.Count -gt 0 -and $standardQuota -gt 0) {
+    $ratio = [math]::Round($aliceRow[0].totalTokens / $standardQuota, 2)
+    $line = "dev-alice ($aliceId) logged $($aliceRow[0].totalTokens) tokens against the $standardQuota standard-tier cap the gateway enforced against her — ratio $ratio."
+    Write-CycleInfo $line
     $state.measurementRatioToQuota = $ratio
+    $state.measurementCrossCheck = $line
 }
 
 # ---- M3: D-017 -------------------------------------------------------------------
@@ -239,14 +271,17 @@ else {
 
 # ---- Best-effort: App Insights token metric --------------------------------------
 Write-CycleHeading 'App Insights token metric (best effort — dashboards, not billing)'
+# AppMetrics, not customMetrics: this workspace uses the workspace-based App Insights schema,
+# where the classic `customMetrics` table does not exist and the query fails with
+# "Failed to resolve table or column expression named 'customMetrics'".
 $aiRows = Invoke-Kql -Query @'
-customMetrics
-| where name has 'Token'
-| summarize Total = sum(valueSum), Count = sum(valueCount) by name
+AppMetrics
+| where Name has 'Token'
+| summarize Total = sum(Sum), Count = sum(ItemCount) by Name
 '@
 if ($null -ne $aiRows -and @($aiRows).Count -gt 0) {
-    foreach ($row in @($aiRows)) { Write-Host ("  {0}: total={1} count={2}" -f (Get-KqlValue -Row $row -Column 'name' -Default ''), (Get-KqlValue -Row $row -Column 'Total'), (Get-KqlValue -Row $row -Column 'Count')) }
-    $state.appInsightsTokenMetrics = @($aiRows | ForEach-Object { @{ name = [string](Get-KqlValue -Row $_ -Column 'name' -Default ''); total = [double](Get-KqlValue -Row $_ -Column 'Total'); count = [double](Get-KqlValue -Row $_ -Column 'Count') } })
+    foreach ($row in @($aiRows)) { Write-Host ("  {0}: total={1} count={2}" -f (Get-KqlValue -Row $row -Column 'Name' -Default ''), (Get-KqlValue -Row $row -Column 'Total'), (Get-KqlValue -Row $row -Column 'Count')) }
+    $state.appInsightsTokenMetrics = @($aiRows | ForEach-Object { @{ name = [string](Get-KqlValue -Row $_ -Column 'Name' -Default ''); total = [double](Get-KqlValue -Row $_ -Column 'Total'); count = [double](Get-KqlValue -Row $_ -Column 'Count') } })
 }
 else {
     Write-CycleInfo 'No customMetrics rows (the metric flows to Azure Monitor metrics, and App Insights ingestion lags too). Not a failure.'
