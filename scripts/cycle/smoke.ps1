@@ -133,9 +133,19 @@ Assert-Check -Id 'A3' -Name 'Claude alias on the OpenAI front door -> 403 naming
 
 # ---- T4: TPM cap and counter isolation --------------------------------------------
 Write-CycleHeading "T4 — TPM cap ($($standardTier.tpm)/min) and per-subscription counter isolation"
-# ~600 output tokens a shot: enough that the 8K/min bucket empties in a handful of calls
-# without any single request being large enough to be refused outright.
-$burnBody = New-ChatBody -Prompt 'Write a detailed 400-word explanation of how HTTP proxies work.' -MaxTokens 700
+# The burn request has to be BIG. `llm-token-limit` is a token bucket that refills
+# continuously at tokens-per-minute — 8000/min is ~133 tokens/second — so a request that
+# consumes ~600 tokens and takes ~5 seconds to answer refills almost exactly what it spent,
+# and the remaining-tpm header hovers instead of draining. Verified live: 7 consecutive
+# ~600-token requests left remaining-tpm oscillating around 7300.
+# A few thousand prompt tokens plus a large max_tokens outruns the refill, so the bucket
+# empties in two or three requests and the 429 is reached deterministically.
+$bulk = ('The quick brown fox jumps over the lazy dog. ' * 400)
+$burnBody = New-ChatBody -MaxTokens 1500 -Prompt @"
+Summarise the following text in exactly 500 words, then write a 500-word critique of its style.
+
+$bulk
+"@
 $tpm429 = $null
 $tpmAttempts = 0
 $lastRemainingTpm = ''

@@ -19,14 +19,17 @@
     401 (E-010, verified live 2026-09-01). If this script's happy path ever starts returning
     401, that is the first thing to check.
 
-    dev-bob is the subject: a standard-tier key whose small monthly budget smoke.ps1
-    deliberately leaves intact. The script does three things in order —
+    TWO KEYS, ON PURPOSE.
 
-      C1  a successful `codex exec` through the gateway
-      C2  keep running `codex exec` until the gateway answers 429 (TPM) and record what
-          Codex does about it (exit code, stderr)
-      C3  keep going until the monthly budget is spent and the gateway answers 403, and
-          record what Codex does about that
+      C1  runs as dev-carol (power tier). The happy path deserves a tier a real agent
+          harness would actually be issued: `codex exec` burns ~9K tokens per run on its
+          system prompt alone, so a standard-tier key's 8K/minute cap throttles Codex
+          *inside* its first session and "does Codex work at all" would be measuring the
+          wrong thing.
+      C2/C3 run as dev-bob (standard tier), whose demo-sized budget smoke.ps1 deliberately
+          leaves intact. Two or three execs put him through the TPM wall and then the
+          monthly-quota wall, and the script records what Codex does at each: exit code and
+          stderr, next to the gateway's own answer probed independently.
 
     and then, if a Claude deployment reached Succeeded, a Claude Code pass (`claude -p`)
     with the Foundry env vars from the same doc page. Claude Code is SKIPped, not failed,
@@ -52,6 +55,7 @@ $state = Get-CycleState -Environment $Environment -Required
 $openaiUrl = $state.outputs.openaiApiUrl
 $anthropicUrl = $state.outputs.anthropicApiUrl
 $bobKey = $state.apimSubscriptions['dev-bob'].primaryKey
+$carolKey = $state.apimSubscriptions['dev-carol'].primaryKey
 $failures = 0
 
 function Assert-Check {
@@ -106,12 +110,15 @@ if (-not $codexPath) { throw "codex CLI not found on PATH. Install it, or run cy
 Write-CycleInfo "codex: $codexPath"
 
 function Invoke-CodexExec {
-    param([Parameter(Mandatory)][string] $Prompt)
+    param(
+        [Parameter(Mandatory)][string] $Prompt,
+        [Parameter(Mandatory)][string] $Key
+    )
     $outFile = [System.IO.Path]::GetTempFileName()
     $errFile = [System.IO.Path]::GetTempFileName()
     try {
         $env:CODEX_HOME = $codexHome
-        $env:FOUNDRYGATE_API_KEY = $bobKey
+        $env:FOUNDRYGATE_API_KEY = $Key
         $p = Start-Process -FilePath $codexPath -NoNewWindow -Wait -PassThru `
             -ArgumentList @(
             'exec',
@@ -150,10 +157,10 @@ function Get-GatewayVerdict {
 }
 
 # ---- C1: a real Codex session through the gateway ---------------------------------
-Write-CycleHeading 'C1 — codex exec through the gateway'
-$first = Invoke-CodexExec -Prompt 'Reply with exactly the single word: pong. Do not run any commands.'
+Write-CycleHeading 'C1 — codex exec through the gateway (dev-carol, power tier)'
+$first = Invoke-CodexExec -Key $carolKey -Prompt 'Reply with exactly the single word: pong. Do not run any commands.'
 $firstOk = $first.ExitCode -eq 0 -and ($first.StdOut -match '(?i)pong')
-Assert-Check -Id 'C1' -Name 'codex exec completes against the gateway' -Condition $firstOk `
+Assert-Check -Id 'C1' -Name 'codex exec completes against the gateway (power tier)' -Condition $firstOk `
     -Detail "exit=$($first.ExitCode); stdout=$(Format-BodyExcerpt $first.StdOut 200); stderr=$(Format-BodyExcerpt $first.StdErr 200)"
 
 if (-not $firstOk) {
@@ -165,14 +172,14 @@ else {
     # ---- C2/C3: run codex until the gateway says 429, then until it says 403 -------
     # codex burns ~9K tokens per exec on its own system prompt (T11), so a standard-tier
     # key with a demo-sized budget hits both walls within a handful of runs.
-    Write-CycleHeading 'C2/C3 — running codex exec until the gateway refuses'
+    Write-CycleHeading 'C2/C3 — running codex exec as dev-bob (standard tier) until the gateway refuses'
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
     $seen429 = $null
     $seen403 = $null
     $execs = 1
     while ($execs -lt $MaxExecs -and (Get-Date) -lt $deadline -and $null -eq $seen403) {
         $execs++
-        $run = Invoke-CodexExec -Prompt "Write a 200-word explanation of TCP congestion control. Run number $execs. Do not run any commands."
+        $run = Invoke-CodexExec -Key $bobKey -Prompt "Write a 200-word explanation of TCP congestion control. Run number $execs. Do not run any commands."
         $verdict = Get-GatewayVerdict
         Write-CycleInfo ("exec {0}: codex exit={1}; gateway now {2} (tpm={3} quota={4})" -f $execs, $run.ExitCode, $verdict.StatusCode, $verdict.RemainingTpm, $verdict.RemainingQuota)
 
@@ -213,7 +220,6 @@ if (-not [bool]$state.claudeAvailable) {
         -Detail 'No Anthropic deployment reached Succeeded on this cycle (E-007), so the Claude Code env-var block is not verified by this run.'
 }
 else {
-    $carolKey = $state.apimSubscriptions['dev-carol'].primaryKey
     $claudeWork = Join-Path (Split-Path (Get-CycleStatePath -Environment $Environment)) "claude-work-$Environment"
     if (-not (Test-Path $claudeWork)) { New-Item -ItemType Directory -Path $claudeWork -Force | Out-Null }
     $outFile = [System.IO.Path]::GetTempFileName()
