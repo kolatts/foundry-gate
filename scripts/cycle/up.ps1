@@ -157,6 +157,27 @@ while ((Get-Date) -lt $transitionDeadline) {
     Start-Sleep -Seconds 30
 }
 
+# Log Analytics soft-deletes too, and a same-name redeploy does NOT reliably recover it: the
+# workspace create appears to succeed while the APIM diagnostic setting that depends on it
+# fails with `ResourceNotFound: The resource .../workspaces/log-foundrygate-test doesn't
+# exist`. Recovering it explicitly first is deterministic. (Since KeepFoundry now keeps the
+# workspace, this is the recovery path for an environment torn down with -Mode Full or by an
+# older script — the same role the APIM purge plays above.)
+$workspaceName = "log-foundrygate-$Environment"
+$deletedWorkspaces = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+    'monitor', 'log-analytics', 'workspace', 'list-deleted-workspaces', '--query', "[?name=='$workspaceName']"
+)
+if ($null -ne $deletedWorkspaces -and @($deletedWorkspaces).Count -gt 0) {
+    Write-CycleHeading "Recovering soft-deleted Log Analytics workspace $workspaceName"
+    Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+        # --workspace-name, not --name: this command spells it differently from every other
+        # `az monitor log-analytics workspace` verb.
+        'monitor', 'log-analytics', 'workspace', 'recover',
+        '--resource-group', $resourceGroup, '--workspace-name', $workspaceName
+    ) | Out-Null
+    Write-CycleInfo 'Recovered.'
+}
+
 $softDeleted = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
     'apim', 'deletedservice', 'list', '--query', "[?name=='$apimName']"
 )
