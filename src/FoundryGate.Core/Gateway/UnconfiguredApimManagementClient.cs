@@ -47,4 +47,12 @@ public sealed class UnconfiguredApimManagementClient : IApimManagementClient
     /// <inheritdoc />
     public Task<bool> DeleteSubscriptionAsync(string subscriptionName, CancellationToken cancellationToken) =>
         throw new FeatureNotConfiguredException(Message);
+
+    /// <inheritdoc />
+    public Task<string?> GetNamedValueAsync(string namedValueName, CancellationToken cancellationToken) =>
+        throw new FeatureNotConfiguredException(Message);
+
+    /// <inheritdoc />
+    public Task SetNamedValueAsync(string namedValueName, string value, CancellationToken cancellationToken) =>
+        throw new FeatureNotConfiguredException(Message);
 }

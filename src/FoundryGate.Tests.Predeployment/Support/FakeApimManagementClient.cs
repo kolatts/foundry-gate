@@ -20,6 +20,7 @@ public sealed class FakeApimManagementClient : IApimManagementClient
     private readonly Lock _gate = new();
     private readonly Dictionary<string, Entry> _subscriptions = new(StringComparer.Ordinal);
     private readonly List<string> _calls = [];
+    private readonly Dictionary<string, string> _namedValues = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Every call, as <c>"{Method}:{subscriptionName}"</c> (plus <c>:{productId}</c> where relevant), in order.</summary>
     public IReadOnlyList<string> Calls
@@ -56,6 +57,9 @@ public sealed class FakeApimManagementClient : IApimManagementClient
 
     /// <summary>When set, <see cref="DeleteSubscriptionAsync"/> throws it instead of deleting — simulates ARM refusing a deprovision.</summary>
     public Exception? ThrowOnDelete { get; set; }
+
+    /// <summary>When set, <see cref="SetNamedValueAsync"/> throws it — simulates APIM refusing a model-map write (#225).</summary>
+    public Exception? ThrowOnSetNamedValue { get; set; }
 
     /// <summary>
     /// Subscription names whose <see cref="DeleteSubscriptionAsync"/> throws a <c>429</c> — for asserting
@@ -127,6 +131,24 @@ public sealed class FakeApimManagementClient : IApimManagementClient
         {
             var entry = _subscriptions[subscriptionName];
             return new ApimSubscriptionKeys(entry.PrimaryKey, entry.SecondaryKey);
+        }
+    }
+
+    /// <summary>Sets a named value behind the caller's back — how a test arranges a tier's existing model alias map (#225).</summary>
+    public void SeedNamedValue(string namedValueName, string value)
+    {
+        lock (_gate)
+        {
+            _namedValues[namedValueName] = value;
+        }
+    }
+
+    /// <summary>The current value of a named value without going through the interface (no call is logged); <see langword="null"/> when absent.</summary>
+    public string? NamedValueOf(string namedValueName)
+    {
+        lock (_gate)
+        {
+            return _namedValues.TryGetValue(namedValueName, out var value) ? value : null;
         }
     }
 
@@ -267,6 +289,34 @@ public sealed class FakeApimManagementClient : IApimManagementClient
             var removed = _subscriptions.Remove(subscriptionName);
             AfterMutation?.Invoke();
             return Task.FromResult(removed);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<string?> GetNamedValueAsync(string namedValueName, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            _calls.Add($"GetNamedValue:{namedValueName}");
+            return Task.FromResult(_namedValues.TryGetValue(namedValueName, out var value) ? value : null);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task SetNamedValueAsync(string namedValueName, string value, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            _calls.Add($"SetNamedValue:{namedValueName}");
+
+            if (ThrowOnSetNamedValue is { } exception)
+            {
+                throw exception;
+            }
+
+            _namedValues[namedValueName] = value;
+            AfterMutation?.Invoke();
+            return Task.CompletedTask;
         }
     }
 

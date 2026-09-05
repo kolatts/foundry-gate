@@ -127,8 +127,11 @@ Streaming caveat documented: response-side enforcement silently stops the stream
       as the values for `ANTHROPIC_DEFAULT_*_MODEL` / Codex `model`. **Deliberately not
       done yet**: CLAUDE.md requires cli-setup to contain only empirically verified
       configuration, and aliases have not been exercised against a live gateway.
-- [ ] Control plane (later, with #82): admin endpoint to edit alias maps via Management
-      API
+- [x] Control plane: admin endpoints to edit alias maps via the Management API — `GET/PUT
+      /api/v1/gateway/tiers/{tier}/models` plus the `/models` admin page (#225). Validation
+      refuses a map the gateway would answer with a 404 rather than an honest 403 (alias
+      grammar, deployment existence, and existence in *every* pool member for an
+      `anthropic`-pool alias). The named-value round trip against real APIM is #226.
 
 ## Verification
 

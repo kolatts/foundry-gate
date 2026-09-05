@@ -29,4 +29,7 @@ public static class AuditTargetTypes
 
     /// <summary>An Azure AI Foundry model deployment; <c>TargetId</c> is <c>{accountName}/{deploymentName}</c> — the gateway runs one account per region, so the name alone is ambiguous for pooled models.</summary>
     public const string FoundryDeployment = "FoundryDeployment";
+
+    /// <summary>A gateway quota-tier product; <c>TargetId</c> is the tier's APIM product id (a <see cref="GatewayTiers"/> value). What a model-allowlist change is recorded against (#225).</summary>
+    public const string GatewayTier = "GatewayTier";
 }

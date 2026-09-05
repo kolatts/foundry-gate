@@ -16,6 +16,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -111,6 +112,20 @@ public class ApiTestFactory : WebApplicationFactory<Program>
         }
 
         return client;
+    }
+
+    /// <summary>
+    /// Drops every <see cref="IMemoryCache"/> entry the host holds — the Foundry model and catalogue
+    /// caches, and the gateway model-map and deployment-placement caches. A test class shares one host,
+    /// so a test that seeds a deployment or a named value <em>behind</em> the app's back must call this
+    /// or it may read what an earlier test's request cached.
+    /// </summary>
+    public void ClearCaches()
+    {
+        if (Services.GetRequiredService<IMemoryCache>() is MemoryCache memoryCache)
+        {
+            memoryCache.Clear();
+        }
     }
 
     /// <summary>
