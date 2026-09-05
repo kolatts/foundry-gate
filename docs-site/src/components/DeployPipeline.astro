@@ -2,8 +2,10 @@
 // Deploy pipeline — the GitHub Actions flow FoundryGate is built around
 // (CONVENTIONS.md §CI/CD, plans/22-cicd-pipelines.md). A merge to main runs exactly one
 // workflow, deploy-all.yml: infra → database → api → functions/ui → post-deploy tests →
-// summary. It exists on main (#67 / #68–#75) together with the GitHub Environments that gate
-// it; none of it has run against Azure yet, which is what the "unvalidated · #105" badge means.
+// summary. Every stage has now run green against Azure on `dev` (2026-09-05, run 33979330341),
+// which is what the "validated on dev" badge means — the chain has been executed end to end,
+// not merely linted. Getting there took five attempts and turned up five real defects (#239,
+// #241, #245, #246, #252), which is the argument for the badge distinction existing at all.
 // Keep the stages and status badges in step with .github/workflows/* and docs reference/ci-cd.
 interface Stage {
   title: string;
@@ -40,12 +42,12 @@ const main: Stage[] = [
   {
     title: 'Infra',
     detail: 'Bicep, subscription scope · what-if first · model deployments create-once',
-    status: 'exists · unvalidated · #105',
+    status: 'validated on dev · 2026-09-05',
   },
   {
     title: 'Database',
     detail: 'reusable database workflow',
-    status: 'exists · unvalidated · #105',
+    status: 'validated on dev · 2026-09-05',
     sub: [
       'whitelist runner IP',
       'wait 60 s for firewall',
@@ -59,16 +61,16 @@ const main: Stage[] = [
   {
     title: 'API',
     detail: 'image → ACR → Container Apps · replaces the day-0 placeholder',
-    status: 'exists · unvalidated · #105',
+    status: 'validated on dev · 2026-09-05',
   },
   {
     title: 'Functions + UI',
     detail: 'in parallel, after the API',
-    status: 'exists · unvalidated · #105',
+    status: 'validated on dev · 2026-09-05',
     parallel: ['Functions → Flex Consumption', 'UI → Static Web Apps'],
   },
-  { title: 'Post-deploy tests', detail: 'scaffold smoke test · reporting only until #139', status: 'exists · unvalidated · #105' },
-  { title: 'Summary', detail: 'job summary · Environment deploy record', status: 'exists · unvalidated · #105' },
+  { title: 'Post-deploy tests', detail: 'scaffold smoke test · reporting only until #139', status: 'validated on dev · 2026-09-05' },
+  { title: 'Summary', detail: 'job summary · Environment deploy record', status: 'validated on dev · 2026-09-05' },
 ];
 ---
 
@@ -89,8 +91,8 @@ const main: Stage[] = [
     contained database users, and remove the runner's firewall rule again), then the API, then Functions and UI in
     parallel, then post-deploy tests, then a summary. Functions and UI wait for the API because on the very first
     deploy the API stage re-runs the infrastructure template to replace the placeholder image. A production run stops
-    at the reviewer gate six times, once per pending job, and the plan stage lists them. Every workflow file
-    exists on main; badges mark that none has yet run against Azure (live validation is #105).
+    at the reviewer gate six times, once per pending job, and the plan stage lists them. Every stage has run
+    green against Azure on <code>dev</code>, which is what the badges mark.
   </p>
 
   <section class="fgd-plane fgd-plane--neutral">
@@ -161,7 +163,7 @@ const main: Stage[] = [
   </section>
 
   <figcaption class="fgd-legend">
-    <span class="fgd-legend__item"><span class="fgd-badge fgd-badge--muted">exists · unvalidated · #105</span> workflow file and Environment gate are on <code>main</code>; not yet run against Azure (owner OIDC setup #109, live validation #105)</span>
+    <span class="fgd-legend__item"><span class="fgd-badge fgd-badge--muted">validated on dev · 2026-09-05</span> the stage has run green against Azure on <code>dev</code>, not just linted (run 33979330341; #105). Production has never been deployed.</span>
   </figcaption>
 </figure>
 

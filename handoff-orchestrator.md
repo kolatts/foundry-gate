@@ -76,13 +76,32 @@ the badge stays until #105 closes.
 which stays open because Claude end-to-end is still unvalidated (#88) and its dependent
 live-validation issues (#125, #132, #178) are open.
 
-## Nothing has been deployed live yet
+## `dev` is deployed. Production is not.
 
-No `dev` or `production` environment has ever been stood up from this control-plane
-Bicep. The gateway data plane was live-validated once (2026-09-01, Imagile Paid) and
-**torn down** immediately after — `rg-foundrygate-test` deleted, soft-deleted resources
-purged. Every "live-validate X" issue below describes work that literally cannot be
-attempted until a real `dev` deploy exists.
+**Superseded 2026-09-05.** `rg-foundrygate-dev` is live on Imagile Paid and the whole
+`Deploy All` chain runs green — infra → database → API → UI → Functions → post-deploy tests
+([run 33979330341](https://github.com/kolatts/foundry-gate/actions/runs/33979330341); #105
+closed). Endpoints, and the evidence for every checklist item, are on #105 and #101.
+
+| | |
+|---|---|
+| API | `https://ca-foundrygate-api-dev.wittygrass-b608ecfa.eastus2.azurecontainerapps.io` |
+| UI | `https://brave-ocean-01f4a4f0f.6.azurestaticapps.net` |
+| APIM | `https://apim-foundrygate-dev-e7k2.azure-api.net` |
+
+Two things that surprised this deploy and will surprise the next one:
+
+- **SQL lives in `centralus`, not `eastus2`** — both eastus2 and eastus are closed to *new*
+  Azure SQL logical servers on this subscription, invisibly to every quota query (#241). The
+  server's location is immutable, so this is a one-shot decision per environment.
+- **No model deployments exist.** Claude is wedged at the subscription's Marketplace agreement
+  (#88, `needs-human`) and `gpt-4-1-mini` was skipped because every post-day-0 run must carry
+  `create-model-deployments=false`. The gateway 404s on any model until one is created out of
+  band, which is the control plane's job (#60/#64) rather than ARM's.
+
+**Production has never been deployed** and has no identities, no SQL admin group and no
+Environment variables — that is the open half of #109. The "live-validate X" issues below are
+now unblocked; #142 is next in #220's order.
 
 Until 2026-09-05 the first `Deploy All` run on main **stopped at the OIDC guard by
 design**: `dev`'s `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` variables
