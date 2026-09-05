@@ -68,7 +68,10 @@ function Assert-Check {
 #>
 function Get-KqlValue {
     param(
-        [Parameter(Mandatory)] $Row,
+        # NOT Mandatory: a Mandatory parameter refuses to bind $null, so the function's own
+        # "$null row means no data" branch below was unreachable and an empty result set
+        # became a terminating error instead of a zero.
+        $Row,
         [Parameter(Mandatory)][string] $Column,
         $Default = 0
     )
@@ -82,6 +85,23 @@ function Get-KqlValue {
         }
     }
     return $Default
+}
+
+<#
+ First row of a KQL result, or $null.
+
+ PowerShell unrolls a single-element array on `return`, so a one-row result arrives as the
+ ROW ITSELF rather than an array containing it — and `$result[0]` on a hashtable indexes it
+ by the KEY 0, which is absent, yielding $null. That is exactly the shape of the summarize
+ queries below, so every one of them silently produced nothing.
+#>
+function Get-FirstRow {
+    param($Result)
+    if ($null -eq $Result) { return $null }
+    if ($Result -is [hashtable] -or $Result -is [System.Collections.IDictionary]) { return $Result }
+    $rows = @($Result)
+    if ($rows.Count -eq 0) { return $null }
+    return $rows[0]
 }
 
 <#
@@ -123,10 +143,10 @@ $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
 $rowCount = 0
 $correlationCount = 0
 while ((Get-Date) -lt $deadline) {
-    $probe = Invoke-Kql -Query 'ApiManagementGatewayLlmLog | summarize Rows = count(), Correlations = dcount(CorrelationId)'
-    if ($null -ne $probe -and @($probe).Count -gt 0) {
-        $rowCount = [int](Get-KqlValue -Row $probe[0] -Column 'Rows')
-        $correlationCount = [int](Get-KqlValue -Row $probe[0] -Column 'Correlations')
+    $probe = Get-FirstRow (Invoke-Kql -Query 'ApiManagementGatewayLlmLog | summarize Rows = count(), Correlations = dcount(CorrelationId)')
+    if ($null -ne $probe) {
+        $rowCount = [int](Get-KqlValue -Row $probe -Column 'Rows')
+        $correlationCount = [int](Get-KqlValue -Row $probe -Column 'Correlations')
         if ($rowCount -gt 0) { break }
     }
     Write-CycleInfo 'no rows yet, sleeping 60s'
@@ -188,8 +208,9 @@ ApiManagementGatewayLlmLog
 | summarize Correlations = count(), MultiEntry = countif(Entries > 1), MaxEntriesPerRequest = max(Entries), NaiveSum = sum(SumTotals), DedupedSum = sum(MaxTotals)
 '@
 
-if ($null -ne $dupe -and @($dupe).Count -gt 0) {
-    $d = $dupe[0]
+$dupeRow = Get-FirstRow $dupe
+if ($null -ne $dupeRow) {
+    $d = $dupeRow
     $multi = [int](Get-KqlValue -Row $d -Column 'MultiEntry')
     $naive = [long](Get-KqlValue -Row $d -Column 'NaiveSum')
     $deduped = [long](Get-KqlValue -Row $d -Column 'DedupedSum')

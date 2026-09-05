@@ -248,24 +248,34 @@ function Invoke-GatewayRequest {
         $params.Body = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $params.ContentType = 'application/json'
     }
-    try {
-        $response = Invoke-WebRequest @params
-        $headers = @{}
-        foreach ($k in $response.Headers.Keys) { $headers[$k] = ($response.Headers[$k] -join ', ') }
-        return [pscustomobject]@{
-            StatusCode = [int]$response.StatusCode
-            Headers    = $headers
-            Body       = [string]$response.Content
-            Transport  = $null
+    # Transport failures are RETRIED; HTTP failures are not. A freshly provisioned APIM
+    # answers its first requests inconsistently while DNS and TLS settle — observed live as a
+    # run where the key-propagation probe succeeded and the very next request came back with
+    # no response at all, failing five checks that had nothing wrong with them. A 401/403/429
+    # is an answer and is returned immediately; only "no answer" is worth asking again.
+    $lastError = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            $response = Invoke-WebRequest @params
+            $headers = @{}
+            foreach ($k in $response.Headers.Keys) { $headers[$k] = ($response.Headers[$k] -join ', ') }
+            return [pscustomobject]@{
+                StatusCode = [int]$response.StatusCode
+                Headers    = $headers
+                Body       = [string]$response.Content
+                Transport  = $null
+            }
+        }
+        catch {
+            $lastError = $_.Exception.Message
+            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
         }
     }
-    catch {
-        return [pscustomobject]@{
-            StatusCode = -1
-            Headers    = @{}
-            Body       = ''
-            Transport  = $_.Exception.Message
-        }
+    return [pscustomobject]@{
+        StatusCode = -1
+        Headers    = @{}
+        Body       = ''
+        Transport  = $lastError
     }
 }
 
