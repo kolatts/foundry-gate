@@ -561,6 +561,17 @@ deployment saturating and being passed through, since the OpenAI policy delibera
 retry a single backend. Reading the status code alone conflates a developer being over budget
 with a deployment being too small.
 
+**E-014 (the token logs were going to the wrong table all along):** the APIM diagnostic
+setting did not set `logAnalyticsDestinationType: 'Dedicated'`, so Azure Monitor sent both
+categories to the legacy `AzureDiagnostics` catch-all instead of the resource-specific
+`ApiManagementGatewayLlmLog` / `ApiManagementGatewayLogs` tables — the two tables
+`UsageBySubscription.kql` joins. Every signal read healthy (setting enabled, rows arriving
+promptly, KQL valid and error-free) while the reconciliation query returned an empty result
+forever. Live proof: 582 rows in `AzureDiagnostics` (289 `GatewayLlmLogs` + 293
+`GatewayLogs`), zero in either resource-specific table. **The 2026-09-01 validation recorded
+T6/T7 as "pending ingestion" — it was never ingestion lag.** Fixed in `apim.bicep` (#244).
+Worth generalising: a *configuration* check passes here; only a *data* check catches it.
+
 **E-007 restated, and worse than recorded.** The single day-0 Claude create attempt failed
 with an opaque `InternalServerError` on a **completely fresh account, in a fresh resource
 group, with nothing soft-deleted** (correlation id `46e5db9d-54ea-4b23-9ef4-b895bca3e3b5`).

@@ -130,8 +130,21 @@ validation ended with this "pending"), runs `src/FoundryGate.Functions/Kql/Usage
 verbatim, and checks the D-017 assumption empirically: do duplicate `CorrelationId`s
 actually occur, and how far would a naive `sum()` have been off? That is the KQL half of #178.
 
-If M1 times out, that is ingestion lag, not a failure of the gateway. Re-run `measure.ps1`
-later against the same state file, then `report.ps1`, and the report picks up the numbers.
+If M1 times out, check the *destination type* before blaming ingestion lag. Without
+`logAnalyticsDestinationType: 'Dedicated'` on the APIM diagnostic setting, Azure Monitor
+sends the rows to the legacy `AzureDiagnostics` catch-all instead, and
+`ApiManagementGatewayLlmLog` stays empty forever while everything reports healthy
+([#244](https://github.com/kolatts/foundry-gate/issues/244), fixed in `infra/modules/apim.bicep`).
+Diagnose it with:
+
+```kusto
+search * | summarize Rows = count() by $table
+AzureDiagnostics | summarize Rows = count() by Category
+```
+
+If the rows really are just late, re-run `measure.ps1` later against the same state file and
+then `report.ps1` — the workspace survives a `KeepFoundry` teardown precisely so this works
+after the gateway is gone.
 
 ### `down.ps1` — 3-8 min
 
@@ -257,7 +270,7 @@ pwsh scripts/cycle/report.ps1 -Path validation/2026-09-05-gateway-cycle.md
 | `401` on a key that was just created | the key has not propagated to the gateway nodes yet | wait ~30–60s; `subscriptions.ps1` polls for this |
 | `Conflict: Link already exists between specified Product and Api` | `apiLinkId` must be unique across the whole APIM **service**, not per product | tier-prefix the link id, and delete the old links first (#230) |
 | `404` from the backend on a Claude alias | the alias resolved but the deployment does not exist | E-007 — do **not** recreate it in a loop |
-| M1 times out with no LLM log rows | Log Analytics ingestion lag | re-run `measure.ps1` then `report.ps1` later; not a gateway failure |
+| M1 times out with no LLM log rows | usually the destination type, not lag — check `AzureDiagnostics \| summarize count() by Category` | the diagnostic setting needs `logAnalyticsDestinationType: 'Dedicated'` (#244); if rows really are late, re-run `measure.ps1` then `report.ps1` |
 | `az` "Failed to parse string as JSON" on a deployment | cmd.exe ate the quotes out of a JSON parameter | use `Format-AzJsonArg` from `_common.ps1` |
 | Deployment fails with `DeploymentActive` | a previous nested deployment is still running | wait for it or cancel it; never start a second Claude create alongside one in flight |
 
