@@ -4,6 +4,7 @@ using FoundryGate.Api.Services.Cost;
 using FoundryGate.Api.Services.Dashboard;
 using FoundryGate.Api.Services.Entra;
 using FoundryGate.Api.Services.Foundry;
+using FoundryGate.Api.Services.Gateway;
 using FoundryGate.Api.Services.Groups;
 using FoundryGate.Api.Services.Identity;
 using FoundryGate.Api.Services.Keys;
@@ -36,6 +37,7 @@ public static class ApiServiceCollectionExtensions
         services.AddGroupsServices();
         services.AddRequestsServices();
         services.AddFoundryServices();
+        services.AddGatewayServices();
         services.AddEntraServices();
         services.AddSecurityServices();
         services.AddKeysServices();
