@@ -8,6 +8,7 @@ using FoundryGate.Data;
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Constants;
 using Imagile.Framework.Configuration.Extensions;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc.Authorization;
 using Microsoft.Identity.Web;
 
@@ -59,6 +60,19 @@ builder.Services.AddFoundryGateApiServices();
 // §11: "FoundryGate.Admin app role in Entra"). PolicyNames.AdminOnly gates admin-only
 // controller actions; the built-in DefaultPolicy (RequireAuthenticatedUser) covers everyone else.
 builder.Services.AddMicrosoftIdentityWebApiAuthentication(builder.Configuration, "AzureAd");
+
+// AzureAd:Audience is deployed as api://{clientId}, but the app registration requests v2 access
+// tokens, whose aud is the bare client id. Setting Audience pins Microsoft.Identity.Web to that
+// single string, so before this both the SPA's and the CLI's tokens were rejected as
+// "The audience '(null)' is invalid" (#102). PostConfigure runs after Microsoft.Identity.Web's own
+// configuration, so this is the last word on which audiences are valid.
+builder.Services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
+{
+    options.TokenValidationParameters.ValidAudience = null;
+    options.TokenValidationParameters.ValidAudiences =
+        EntraAudiences.Resolve(appSettings.AzureAd.ClientId, appSettings.AzureAd.Audience);
+});
+
 builder.Services.AddAuthorization(options =>
     options.AddPolicy(PolicyNames.AdminOnly, policy => policy.RequireRole(RoleNames.Admin)));
 
