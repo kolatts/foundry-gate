@@ -190,7 +190,9 @@ if ($state.ContainsKey('d017')) {
 Add-Line '## Reproducing this'
 Add-Line ''
 Add-Line '```sh'
-Add-Line "pwsh scripts/cycle/cycle.ps1 -Subscription `"$($state.subscription)`""
+$repro = "pwsh scripts/cycle/cycle.ps1 -Subscription `"$($state.subscription)`""
+if ($attached) { $repro += " -Environment $($state.environment) -CleanupSubscriptions" }
+Add-Line $repro
 Add-Line '```'
 Add-Line ''
 Add-Line 'See `.claude/skills/gateway-cycle/SKILL.md` for the unattended runbook, the Anthropic'
