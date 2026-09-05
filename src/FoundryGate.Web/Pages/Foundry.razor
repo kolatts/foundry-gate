@@ -1,4 +1,5 @@
 @page "/foundry"
+@implements IDisposable
 @attribute [Authorize(Roles = RoleNames.Admin)]
 @inject IFoundryGateApiClient Api
 @inject IDialogService DialogService
@@ -26,6 +27,26 @@ else
         gateway only once it is in the right backend pool
         (<MudLink Href="https://github.com/kolatts/foundry-gate/issues/83" Target="_blank">#83</MudLink>).
     </MudText>
+
+    @if (_provisioned is { Length: > 0 } provisioned)
+    {
+        @* A deployment nobody is allowed to use is not yet useful: the alias map is the allowlist
+           (#86), so provisioning is only half the job. Deep-links into /models with the deployment
+           pre-filled rather than leaving the admin to find the page and retype the name. *@
+        <MudAlert Severity="Severity.Success" Class="mb-4" data-testid="foundry-provisioned">
+            '@provisioned' exists now, but no tier is allowed to use it yet.
+            <MudLink Href="@($"/models?deployment={Uri.EscapeDataString(provisioned)}")" data-testid="foundry-allow-link">
+                Add it to a tier's allowed models
+            </MudLink>
+        </MudAlert>
+    }
+
+    @if (_polling)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-4" data-testid="foundry-polling">
+            Waiting for Azure to finish provisioning — this page refreshes itself until it does.
+        </MudAlert>
+    }
 
     @if (_loading && _deployments is null)
     {
@@ -110,11 +131,25 @@ else
 }
 
 @code {
+    /// <summary>How long between polls while a create finishes. ARM takes tens of seconds, so a tighter loop would only add calls.</summary>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(3);
+
+    /// <summary>Polls before giving up and leaving the grid's state chips to say where it got to (about a minute).</summary>
+    private const int MaxPollAttempts = 20;
+
+    /// <summary>ARM provisioning states that are not going to change on their own.</summary>
+    private static readonly string[] TerminalStates = ["Succeeded", "Failed", "Canceled"];
+
     private IReadOnlyList<FoundryDeploymentResponse>? _deployments;
     private string? _unavailable;
+    private string? _provisioned;
+    private bool _polling;
     private bool _loading;
     private bool _busy;
     private bool _accessDenied;
+
+    /// <summary>Cancelled when the page goes away, so a poll loop cannot outlive it.</summary>
+    private readonly CancellationTokenSource _pageCts = new();
 
     private static bool IsAnthropic(FoundryDeploymentResponse deployment) =>
         string.Equals(deployment.ModelFormat, nameof(FoundryModelFormatType.Anthropic), StringComparison.OrdinalIgnoreCase);
@@ -169,28 +204,131 @@ else
         var dialog = await DialogService.ShowAsync<FoundryDeploymentDialog>("New deployment", parameters);
         var dialogResult = await dialog.Result;
 
-        if (dialogResult is not { Canceled: false, Data: CreateFoundryDeploymentRequest request })
+        if (dialogResult is not { Canceled: false, Data: FoundryProvisionPlan plan })
         {
             return;
         }
 
+        var created = new List<FoundryDeploymentResponse>();
+
         _busy = true;
         try
         {
-            var result = await Api.CreateFoundryDeploymentAsync(request);
-            if (!result.IsSuccess || result.Value is null)
+            // One POST per account, in order, each reported on its own: the API creates one deployment
+            // in one account by design (E-007), and a second region failing must not read as the first
+            // one having failed too.
+            foreach (var accountName in plan.AccountNames)
             {
-                Snackbar.Add(result.Message ?? "Couldn't create the deployment.", Severity.Error);
+                var result = await Api.CreateFoundryDeploymentAsync(plan.Template with { AccountName = accountName });
+                if (result is { IsSuccess: true, Value: not null })
+                {
+                    created.Add(result.Value);
+                    continue;
+                }
+
+                Snackbar.Add(
+                    result.Message ?? $"Couldn't create '{plan.Template.DeploymentName}' in {accountName}.",
+                    Severity.Error);
+            }
+
+            if (created.Count == 0)
+            {
                 return;
             }
 
-            // ARM accepts the create and provisions asynchronously, so the row lands as Creating.
-            Snackbar.Add($"'{result.Value.DeploymentName}' is provisioning — refresh to watch its state.", Severity.Success);
+            // ARM accepts the create and provisions asynchronously, so the rows land as Creating.
+            Snackbar.Add(
+                created.Count == 1
+                    ? $"'{created[0].DeploymentName}' is provisioning in {created[0].AccountName}."
+                    : $"'{created[0].DeploymentName}' is provisioning in {created.Count} accounts.",
+                Severity.Success);
+
+            _provisioned = created[0].DeploymentName;
             await LoadAsync();
         }
         finally
         {
             _busy = false;
+        }
+
+        // Deliberately outside the busy block: waiting for ARM is not a reason to disable the page for
+        // a minute, and the poll loop renders as it goes.
+        await PollUntilSettledAsync(created);
+    }
+
+    /// <summary>
+    /// Refreshes each new deployment until ARM stops moving it, so the admin does not have to press
+    /// refresh to find out whether the thing they just asked for actually works. Gives up after
+    /// <see cref="MaxPollAttempts"/> — at which point the grid's state chips are still the truth, they
+    /// are just no longer updating themselves.
+    /// </summary>
+    private async Task PollUntilSettledAsync(IReadOnlyList<FoundryDeploymentResponse> created)
+    {
+        var pending = created
+            .Where(d => !TerminalStates.Contains(d.ProvisioningState, StringComparer.OrdinalIgnoreCase))
+            .Select(d => (d.AccountName, d.DeploymentName))
+            .ToList();
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        // Captured once: Dispose() cancels and then disposes the source, and reading .Token afterwards
+        // throws ObjectDisposedException rather than the cancellation this loop is waiting for.
+        var cancellationToken = _pageCts.Token;
+
+        _polling = true;
+
+        // The loop runs inside the click handler's await chain, so Blazor renders nothing until it
+        // returns unless it asks — without these the "waiting for Azure" line and every refreshed row
+        // would appear all at once, a minute after they stopped being news.
+        StateHasChanged();
+
+        try
+        {
+            for (var attempt = 0; attempt < MaxPollAttempts && pending.Count > 0; attempt++)
+            {
+                await Task.Delay(PollInterval, cancellationToken);
+
+                var settled = false;
+                foreach (var (accountName, deploymentName) in pending.ToList())
+                {
+                    var result = await Api.GetFoundryDeploymentAsync(accountName, deploymentName, cancellationToken);
+
+                    // A read that failed says nothing about the deployment, but it does say polling is
+                    // not going to answer the question — stop asking rather than burning the budget.
+                    if (result is not { IsSuccess: true, Value: not null })
+                    {
+                        _ = pending.Remove((accountName, deploymentName));
+                        settled = true;
+                        continue;
+                    }
+
+                    if (TerminalStates.Contains(result.Value.ProvisioningState, StringComparer.OrdinalIgnoreCase))
+                    {
+                        _ = pending.Remove((accountName, deploymentName));
+                        settled = true;
+                    }
+                }
+
+                // The grid is a multi-account ARM listing; re-reading it every three seconds to render
+                // the same chips is the expensive way to display nothing new. Only a state that moved
+                // is worth a refresh.
+                if (settled)
+                {
+                    await LoadAsync();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The page went away mid-wait. Nothing to report to a UI that no longer exists.
+        }
+        finally
+        {
+            _polling = false;
+            StateHasChanged();
         }
     }
 
@@ -225,5 +363,12 @@ else
         {
             _busy = false;
         }
+    }
+
+    /// <summary>Stops any poll loop the page started — bUnit's teardown does not reach pages rendered inside a fragment, and neither does a real navigation without this.</summary>
+    public void Dispose()
+    {
+        _pageCts.Cancel();
+        _pageCts.Dispose();
     }
 }

@@ -57,7 +57,25 @@ param sqlDatabaseSku = {
 // halves zone-tolerant; it is not the default here only because it costs more and the
 // restore path of last resort is the geo-secondary either way. Revisit with #105.
 param sqlBackupStorageRedundancy = 'Geo'
-// Zone-redundant database: survives the loss of one availability zone in eastus2 without a
+
+// DECIDE THIS BEFORE PRODUCTION'S FIRST DEPLOY (#241). Left unset deliberately, so it
+// inherits `location` — but that is a placeholder, not a decision:
+//
+//   param sqlLocation = '<region confirmed open>'
+//
+// Azure closes individual regions to NEW Azure SQL logical servers without notice, and it
+// is invisible to every quota and SKU query — the only way to know is to attempt a create.
+// eastus2 AND eastus were both closed to this subscription on 2026-09-05, which is why dev
+// runs SQL in centralus. Probe the intended region before the first prod deploy rather than
+// finding out mid-deployment.
+//
+// Two constraints if you set it, because `Microsoft.Sql/servers.location` is IMMUTABLE and
+// this is therefore one-shot:
+//   * `sqlZoneRedundant = true` below needs a region that actually has availability zones.
+//   * `sqlBackupStorageRedundancy = 'Geo'` above geo-pairs from THIS region, not `location`.
+
+// Zone-redundant database: survives the loss of one availability zone in the SQL region
+// (eastus2 unless `sqlLocation` above says otherwise) without a
 // restore. Adds ~60% to the SQL compute line, not 2x — eastus2 retail (2026-09-02) is
 // $0.152217/vCore-hr plus a $0.09133/vCore-hr zone-redundancy surcharge
 // (docs reference/cost-and-capacity).

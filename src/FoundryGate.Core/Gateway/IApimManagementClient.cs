@@ -65,6 +65,33 @@ public interface IApimManagementClient
 
     /// <summary>Deletes the subscription (the key stops working immediately). <see langword="false"/> when it was already gone — deletion is idempotent.</summary>
     Task<bool> DeleteSubscriptionAsync(string subscriptionName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The current value of an APIM <em>named value</em>, or <see langword="null"/> when no named value
+    /// of that name exists. The gateway's per-tier model alias maps live in
+    /// <c>fg-model-map-{tier}</c> (plans/25, #86), which is why this pair exists at all: the alias map
+    /// is the allowlist, and editing it is a control-plane operation that must not require a policy
+    /// redeploy.
+    /// </summary>
+    /// <remarks>
+    /// Read through APIM's <c>listValue</c> operation rather than the resource GET: ARM does not fill
+    /// <c>properties.value</c> on a GET for secret named values, and depending on which of the two
+    /// shapes comes back would make the read correct only for the non-secret case.
+    /// </remarks>
+    /// <param name="namedValueName">ARM name of the named value, e.g. <c>fg-model-map-standard</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<string?> GetNamedValueAsync(string namedValueName, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Creates or replaces a non-secret named value. <c>displayName</c> is set to the same string as
+    /// the ARM name, because that is what a policy's <c>{{token}}</c> resolves against
+    /// (<c>infra/modules/ai-gateway.bicep</c> does the same) — a mismatch would leave the policy
+    /// reading a token that no longer exists.
+    /// </summary>
+    /// <param name="namedValueName">ARM name of the named value.</param>
+    /// <param name="value">The new value. APIM rejects an empty or whitespace-only value.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task SetNamedValueAsync(string namedValueName, string value, CancellationToken cancellationToken);
 }
 
 /// <summary>A subscription as the management plane reports it, minus key material.</summary>

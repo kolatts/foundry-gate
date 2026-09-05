@@ -193,8 +193,8 @@ Entra on behalf of a service principal.
 | Environment | Protection | Deploys from | Used by |
 |---|---|---|---|
 | `dev` | none — automatic | **protected branches only** | every dev deploy |
-| `dev-plan` | none | any branch | the PR-track Bicep what-if **only**. Its identity is intended to hold **Reader** on the subscription and nothing else (#109) |
-| `ui-preview` | none | any branch | the PR-track Static Web Apps preview **only**. Its identity is intended to hold one custom role, **`FoundryGate SWA Preview Publisher`** (`infra/modules/swa-preview-role.bicep`), assignable on `stapp-foundrygate-dev` alone (#109) |
+| `dev-plan` | none | any branch | the PR-track Bicep what-if — **currently unconfigured on purpose, see the note below** ([#229](https://github.com/kolatts/foundry-gate/issues/229)) |
+| `ui-preview` | none | any branch | the PR-track Static Web Apps preview **only**. Its identity (`foundrygate-ci-ui-preview`) holds one custom role, **`FoundryGate SWA Preview Publisher`** (`infra/modules/swa-preview-role.bicep`), assignable on `stapp-foundrygate-dev` alone |
 | `production` | 1 required reviewer | protected branches (`main`) only | production deploys |
 | `dev-destroy` | required reviewer + 5 min wait | any branch | `infra-destroy.yml` (dev) |
 | `prod-destroy` | required reviewer + 30 min wait (a second reviewer is an owner action, #109) | protected branches only | `infra-destroy.yml` (production) |
@@ -206,6 +206,22 @@ restriction, any PR could have run arbitrary `az` against dev or printed the Sta
 deployment token. That is why the PR what-if runs under `dev-plan` and the PR preview under
 `ui-preview`, each holding one narrow role: the workflow file is attacker-controlled on the PR
 track, so the identity is the only real boundary.
+
+:::caution[The PR what-if is off — a read-only what-if identity turned out to be impossible]
+That reasoning holds for `ui-preview` and fails for `dev-plan`. The design assumed `az
+deployment sub what-if` is a read-only ARM operation; it is read-only in *effect* but ARM runs
+its **full preflight**, which authorizes every resource in the template as a write. A Reader
+identity fails with one `Authorization failed for template resource …/write` per resource
+(thirteen, for `main.bicep`), and the narrowest identity that succeeds is roughly `Contributor`
+— the blast radius `dev-plan` exists to avoid.
+
+So `dev-plan` carries **no variables**, which makes `_deploy-infra.yml` skip the job with a
+`::notice::` rather than failing every PR. The identity, its federated credential and its Reader
+assignment exist and are inert. Reviewers see the what-if in the gated `deploy` job instead,
+where `_deploy-infra.yml` runs one immediately before the real deploy.
+[#229](https://github.com/kolatts/foundry-gate/issues/229) carries the options and needs a
+decision.
+:::
 
 ### Production approvals: one per gated job, deliberately
 
@@ -263,10 +279,10 @@ approvals are coming and what each one buys — and the API's two gates became o
 
 | Variable | dev | dev-plan | production | *-destroy | Purpose |
 |---|---|---|---|---|---|
-| `AZURE_CLIENT_ID` | required | required | required | required | app registration with a federated credential whose subject is `repo:<owner>/foundry-gate:environment:<name>`. `dev-plan`’s is a **separate, Reader-only** registration |
-| `AZURE_TENANT_ID` | required | required | required | required | |
-| `AZURE_SUBSCRIPTION_ID` | required | required | required | required | |
-| `AZURE_LOCATION` | optional (`eastus2`) | optional | optional | — | deployment metadata location |
+| `AZURE_CLIENT_ID` | required | *unset (#229)* | required | required | app registration with a federated credential whose subject is `repo:<owner>/foundry-gate:environment:<name>` |
+| `AZURE_TENANT_ID` | required | *unset* | required | required | also written into the SPA's `AzureAd.Authority` by `_deploy-ui.yml` |
+| `AZURE_SUBSCRIPTION_ID` | required | *unset* | required | required | |
+| `AZURE_LOCATION` | optional (`eastus2`) | — | optional | — | deployment metadata location |
 | `FG_ENTRA_API_CLIENT_ID` | recommended | optional | recommended | — | FoundryGate.Api app registration → `entraApiClientId`, UI `Api.Scopes` |
 | `FG_ENTRA_WEB_CLIENT_ID` | recommended | — | recommended | — | Blazor SPA app registration → UI `AzureAd.ClientId` |
 | `FG_SQL_ADMIN_GROUP_OBJECT_ID` / `_NAME` | — | — | **required** | — | `prod.bicepparam` has no default (Entra-only SQL) |
@@ -294,7 +310,8 @@ infra outputs.
 Owner-equivalent on the subscription (resource group + role assignments at subscription scope),
 `AcrPush` on the registry, membership of the SQL Entra admin group for the dacpac deploy, and —
 only for a day-0 run with `create-model-deployments=true` — the Marketplace permissions from
-[#107](https://github.com/kolatts/foundry-gate/issues/107). Exact steps: #109.
+[#107](https://github.com/kolatts/foundry-gate/issues/107). Exact commands:
+[Owner Setup Runbook](/foundry-gate/reference/owner-setup/).
 
 ## Runbooks
 

@@ -363,34 +363,24 @@ resource tierProducts 'Microsoft.ApiManagement/service/products@2024-06-01-previ
   }
 ]
 
-// The link id is prefixed with the tier because `apiLinkId` must be unique across the WHOLE
-// APIM SERVICE, not within its parent product — an easy thing to get wrong, since every
-// other APIM child resource is scoped to its parent. Naming all three tiers' links
-// `anthropic-link` made the first one win and the other two fail with
-// `Conflict: Link already exists between specified Product and Api`, on a clean deploy where
-// no link existed yet. The failure is worse than it sounds: the deployment reports failure,
-// but the tier PRODUCTS were created fine, so `standard` and `power` sat there looking
-// correct in the portal with no APIs attached — and an APIM key issued against a product
-// with no APIs is dead on arrival while every policy still reads as configured.
-// Observed live 2026-09-05, see #230.
-resource tierProductAnthropicLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
+// Which APIs each tier product exposes. Deliberately `products/apis` and NOT the newer
+// `products/apiLinks`: `apiLinks` is not idempotent. Its identity is the link name, but
+// APIM additionally enforces uniqueness on the (product, api) PAIR, so a second PUT of an
+// already-linked pair fails with `Conflict — Link already exists between specified Product
+// and Api` even though nothing changed. That makes the whole template single-use, which
+// broke the first re-run of the dev deploy (#239). `products/apis` names the association by
+// the API itself, so a re-PUT is a genuine no-op. Verified against APIM BasicV2, 2026-09-05.
+resource tierProductAnthropicApis 'Microsoft.ApiManagement/service/products/apis@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
-    name: '${tier.name}-anthropic-link'
-    properties: {
-      apiId: anthropicApi.id
-    }
+    name: anthropicApi.name
   }
 ]
 
-// Tier-prefixed for the same service-wide-uniqueness reason as the Anthropic links above.
-resource tierProductOpenaiLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
+resource tierProductOpenaiApis 'Microsoft.ApiManagement/service/products/apis@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
-    name: '${tier.name}-openai-link'
-    properties: {
-      apiId: openaiApi.id
-    }
+    name: openaiApi.name
   }
 ]
 

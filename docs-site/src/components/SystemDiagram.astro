@@ -1,23 +1,53 @@
 ---
 // System diagram — gateway data plane (request path) + FoundryGate control plane.
-// No props: the diagram is a hand-maintained picture of the CURRENT architecture
-// (CONVENTIONS.md §Architecture diagrams). Values mirror infra/main.bicep defaults.
+// The LAYOUT is hand-maintained (CONVENTIONS.md §Architecture diagrams); the VALUES that
+// also exist in infra/ — front-door paths, tier limits, pool priorities, Foundry regions
+// and their model deployments, the Functions' schedules — are read from
+// src/generated/architecture.json so they cannot drift from main.bicep (#221). The
+// fully generated picture is components/ArchitectureDiagram.astro.
 // Shared primitives live in src/styles/diagrams.css (.fgd-*).
+import arch from '../generated/architecture.json';
+import { tokens as fmt, scheduleInline } from '../lib/architecture';
+
+const { infra, code } = arch;
+const anthropicPool = infra.pools.find((p) => p.kind === 'pool');
+const schedule = (name: string) =>
+  code.functions.find((f) => f.name.startsWith(name))?.schedule ?? '';
+
+// The description a screen reader gets must be generated from the SAME model the visible
+// nodes read, or the two copies drift apart the first time a tier changes — the exact
+// failure this whole generator exists to prevent (#221).
+const tierProse = infra.quotaTiers
+  .map(
+    (t) =>
+      `${t.displayName} ${t.monthlyTokenQuota ? `${fmt(t.monthlyTokenQuota)} tokens per month and ` : 'with no monthly cap and '}` +
+      `${fmt(t.tpm)} tokens per minute`,
+  )
+  .join(', ');
+const doorProse = infra.frontDoors.map((d) => `/${d.path}`).join(' and ');
+const clientProse = infra.frontDoors.map((d) => `${d.client} sends ${d.header}`).join(', ');
+const poolProse = (anthropicPool?.members ?? [])
+  .map((m) => `priority ${m.priority} ${m.region}`)
+  .join(', ');
+const modelProse = infra.regions
+  .map((r) => `${r.name} (${r.role}) hosting ${r.deployments.map((d) => d.name).join(', ')}`)
+  .join('; ');
+
 const ariaLabel =
-  'FoundryGate system diagram. Real-time path: developer CLIs (Claude Code sends x-api-key, ' +
-  'Codex CLI sends api-key) call the Azure API Management v2 gateway over HTTPS with a personal ' +
-  'subscription key. The gateway has two front doors, /anthropic and /openai/v1, requires the ' +
-  'subscription to belong to a tier product (Standard 5M tokens per month and 20K tokens per minute, ' +
-  'Power 20M and 40K, Unlimited with 100K tokens per minute only), applies the tier model allowlist and ' +
+  `FoundryGate system diagram. Real-time path: developer CLIs (${clientProse}) ` +
+  'call the Azure API Management v2 gateway over HTTPS with a personal ' +
+  `subscription key. The gateway has ${infra.frontDoors.length} front doors, ${doorProse}, requires the ` +
+  `subscription to belong to a tier product (${tierProse}), applies the tier model allowlist and ` +
   'the llm-token-limit policy which returns 403 when the monthly quota is exhausted and 429 with ' +
   'Retry-After when the per-minute cap is hit, then routes with managed identity to backend pools with ' +
-  'circuit breakers (Anthropic pool: priority 1 eastus2, priority 2 swedencentral; single OpenAI backend) ' +
-  'and on to Azure AI Foundry accounts hosting Claude and GPT model deployments. Gateway diagnostics ' +
+  `circuit breakers (Anthropic pool: ${poolProse}; single OpenAI backend) ` +
+  `and on to Azure AI Foundry accounts in ${modelProse}. Gateway diagnostics ` +
   'stream LLM logs and token metrics to Log Analytics and Application Insights. Control plane, out of ' +
   'the request path: Entra ID signs users in and is the source of users and groups; the Blazor UI on ' +
   'Azure Static Web Apps calls FoundryGate.Api on Azure Container Apps, which stores state in Azure SQL ' +
   'through EF Core; FoundryGate.Functions run the monthly reset, usage reconciliation (reading ' +
-  'ApiManagementGatewayLlmLog from Log Analytics) and a nightly Entra directory sync that reconciles users then groups from Microsoft Graph; ' +
+  `ApiManagementGatewayLlmLog from Log Analytics, ${scheduleInline(schedule('UsageSync'))}) and an Entra directory sync ` +
+  `${scheduleInline(schedule('EntraSync'))} that reconciles users then groups from Microsoft Graph; ` +
   'Key Vault holds the APIM key-encryption key (no client secrets; Graph is called as each host\'s own managed identity). The API manages APIM ' +
   'subscriptions through the Management API: create under a tier product, regenerate both keys, move tier, delete. ' +
   'FoundryGate.Functions reaches the same Management API for one operation only — moving a subscription to another tier product when a reset resolves a new tier. ' +
@@ -33,7 +63,9 @@ const ariaLabel =
     <div class="fgd-node fgd-node--ext fgd-system__devs">
       <div class="fgd-node__title">Developer workstations</div>
       <div class="fgd-node__sub">
-        Claude Code → <code>x-api-key</code> · Codex CLI → <code>api-key</code>
+        {infra.frontDoors.map((door, i) => (
+          <>{i > 0 ? ' · ' : ''}{door.client} → <code>{door.header}</code></>
+        ))}
         · one personal APIM subscription key per developer
       </div>
     </div>
@@ -50,14 +82,12 @@ const ariaLabel =
     <div class="fgd-plane__label">Data plane <small>Azure API Management v2 · the request path · enforcement happens here</small></div>
 
     <div class="fgd-row fgd-row--2">
-      <div class="fgd-node fgd-node--azure">
-        <div class="fgd-node__title">Front door <code>/anthropic/*</code></div>
-        <div class="fgd-node__sub">Anthropic Messages API — Claude Code</div>
-      </div>
-      <div class="fgd-node fgd-node--azure">
-        <div class="fgd-node__title">Front door <code>/openai/v1</code></div>
-        <div class="fgd-node__sub">Responses / Chat Completions — Codex CLI</div>
-      </div>
+      {infra.frontDoors.map((door) => (
+        <div class="fgd-node fgd-node--azure">
+          <div class="fgd-node__title">Front door <code>/{door.path}</code></div>
+          <div class="fgd-node__sub">{door.label} — {door.client}</div>
+        </div>
+      ))}
     </div>
 
     <div class="fgd-arrow">
@@ -67,18 +97,15 @@ const ariaLabel =
     </div>
 
     <div class="fgd-row fgd-row--3">
-      <div class="fgd-node fgd-node--azure">
-        <div class="fgd-node__title">Standard</div>
-        <div class="fgd-node__sub">5M tokens / month<br />20K tokens / minute</div>
-      </div>
-      <div class="fgd-node fgd-node--azure">
-        <div class="fgd-node__title">Power</div>
-        <div class="fgd-node__sub">20M tokens / month<br />40K tokens / minute</div>
-      </div>
-      <div class="fgd-node fgd-node--azure">
-        <div class="fgd-node__title">Unlimited</div>
-        <div class="fgd-node__sub">no monthly cap<br />100K tokens / minute</div>
-      </div>
+      {infra.quotaTiers.map((tier) => (
+        <div class="fgd-node fgd-node--azure">
+          <div class="fgd-node__title">{tier.displayName}</div>
+          <div class="fgd-node__sub">
+            {tier.monthlyTokenQuota ? `${fmt(tier.monthlyTokenQuota)} tokens / month` : 'no monthly cap'}
+            <br />{fmt(tier.tpm)} tokens / minute
+          </div>
+        </div>
+      ))}
     </div>
 
     <div class="fgd-system__policy">
@@ -102,7 +129,9 @@ const ariaLabel =
       <div class="fgd-node fgd-node--azure">
         <div class="fgd-node__title">Anthropic backend pool</div>
         <div class="fgd-node__sub">
-          priority 1 <code>eastus2</code> → priority 2 <code>swedencentral</code><br />
+          {anthropicPool?.members.map((m, i) => (
+            <>{i > 0 ? ' → ' : ''}priority {m.priority} <code>{m.region}</code></>
+          ))}<br />
           circuit breaker per backend: 3 × 429/5xx in 30 s trips it, honours Retry-After · retry ×2 across the pool
         </div>
       </div>
@@ -118,18 +147,16 @@ const ariaLabel =
     </div>
 
     <div class="fgd-row fgd-row--2">
-      <div class="fgd-node fgd-node--azure">
-        <div class="fgd-node__title">Azure AI Foundry — eastus2 (primary)</div>
-        <div class="fgd-node__sub">
-          <code>claude-sonnet-4-5</code> · <code>claude-haiku-4-5</code> · <code>claude-opus-4-5</code> · <code>gpt-4.1-mini</code>
+      {infra.regions.map((region) => (
+        <div class="fgd-node fgd-node--azure">
+          <div class="fgd-node__title">Azure AI Foundry — {region.name} ({region.role})</div>
+          <div class="fgd-node__sub">
+            {region.deployments.map((d, i) => (
+              <>{i > 0 ? ' · ' : ''}<code>{d.name}</code></>
+            ))}
+          </div>
         </div>
-      </div>
-      <div class="fgd-node fgd-node--azure">
-        <div class="fgd-node__title">Azure AI Foundry — swedencentral (pool member)</div>
-        <div class="fgd-node__sub">
-          <code>claude-sonnet-4-5</code> · <code>claude-haiku-4-5</code> · <code>claude-opus-4-5</code>
-        </div>
-      </div>
+      ))}
     </div>
 
     <!-- Telemetry emitted by the gateway (async, not on the request path) -->
@@ -212,8 +239,9 @@ const ariaLabel =
       <div class="fgd-node fgd-node--app">
         <div class="fgd-node__title">FoundryGate.Functions</div>
         <div class="fgd-node__sub">
-          MonthlyReset — 00:01 UTC, on the configured reset day · UsageSync — reconciliation<br />
-          EntraSync — 02:00 UTC nightly: users then groups, from Microsoft Graph<br />
+          MonthlyReset — {scheduleInline(schedule('MonthlyQuotaReset'))}, on the configured reset day ·
+          UsageSync — {scheduleInline(schedule('UsageSync'))}, reconciliation<br />
+          EntraSync — {scheduleInline(schedule('EntraSync'))}: users then groups, from Microsoft Graph<br />
           .NET isolated worker + storage account (runtime, job locks) → Azure SQL via EF Core<br />
           Moves a subscription's tier product when a reset resolves a new one
         </div>
@@ -232,6 +260,11 @@ const ariaLabel =
     <span class="fgd-legend__item"><span class="fgd-legend__swatch"></span> real-time enforcement — on the request path</span>
     <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--dashed"></span> telemetry &amp; reconciliation — out of band</span>
     <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--app"></span> control-plane calls — lifecycle &amp; tiers</span>
+    <span class="fgd-provenance">
+      Layout hand-drawn; the regions, tiers, model deployments, front-door paths and
+      Function schedules above are generated from <code>infra/</code> and <code>src/</code>
+      at build time.
+    </span>
   </figcaption>
 </figure>
 
@@ -277,6 +310,7 @@ const ariaLabel =
   .fgd-system__bridge .fgd-arrow { min-height: 4.2rem; }
 
   .fgd-system__control-bottom { margin-top: 0.6rem; }
+
 
   @media (min-width: 720px) {
     .fgd-system__bridge {

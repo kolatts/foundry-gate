@@ -1,0 +1,420 @@
+@page "/models"
+@attribute [Authorize(Roles = RoleNames.Admin)]
+@inject IFoundryGateApiClient Api
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<PageTitle>Models &amp; access — Foundry Gate</PageTitle>
+
+@if (_accessDenied)
+{
+    <AccessDenied />
+}
+else
+{
+    <div class="d-flex align-center justify-space-between mb-1">
+        <MudText Typo="Typo.h4">Models &amp; access</MudText>
+        <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                       Disabled="@_loading"
+                       OnClick="@LoadAsync"
+                       aria-label="Refresh"
+                       data-testid="models-refresh" />
+    </div>
+    <MudText Typo="Typo.body1" Class="mud-text-secondary mb-4" Style="max-width: 48rem;">
+        Which models each quota tier is allowed to use. This list <em>is</em> the rule the gateway
+        enforces: a developer asking for a model their tier doesn't list is refused at the gateway
+        with <code>model_not_permitted</code>, before it costs them any quota. Changes take effect
+        without redeploying anything.
+    </MudText>
+
+    @if (_loading && _tiers is null)
+    {
+        <MudSkeleton Width="100%" Height="3rem" data-testid="models-loading" />
+        <MudSkeleton Width="100%" Height="12rem" Class="mt-2" />
+    }
+    else if (_unavailable is { } unavailable)
+    {
+        <MudAlert Severity="Severity.Error" data-testid="models-error">@unavailable</MudAlert>
+    }
+    else
+    {
+        @if (_pendingDeployment is { Length: > 0 } pending)
+        {
+            <MudAlert Severity="Severity.Info" Class="mb-4" data-testid="models-pending-deployment">
+                '@pending' isn't allowed for any tier yet — nobody can use it until it is.
+                <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => AddAsync(null, pending))" data-testid="models-pending-add">
+                    Allow it for a tier
+                </MudButton>
+            </MudAlert>
+        }
+
+        <MudPaper Elevation="1" Class="pa-4 mb-6">
+            <MudText Typo="Typo.h6" Class="mb-2">At a glance</MudText>
+            <MudSimpleTable Dense="true" Hover="true" Striped="true" Style="overflow-x: auto;" data-testid="models-matrix">
+                <thead>
+                    <tr>
+                        <th>Alias</th>
+                        @foreach (var tier in _tiers ?? [])
+                        {
+                            <th>@tier.DisplayName</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var alias in AllAliases)
+                    {
+                        <tr>
+                            <td><code>@alias</code></td>
+                            @foreach (var tier in _tiers ?? [])
+                            {
+                                var row = RowFor(tier.Tier, alias);
+                                <td data-testid="@($"models-cell-{tier.Tier}-{alias}")">
+                                    @if (row is null)
+                                    {
+                                        <span class="mud-text-secondary">—</span>
+                                    }
+                                    else
+                                    {
+                                        <span>@row.DeploymentName</span>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                    @if (AllAliases.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="@(1 + (_tiers?.Count ?? 0))" class="mud-text-secondary" data-testid="models-matrix-empty">
+                                No tier allows any model yet, so every request is refused. Allow one below.
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+
+        <MudExpansionPanels MultiExpansion="true" Elevation="1">
+            @foreach (var tier in _tiers ?? [])
+            {
+                var rows = RowsFor(tier.Tier);
+                <MudExpansionPanel Expanded="true" data-testid="@($"models-panel-{tier.Tier}")">
+                    <TitleContent>
+                        <div class="d-flex align-center gap-3">
+                            <MudText Typo="Typo.subtitle1">@tier.DisplayName</MudText>
+                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined">
+                                @rows.Count model@(rows.Count == 1 ? string.Empty : "s")
+                            </MudChip>
+                        </div>
+                    </TitleContent>
+                    <ChildContent>
+                        @if (rows.Count == 0)
+                        {
+                            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3" data-testid="@($"models-empty-{tier.Tier}")">
+                                This tier allows no models at all, so every request from a developer on it is refused.
+                            </MudAlert>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Hover="true">
+                                <thead>
+                                    <tr>
+                                        <th>Alias</th>
+                                        <th>Deployment</th>
+                                        <th>Front door</th>
+                                        <th>Backend</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var row in rows)
+                                    {
+                                        <tr>
+                                            <td><code>@row.Alias</code></td>
+                                            <td>
+                                                @row.DeploymentName
+                                                @if (!row.DeploymentExists)
+                                                {
+                                                    <MudChip T="string" Size="Size.Small" Color="Color.Error" Variant="Variant.Filled" Class="ml-2"
+                                                             data-testid="@($"models-missing-{tier.Tier}-{row.Alias}")">
+                                                        no such deployment
+                                                    </MudChip>
+                                                }
+                                                else if (row.MissingFromAccounts.Count > 0 && row.Pool == GatewayModelMap.AnthropicPool)
+                                                {
+                                                    <MudTooltip Text="@($"Missing from {string.Join(", ", row.MissingFromAccounts)} — a pooled model must exist in every region.")">
+                                                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Filled" Class="ml-2"
+                                                                 data-testid="@($"models-partial-{tier.Tier}-{row.Alias}")">
+                                                            not in every region
+                                                        </MudChip>
+                                                    </MudTooltip>
+                                                }
+                                            </td>
+                                            <td>@row.Provider</td>
+                                            <td>@row.Pool</td>
+                                            <td class="text-right">
+                                                <MudIconButton Icon="@Icons.Material.Filled.SwapHoriz"
+                                                               Size="Size.Small"
+                                                               Disabled="@_busy"
+                                                               OnClick="@(() => RetargetAsync(tier, row))"
+                                                               aria-label="@($"Retarget {row.Alias}")"
+                                                               data-testid="@($"models-retarget-{tier.Tier}-{row.Alias}")" />
+                                                <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                                               Color="Color.Error"
+                                                               Size="Size.Small"
+                                                               Disabled="@_busy"
+                                                               OnClick="@(() => RemoveAsync(tier, row))"
+                                                               aria-label="@($"Remove {row.Alias}")"
+                                                               data-testid="@($"models-remove-{tier.Tier}-{row.Alias}")" />
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+
+                        <MudButton Variant="Variant.Outlined"
+                                   Color="Color.Primary"
+                                   StartIcon="@Icons.Material.Filled.Add"
+                                   Class="mt-3"
+                                   Disabled="@_busy"
+                                   OnClick="@(() => AddAsync(tier.Tier, null))"
+                                   data-testid="@($"models-add-{tier.Tier}")">
+                            Allow a model
+                        </MudButton>
+
+                        <MudPaper Elevation="0" Class="pa-3 mt-4" Style="background: var(--mud-palette-background-grey);">
+                            <MudText Typo="Typo.subtitle2">What developers on this tier see</MudText>
+                            <MudText Typo="Typo.body2" Class="mud-text-secondary mb-2">
+                                These are the names they put in their CLI's model setting. Anything else is refused.
+                            </MudText>
+                            @if (rows.Count == 0)
+                            {
+                                <MudText Typo="Typo.body2" data-testid="@($"models-preview-{tier.Tier}")">Nothing — no model is available to them.</MudText>
+                            }
+                            else
+                            {
+                                <div class="d-flex flex-wrap gap-2" data-testid="@($"models-preview-{tier.Tier}")">
+                                    @foreach (var row in rows)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="Color.Primary">@row.Alias</MudChip>
+                                    }
+                                </div>
+                            }
+                        </MudPaper>
+                    </ChildContent>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    }
+}
+
+@code {
+    /// <summary>
+    /// Query-string parameter <c>/models?deployment=…</c> — the follow-through from <c>/foundry</c>
+    /// after a successful provision. A model nobody is allowed to use is not yet useful, so the page
+    /// says so and opens the add dialog pre-filled rather than leaving the admin to find it.
+    /// </summary>
+    [Parameter, SupplyParameterFromQuery(Name = "deployment")]
+    public string? DeploymentQuery { get; set; }
+
+    private IReadOnlyList<GatewayTierResponse>? _tiers;
+    private IReadOnlyList<FoundryDeploymentResponse> _deployments = [];
+    private readonly Dictionary<string, IReadOnlyList<GatewayModelAliasResponse>> _aliasesByTier = new(StringComparer.OrdinalIgnoreCase);
+    private string? _pendingDeployment;
+    private string? _unavailable;
+    private bool _loading;
+    private bool _busy;
+    private bool _accessDenied;
+
+    /// <summary>The gateway's accounts as the deployment list reveals them — pool order isn't knowable here, so display order is alphabetical.</summary>
+    private IReadOnlyList<string> ConfiguredAccounts =>
+        [.. _deployments.Select(d => d.AccountName).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>Every alias any tier allows — the rows of the overview matrix.</summary>
+    private IReadOnlyList<string> AllAliases =>
+        [.. _aliasesByTier.Values.SelectMany(rows => rows).Select(row => row.Alias).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)];
+
+    private IReadOnlyList<GatewayModelAliasResponse> RowsFor(string tier) =>
+        _aliasesByTier.TryGetValue(tier, out var rows) ? rows : [];
+
+    private GatewayModelAliasResponse? RowFor(string tier, string alias) =>
+        RowsFor(tier).FirstOrDefault(row => string.Equals(row.Alias, alias, StringComparison.OrdinalIgnoreCase));
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            var tiersResult = await Api.GetGatewayTiersAsync();
+
+            if (tiersResult.Status == ApiCallStatus.Forbidden)
+            {
+                _accessDenied = true;
+                return;
+            }
+
+            if (!tiersResult.IsSuccess || tiersResult.Value is null)
+            {
+                // A 503 here means the Gateway section doesn't address APIM (or names a resource Azure
+                // doesn't have) — an operator fixes that from the message, so show it whole.
+                _unavailable = tiersResult.Message ?? "Couldn't read the gateway's tiers.";
+                return;
+            }
+
+            _tiers = tiersResult.Value;
+
+            var deploymentsResult = await Api.GetFoundryDeploymentsAsync();
+            _deployments = deploymentsResult is { IsSuccess: true, Value: not null } ? deploymentsResult.Value : [];
+
+            // Concurrently, not one after another: the tiers are independent reads and a fork with six
+            // of them should not open this page six round trips slowly.
+            var modelResults = await Task.WhenAll(_tiers.Select(tier => Api.GetGatewayTierModelsAsync(tier.Tier)));
+
+            _aliasesByTier.Clear();
+            for (var i = 0; i < _tiers.Count; i++)
+            {
+                var modelsResult = modelResults[i];
+                if (!modelsResult.IsSuccess || modelsResult.Value is null)
+                {
+                    _unavailable = modelsResult.Message ?? $"Couldn't read the models allowed for {_tiers[i].DisplayName}.";
+                    return;
+                }
+
+                _aliasesByTier[_tiers[i].Tier] = modelsResult.Value.Aliases;
+            }
+
+            _unavailable = null;
+
+            // Only worth mentioning while it is still true: a deployment already allowed somewhere
+            // needs no prompting.
+            _pendingDeployment = DeploymentQuery is { Length: > 0 } deployment
+                && !_aliasesByTier.Values.SelectMany(rows => rows).Any(row => string.Equals(row.DeploymentName, deployment, StringComparison.OrdinalIgnoreCase))
+                ? deployment
+                : null;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task AddAsync(string? tier, string? deploymentName)
+    {
+        var parameters = new DialogParameters<ModelAliasDialog>
+        {
+            { x => x.Tiers, _tiers ?? [] },
+            { x => x.Deployments, _deployments },
+            { x => x.ConfiguredAccounts, ConfiguredAccounts },
+            { x => x.ExistingAliases, [.. RowsFor(tier ?? string.Empty).Select(row => row.Alias)] },
+            { x => x.Tier, tier ?? string.Empty },
+            { x => x.DeploymentName, deploymentName ?? string.Empty },
+        };
+
+        var dialog = await DialogService.ShowAsync<ModelAliasDialog>("Allow a model", parameters);
+        var result = await dialog.Result;
+
+        if (result is not { Canceled: false, Data: ModelAliasEdit edit })
+        {
+            return;
+        }
+
+        // The alias map is one document, so every edit is a full replace: take what the tier has,
+        // drop any row with the same alias, add this one.
+        var next = RowsFor(edit.Tier)
+            .Where(row => !string.Equals(row.Alias, edit.Alias.Alias, StringComparison.OrdinalIgnoreCase))
+            .Select(ToRequest)
+            .Append(edit.Alias)
+            .ToList();
+
+        await SaveAsync(edit.Tier, next, $"'{edit.Alias.Alias}' is now allowed.");
+    }
+
+    private async Task RetargetAsync(GatewayTierResponse tier, GatewayModelAliasResponse row)
+    {
+        var parameters = new DialogParameters<ModelAliasDialog>
+        {
+            { x => x.Tiers, _tiers ?? [] },
+            { x => x.Deployments, _deployments },
+            { x => x.ConfiguredAccounts, ConfiguredAccounts },
+            { x => x.ExistingAliases, [.. RowsFor(tier.Tier).Select(r => r.Alias)] },
+            { x => x.Tier, tier.Tier },
+            { x => x.Alias, row.Alias },
+            { x => x.DeploymentName, row.DeploymentName },
+            { x => x.IsRetarget, true },
+        };
+
+        var dialog = await DialogService.ShowAsync<ModelAliasDialog>($"Retarget {row.Alias}", parameters);
+        var result = await dialog.Result;
+
+        if (result is not { Canceled: false, Data: ModelAliasEdit edit })
+        {
+            return;
+        }
+
+        var next = RowsFor(tier.Tier)
+            .Where(r => !string.Equals(r.Alias, row.Alias, StringComparison.OrdinalIgnoreCase))
+            .Select(ToRequest)
+            .Append(edit.Alias)
+            .ToList();
+
+        await SaveAsync(tier.Tier, next, $"'{row.Alias}' now resolves to {edit.Alias.DeploymentName}.");
+    }
+
+    private async Task RemoveAsync(GatewayTierResponse tier, GatewayModelAliasResponse row)
+    {
+        var confirmed = await DialogService.ConfirmAsync(
+            title: "Remove model",
+            message: $"Stop allowing '{row.Alias}' for {tier.DisplayName}?",
+            detail: "Developers on this tier who have it configured start getting refused as soon as the gateway picks the change up. Nothing is deleted in Azure — the deployment stays.",
+            confirmText: "Remove",
+            confirmColor: Color.Error);
+
+        if (!confirmed)
+        {
+            return;
+        }
+
+        var next = RowsFor(tier.Tier)
+            .Where(r => !string.Equals(r.Alias, row.Alias, StringComparison.OrdinalIgnoreCase))
+            .Select(ToRequest)
+            .ToList();
+
+        await SaveAsync(tier.Tier, next, $"'{row.Alias}' is no longer allowed for {tier.DisplayName}.");
+    }
+
+    private async Task SaveAsync(string tier, List<TierModelAliasRequest> aliases, string successMessage)
+    {
+        _busy = true;
+        try
+        {
+            var result = await Api.ReplaceGatewayTierModelsAsync(tier, new ReplaceTierModelsRequest { Aliases = aliases });
+
+            if (!result.IsSuccess || result.Value is null)
+            {
+                // The API's refusals are the interesting ones here — "that deployment isn't in every
+                // region" is a sentence an admin can act on, and reducing it to "couldn't save" would
+                // waste it.
+                Snackbar.Add(result.Message ?? "Couldn't update the allowed models.", Severity.Error);
+                return;
+            }
+
+            _aliasesByTier[tier] = result.Value.Aliases;
+            _pendingDeployment = null;
+            Snackbar.Add(successMessage, Severity.Success);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static TierModelAliasRequest ToRequest(GatewayModelAliasResponse row) => new()
+    {
+        Alias = row.Alias,
+        DeploymentName = row.DeploymentName,
+        Pool = row.Pool,
+        Provider = row.Provider,
+    };
+}

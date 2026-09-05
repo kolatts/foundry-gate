@@ -116,6 +116,59 @@ public class FoundryPageTests : WebTestContext
     }
 
     [Fact]
+    public void After_a_create_the_page_offers_to_allow_the_model_for_a_tier()
+    {
+        // Provisioning is half the job: the alias map is the allowlist (#86), so a deployment nobody
+        // is allowed to use is not yet usable. The link carries the name so /models can pre-fill it.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(
+            WebTestData.Deployment(deploymentName: "gpt-5-codex", provisioningState: "Succeeded"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.Find("input[data-testid=deployment-name]").Change("gpt-5-codex");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-5-codex");
+        page.Find("input[data-testid=deployment-version]").Input("2026-01-01");
+        page.Find("input[data-testid=deployment-sku]").Input("GlobalStandard");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        page.WaitForAssertion(() =>
+        {
+            var link = page.Find("[data-testid=foundry-allow-link]");
+            Assert.Equal("/models?deployment=gpt-5-codex", link.GetAttribute("href"));
+        });
+    }
+
+    [Fact]
+    public void A_create_that_ARM_reports_as_terminal_is_not_polled()
+    {
+        // Nothing to wait for: ARM answered Succeeded on acceptance, so a poll loop would only add
+        // calls. The absence of reads is the assertion.
+        Api.ArrangeDeployments(WebTestData.Deployment(accountName: "fg-eastus"));
+        Api.CreateFoundryDeploymentResult = ApiCallResult<FoundryDeploymentResponse>.Ok(
+            WebTestData.Deployment(deploymentName: "already-done", provisioningState: "Succeeded"));
+
+        var page = RenderPage<Foundry>();
+        page.WaitForAssertion(() => Assert.NotNull(page.Find("[data-testid=foundry-new]")));
+
+        page.Find("[data-testid=foundry-new]").Click();
+        page.WaitForElement("[data-testid=deployment-create]");
+
+        page.Find("input[data-testid=deployment-name]").Change("already-done");
+        page.Find("input[data-testid=deployment-model]").Input("gpt-5-codex");
+        page.Find("input[data-testid=deployment-version]").Input("2026-01-01");
+        page.Find("input[data-testid=deployment-sku]").Input("GlobalStandard");
+        page.Find("[data-testid=deployment-create]").Click();
+
+        page.WaitForAssertion(() => Assert.Single(Api.CreatedDeployments));
+        Assert.Empty(Api.ReadDeployments);
+    }
+
+    [Fact]
     public void The_create_dialog_offers_what_the_accounts_can_actually_serve()
     {
         // #173: the model and SKU suggestions came from a hardcoded array in the dialog until

@@ -50,6 +50,17 @@
 4. Docs build must pass: `npm run build` in `docs-site/` (Node 20, `npm ci` first).
    `.md` files cannot use MDX components — pages importing Starlight components must
    be `.mdx`.
+5. **The architecture diagram is generated, not drawn.**
+   `docs-site/scripts/generate-architecture.mjs` reads `infra/main.bicep`,
+   `infra/modules/*.bicep`, `src/*/*.csproj`, the Functions' `[TimerTrigger]`s and the API
+   route prefixes into `docs-site/src/generated/architecture.json` (+ `.mmd`), which
+   `architecture/diagram` and `SystemDiagram.astro` render. It runs as `prebuild`, the
+   output is committed, and CI fails on `git diff --exit-code docs-site/src/generated`.
+   Change a region, tier, model, module edge or timer schedule and you must commit the
+   regenerated file (`npm run generate:architecture` in `docs-site/`). Never hand-edit
+   `src/generated/`. Frontmatter imports in `.astro` files go at the very TOP — the Astro
+   compiler mangles the line it hoists an import from when that line ends in a string
+   literal.
 
 ## Architecture ground truths (Sep 2026)
 

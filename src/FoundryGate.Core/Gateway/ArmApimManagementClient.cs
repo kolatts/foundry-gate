@@ -176,6 +176,45 @@ public sealed class ArmApimManagementClient : IApimManagementClient
         }
     }
 
+    /// <inheritdoc />
+    public async Task<string?> GetNamedValueAsync(string namedValueName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(namedValueName);
+
+        var namedValues = _armClient.GetApiManagementServiceResource(_serviceId).GetApiManagementNamedValues();
+        var response = await namedValues.GetIfExistsAsync(namedValueName, cancellationToken);
+
+        if (!response.HasValue || response.Value is not { } resource)
+        {
+            return null;
+        }
+
+        // listValue, not the data off the GET: ARM omits properties.value for a secret named value,
+        // so reading the resource would be right only for the non-secret half of the contract.
+        var secret = await resource.GetValueAsync(cancellationToken);
+        return secret.Value?.Value;
+    }
+
+    /// <inheritdoc />
+    public async Task SetNamedValueAsync(string namedValueName, string value, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(namedValueName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+
+        var content = new ApiManagementNamedValueCreateOrUpdateContent
+        {
+            // Must equal the ARM name: {{token}} in a policy resolves against displayName.
+            DisplayName = namedValueName,
+            Value = value,
+            IsSecret = false,
+        };
+
+        // No ifMatch: ARM reads `If-Match: *` as "must already exist", which would turn the first write
+        // to a tier whose named value no deploy has created into a 412 the caller cannot act on.
+        var namedValues = _armClient.GetApiManagementServiceResource(_serviceId).GetApiManagementNamedValues();
+        _ = await namedValues.CreateOrUpdateAsync(WaitUntil.Completed, namedValueName, content, cancellationToken: cancellationToken);
+    }
+
     private ApiManagementSubscriptionResource Subscription(string subscriptionName) =>
         _armClient.GetApiManagementSubscriptionResource(
             ApiManagementSubscriptionResource.CreateResourceIdentifier(_subscriptionId, _resourceGroup, _apimName, subscriptionName));

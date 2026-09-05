@@ -125,6 +125,16 @@ public static class AuditActions
     /// </summary>
     public const string FoundryDeploymentCapacityChanged = "foundry.deployment.capacity-changed";
 
+    // -- Gateway model allowlist (#225) --
+
+    /// <summary>
+    /// <c>PUT /gateway/tiers/{tier}/models</c> — a tier's model allowlist replaced, which is a live
+    /// change to what the gateway permits (the <c>fg-model-map-{tier}</c> named value, #86). Details
+    /// carry the whole map <c>{ before, after }</c>: the map is small, and "which models did this tier
+    /// have last Tuesday" is the question the trail has to answer.
+    /// </summary>
+    public const string GatewayModelsUpdated = "gateway.models.updated";
+
     // -- Config (spec 4.6) --
 
     public const string ConfigUpdated = "config.updated";

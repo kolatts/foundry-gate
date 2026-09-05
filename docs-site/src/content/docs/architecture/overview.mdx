@@ -12,7 +12,7 @@ import Pipeline from '../../../components/Pipeline.astro';
 import QuotaChain from '../../../components/QuotaChain.astro';
 import KeyLifecycle from '../../../components/KeyLifecycle.astro';
 
-*The plain-English version of this page is [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/); the full platform detail lives in [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) and the [reference section](/foundry-gate/reference/configuration/).*
+*The plain-English version of this page is [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/); the one-picture version is [Architecture at a glance](/foundry-gate/architecture/diagram/), generated from `infra/` and `src/`; the full platform detail lives in [Feasibility &amp; Strategic Direction](/foundry-gate/architecture/feasibility/) and the [reference section](/foundry-gate/reference/configuration/).*
 
 FoundryGate is a governance and access-management layer for Azure AI Foundry. It provisions the gateway and the model deployments — Claude models are set up by the infrastructure deploy, and admins manage OpenAI model deployments from the UI — then adds per-developer budget enforcement, individual key lifecycle management, and Entra-driven provisioning on top of them.
 
@@ -34,6 +34,19 @@ Two details on the diagram are ground truths worth stating plainly:
 - **Reconciliation is the dashed path.** The Functions read the gateway's
   `ApiManagementGatewayLlmLog` table to keep `QuotaAllocation.TokensUsed`, dashboards, and
   cost figures authoritative. If that sync stopped, enforcement would continue unchanged.
+
+The layout of the diagram above is hand-drawn, but the values in it that also exist in the
+repository — the regions and their model deployments, the tier limits, the front-door
+paths, the pool priorities and the Functions' schedules — are generated from `infra/` and
+`src/` at build time, so they cannot drift from `main.bicep`. The fully generated picture
+is [Architecture at a glance](/foundry-gate/architecture/diagram/); the deploy pipeline,
+quota chain and key lifecycle diagrams further down this page are conceptual by nature —
+they show sequences and decisions, not deployed resources.
+
+**Live evidence.** Responses captured from real deployed gateways — the 429s, the 403s,
+the header measurements — are written up in
+[`validation/`](https://github.com/kolatts/foundry-gate/tree/main/validation) in the
+repository, one file per gateway cycle.
 
 ---
 
@@ -168,6 +181,21 @@ Quota tiers are modeled as APIM **products** (Standard / Power / Unlimited): eac
 product's policy carries that tier's budget and TPM cap, and changing a developer's
 quota means moving their subscription between products. Subscription *suspension* is
 reserved for deactivation and offboarding — not quota exhaustion.
+
+**Which models a tier may use is enforced in the same place.** Each tier product carries a
+model alias map — an APIM named value holding `{ alias: { deployment, backend, provider } }`
+— and a policy fragment that runs *before* `llm-token-limit` rewrites the alias a developer
+pinned (`sonnet`, `haiku`, `gpt`) to the real Foundry deployment and routes it at the right
+backend. The map **is** the allowlist: an alias a tier does not list is refused with
+`403 model_not_permitted`, ahead of the quota policy, so a blocked model costs the developer
+nothing. Because it lives in a named value rather than in policy text, admins edit it from
+the **Models &amp; access** page (`/models`) through the APIM Management API — granting a tier
+a model, or re-pointing an alias at a newer deployment, takes effect without redeploying a
+policy or an infrastructure template. The API validates before it writes: an alias must be
+lower-case and url-safe, and it must point at a deployment the configured Foundry accounts
+actually have — in *every* account when it routes at the multi-region Anthropic pool, because
+the pool sends a throttled request to another region and a region missing the deployment would
+turn a `429` into a `404`.
 
 The usage-sync Function still runs, but as **reconciliation**, not enforcement. It is a
 .NET isolated worker on a Flex Consumption plan — scale-to-zero, so it costs nothing between
@@ -318,12 +346,16 @@ silently cancelled. They stay as `workflow_dispatch` buttons for redeploying one
 Gating it all: six GitHub Environments (`dev`, `dev-plan`, `ui-preview`, `production`,
 `dev-destroy`, `prod-destroy`); `dev` is restricted to protected branches, so no pull request
 can reach the identity that is Owner on the subscription. The two Environments a pull request
-*can* reach are deliberately tiny: `dev-plan` is Reader on the subscription and does nothing but
-a what-if, and `ui-preview` holds a single custom role — `FoundryGate SWA Preview Publisher`,
-defined in `infra/modules/swa-preview-role.bicep` — assignable only on the dev Static Web App.
-A pull request runs its own copy of the workflow files, so the identity, not the workflow, is
-the boundary. **What has not happened yet**: a run against Azure. That needs the owner-side OIDC
-setup (#109) and is the live validation tracked in #105. Badges on the diagram mark the
+*can* reach are deliberately tiny: `ui-preview` holds a single custom role —
+`FoundryGate SWA Preview Publisher`, defined in `infra/modules/swa-preview-role.bicep` —
+assignable only on the dev Static Web App, and `dev-plan` was meant to be Reader-and-nothing-else
+for the PR what-if. That second one turned out to be impossible — ARM's what-if preflight
+authorizes every resource as a write, so no read-only identity can run it — and the PR what-if is
+switched off pending a decision (#229). A pull request runs its own copy of the workflow files,
+so the identity, not the workflow, is the boundary. The owner-side OIDC setup is **done for dev**
+(the [Owner Setup Runbook](/foundry-gate/reference/owner-setup/) is the commands that did it);
+**what has not happened yet** is the first full run against Azure, tracked in #105. Badges on the
+diagram mark the
 difference; the [CI/CD reference](/foundry-gate/reference/ci-cd/) lists every workflow, trigger
 and variable.
 

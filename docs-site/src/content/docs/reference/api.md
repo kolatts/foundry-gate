@@ -481,6 +481,30 @@ one, and every open of the create dialog asks for it. Nothing invalidates it ear
 does not change what is deployable. An **empty** answer is not cached at all, so a transient window
 where every account 404s cannot pin "catalogue unavailable" on the dialog for five minutes.
 
+## Gateway — model allowlist
+
+Each quota-tier product carries a **model alias map**: an APIM named value `fg-model-map-{tier}` holding `{ alias: { deployment, backend, provider } }`, which a policy fragment applies *before* `llm-token-limit`. It rewrites the alias a developer pinned to the real Foundry deployment and routes it at the mapped backend. **The map is the allowlist** — an alias a tier does not list is refused `403 model_not_permitted` ahead of the quota policy, so a blocked model costs the developer no quota, and a tier with no map permits nothing at all (fail loud, by design).
+
+These endpoints edit that named value through the APIM Management API, so a change takes effect **without redeploying a policy or an infrastructure template**.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/gateway/tiers` | Admin | The gateway's quota tiers with the size of each one's allowlist: `{ tier, displayName, monthlyTokenQuota, isUnlimited, allowedModelCount }`. Tier identity and caps come from the same `Gateway:Tiers` table quota resolution uses; the counts come from APIM. |
+| `GET` | `/gateway/tiers/{tier}/models` | Admin | One tier's allowlist as APIM holds it: `{ tier, displayName, aliases: [{ alias, deploymentName, pool, provider, deploymentExists, missingFromAccounts }] }`, ordered by alias. `deploymentExists` and `missingFromAccounts` are checked live against the configured Foundry accounts, so a map that would 404 is visible before a developer finds it. `404` for an unknown tier. |
+| `PUT` | `/gateway/tiers/{tier}/models` | Admin | Replace a tier's allowlist in full. Body: `{ "aliases": [{ "alias", "deploymentName", "pool", "provider" }] }`. Returns the tier's allowlist as stored. An empty list is legal and permits nothing. |
+
+`PUT` is a **full replace**, not a patch: the named value is one JSON document and the gateway reads it whole, so add, retarget and remove are all the same call with a different list.
+
+Rules it enforces before touching APIM:
+
+- **`alias` is lower-case and url-safe** (`^[a-z0-9][a-z0-9._-]*$`) — it travels in a request's `model` field and the policy compares it without normalizing, so `Sonnet` would silently miss an allowlist that lists `sonnet`. `400` otherwise.
+- **An alias may appear once.** The gateway's map is keyed by alias, so a duplicate would let list order decide which deployment a developer actually reaches. `400`.
+- **`pool` is `anthropic` or `openai`**, resolved to the real APIM backend id exactly as `infra/modules/ai-gateway.bicep` resolves it (`anthropic` → the multi-region pool, `openai` → the primary account's backend), so a map written here and a map written by a deploy are the same document. `provider` (`anthropic` / `openai`) is the front door the alias belongs to, which is what lets the policy refuse a right-plan/wrong-door request by naming the base path the caller should have used.
+- **The deployment must exist** in at least one configured Foundry account — and in **every** account when `pool` is `anthropic`. The Anthropic pool sends a throttled request to another region, so a region missing the deployment turns a `429` into a `404`; the refusal names the accounts it is missing from. `400` either way.
+- **APIM refusing the write is `409 Conflict`**, with what APIM said, and the allowlist is unchanged.
+- **`503 Service Unavailable — feature not configured`** when the `Gateway__*` section does not address APIM, or does not name any Foundry account (existence cannot be checked without the accounts).
+- A change writes one audit entry — `gateway.models.updated`, target type `GatewayTier`, target id the tier product id, details carrying the whole map `{ before, after }`. As on `/foundry/*`, the admin must have loaded the app once (`GET /users/me`) or the write is refused `403` before APIM is touched; once APIM has accepted, the entry is written regardless of the client disconnecting. **Writing the map a tier already holds is a no-op** — no APIM call and no audit row, because an audit trail claiming a change that did not happen is worse than silence.
+
 ## Admin
 
 | Method | Path | Auth | Description |

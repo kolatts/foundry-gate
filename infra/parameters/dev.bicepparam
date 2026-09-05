@@ -40,14 +40,27 @@ param deployControlPlane = true
 
 // Entra security group that administers Azure SQL (Entra-only auth, no SQL login). The
 // CI OIDC principal must be a member for the dacpac deploy to connect (#109). Object ids
-// are identifiers, not secrets. Dev shares the tenant's existing SQL admin group.
-param sqlAdminGroupObjectId = '2ed4d6b7-575c-4046-aeb0-eb51bc254ef5'
-param sqlAdminGroupName = 'SG_IMAGILE_SQL_ADMINS'
+// are identifiers, not secrets. Dedicated dev group, created 2026-09-05 — members are the
+// owner and the `foundrygate-ci-dev` OIDC service principal. Replaces the earlier
+// tenant-wide `SG_IMAGILE_SQL_ADMINS` fallback.
+param sqlAdminGroupObjectId = '186dafe0-e7af-4bc8-940d-cac5314ffe82'
+param sqlAdminGroupName = 'SG_FOUNDRYGATE_SQL_ADMINS'
 
 // Serverless GP_S_Gen5 x1 (the main.bicep default): auto-pauses after 60 idle minutes.
 // That pause is real only because nothing polls the database — the API's readiness probe
 // deliberately hits the hermetic /health, not /health/ready (modules/container-app.bicep).
 param sqlBackupStorageRedundancy = 'Local'
+
+// NOT eastus2, and this is not a preference. On 2026-09-05 both eastus2 and eastus were
+// closed to new Azure SQL logical servers for this subscription — the ARM deploy fails with
+// `ProvisioningDisabled` and a direct `az sql server create` with
+// `RegionDoesNotAllowProvisioning`; no quota or SKU query predicts either. centralus was
+// open; probed directly (#241). The cross-region hop to the Container App in eastus2 is
+// acceptable for dev.
+//
+// Immutable: `Microsoft.Sql/servers.location` cannot change in place, so moving this back to
+// eastus2 if the region reopens is a database migration, not a param edit.
+param sqlLocation = 'centralus'
 
 param entraApiClientId = readEnvironmentVariable('FG_ENTRA_API_CLIENT_ID', '00000000-0000-0000-0000-000000000000')
 param apiContainerImage = readEnvironmentVariable('FG_API_IMAGE')

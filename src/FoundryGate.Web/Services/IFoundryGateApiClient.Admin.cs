@@ -1,5 +1,6 @@
 using FoundryGate.Domain.Common;
 using FoundryGate.Domain.Foundry.Contracts;
+using FoundryGate.Domain.Gateway.Contracts;
 using FoundryGate.Domain.Users.Contracts;
 
 namespace FoundryGate.Web.Services;
@@ -62,4 +63,28 @@ public partial interface IFoundryGateApiClient
     /// deployments are refused with a 400 for the same reason creates are.
     /// </summary>
     Task<ApiCallResult<bool>> DeleteFoundryDeploymentAsync(string accountName, string deploymentName, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /foundry/deployments/{accountName}/{deploymentName}</c> — one deployment, live from ARM.
+    /// What <c>/foundry</c> polls after a create: ARM accepts asynchronously, so the row lands as
+    /// <c>Accepted</c>/<c>Creating</c> and only this says when it is actually serving.
+    /// </summary>
+    Task<ApiCallResult<FoundryDeploymentResponse>> GetFoundryDeploymentAsync(string accountName, string deploymentName, CancellationToken ct = default);
+
+    // Gateway model allowlist — api.md §Gateway (#225)
+
+    /// <summary><c>GET /gateway/tiers</c> — the quota tiers and how many models each currently permits.</summary>
+    Task<ApiCallResult<IReadOnlyList<GatewayTierResponse>>> GetGatewayTiersAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>GET /gateway/tiers/{tier}/models</c> — one tier's allowlist as APIM holds it, each row
+    /// flagged for whether its deployment exists in the configured Foundry accounts.
+    /// </summary>
+    Task<ApiCallResult<GatewayTierModelsResponse>> GetGatewayTierModelsAsync(string tier, CancellationToken ct = default);
+
+    /// <summary>
+    /// <c>PUT /gateway/tiers/{tier}/models</c> — replace a tier's allowlist in full. Add, retarget and
+    /// remove are all this call: the map is one document and the gateway reads it whole.
+    /// </summary>
+    Task<ApiCallResult<GatewayTierModelsResponse>> ReplaceGatewayTierModelsAsync(string tier, ReplaceTierModelsRequest request, CancellationToken ct = default);
 }

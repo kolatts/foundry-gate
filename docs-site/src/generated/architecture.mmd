@@ -1,0 +1,49 @@
+%% GENERATED FILE — do not edit. Run docs-site/scripts/generate-architecture.mjs.
+%% Bicep module graph of infra/main.bicep: an edge means the target consumes the
+%% source module's outputs (or names it in dependsOn).
+graph TD
+  monitoring["monitoring"]
+  foundry["foundry<br/>(per region)"]
+  apim["apim"]
+  foundryRbac["foundryRbac<br/>(per region)"]
+  gateway["gateway"]
+  controlPlane(["controlPlane"])
+  swaPreviewRole(["swaPreviewRole"])
+  monitoring --> apim
+  apim --> foundryRbac
+  foundry --> foundryRbac
+  apim --> gateway
+  foundry --> gateway
+  foundryRbac --> gateway
+  apim --> controlPlane
+  foundry --> controlPlane
+  gateway --> controlPlane
+  monitoring --> controlPlane
+  controlPlane --> swaPreviewRole
+
+%% Control plane sub-modules (infra/modules/control-plane.bicep)
+  cp_identities["identities"]
+  cp_keyVault["keyVault"]
+  cp_registry["registry"]
+  cp_storage["storage"]
+  cp_sql["sql"]
+  cp_staticWebApp["staticWebApp"]
+  cp_rbac["rbac"]
+  cp_containerApp["containerApp"]
+  cp_functionApp["functionApp"]
+  cp_identities --> cp_rbac
+  cp_keyVault --> cp_rbac
+  cp_registry --> cp_rbac
+  cp_storage --> cp_rbac
+  cp_identities --> cp_containerApp
+  cp_rbac --> cp_containerApp
+  cp_registry --> cp_containerApp
+  cp_staticWebApp --> cp_containerApp
+  cp_containerApp --> cp_functionApp
+  cp_identities --> cp_functionApp
+  cp_keyVault --> cp_functionApp
+  cp_rbac --> cp_functionApp
+  cp_registry --> cp_functionApp
+  cp_sql --> cp_functionApp
+  cp_staticWebApp --> cp_functionApp
+  cp_storage --> cp_functionApp

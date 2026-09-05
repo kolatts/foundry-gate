@@ -1,0 +1,70 @@
+---
+title: Architecture at a glance
+description: One picture of FoundryGate — CLIs, gateway, models, control plane — generated from infra/ and src/ at build time, so it cannot go stale.
+sidebar:
+  order: -1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import ArchitectureDiagram from '../../../components/ArchitectureDiagram.astro';
+
+*The plain-English version of this page is [Why FoundryGate?](/foundry-gate/getting-started/why-foundrygate/);
+the narrative walkthrough with the Entra sync and quota-resolution detail is the
+[System Overview](/foundry-gate/architecture/overview/).*
+
+**The whole system in one picture: a developer's coding tool talks to one gate, the gate
+decides yes or no before anything reaches a model, and a separate app — never on the
+request path — decides who gets a key and how big their budget is.**
+
+Read it top to bottom. Every box links to the reference page for that part.
+
+<ArchitectureDiagram />
+
+## Why this picture can't go stale
+
+Everything above — the regions, the tier numbers, the model deployment names, the
+Function schedules, the module dependency arrows — is read out of the repository at build
+time by [`docs-site/scripts/generate-architecture.mjs`](https://github.com/kolatts/foundry-gate/blob/main/docs-site/scripts/generate-architecture.mjs)
+and written to `docs-site/src/generated/architecture.json`. The page renders that file and
+nothing else.
+
+| Where the picture comes from | What it reads |
+| --- | --- |
+| `infra/main.bicep` | `foundryRegions`, `quotaTiers`, `productModelAliases`, `pooledModelDeployments`, `primaryOnlyModelDeployments`, the module declarations and their `deployControlPlane` conditions, and the `fg-role` tags |
+| `infra/modules/*.bicep` | the module dependency edges (which module consumes which module's outputs), the gateway's front-door paths and backend pool names, the control plane's own sub-modules |
+| `src/*/*.csproj` | the .NET `ProjectReference` graph |
+| `src/FoundryGate.Functions/**` | every `[TimerTrigger]` and its real NCRONTAB schedule |
+| `src/FoundryGate.Api/**` | the controller route prefixes |
+
+The generator runs as `prebuild`, so `npm run build` always regenerates it, and CI
+regenerates it too and fails the build on `git diff --exit-code docs-site/src/generated`.
+Changing a region or a tier without updating the diagram is not something a pull request
+can quietly do. A Mermaid twin of the module graph is emitted alongside the JSON as
+`architecture.mmd` for anything that wants the graph as data.
+
+<Aside type="note" title="Which diagrams are generated, which are drawn">
+The picture above is **generated**. The diagrams on the [System
+Overview](/foundry-gate/architecture/overview/) — the deploy pipeline, the quota
+resolution chain, the key lifecycle — are **hand-drawn conceptual pictures**: they show
+sequences and decisions rather than deployed resources, so there is no file to derive them
+from. They are labelled as such on that page.
+</Aside>
+
+## The three things worth taking away
+
+1. **Enforcement happens on the request, at the gate.** The `llm-token-limit` policy in
+   each tier product decides `429` (too fast) or `403` (monthly budget spent, or model not
+   on this tier), counted against the developer's own APIM subscription. No database is
+   consulted.
+2. **The model allowlist is the alias map.** A tier permits exactly the aliases listed on
+   its card — anything else comes back `403 model_not_permitted`, with the deployments
+   rotating underneath the alias without a policy redeploy.
+3. **The control plane can be absent.** `deployControlPlane=false` — the default — gives
+   you the gateway and the models on their own, which is what a fork should stand up
+   first. The dashed boxes in the module graph are the parts that condition on it.
+
+## Live evidence
+
+Responses captured from a real deployed gateway — 429s, 403s, header measurements — are
+recorded in [`validation/`](https://github.com/kolatts/foundry-gate/tree/main/validation)
+in the repository, one file per gateway cycle.
