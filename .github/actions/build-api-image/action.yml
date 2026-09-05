@@ -91,6 +91,16 @@ runs:
         # /health itself is hermetic, so placeholder values are the point.
         # KeyProtection__Provider=DataProtection is the documented local-only substitute for a
         # Key Vault wrapping key (the real one is Gateway__KeyEncryptionKeyUri, an infra output).
+        #
+        # Gateway__Tiers__* is REQUIRED — GatewayOptions.Tiers is the one member that is never
+        # optional, because quota resolution has no meaning without a tier table. The image no
+        # longer ships appsettings.local.json (the .dockerignore fix above), so nothing supplies
+        # it here unless this step does. Two tiers, not one: validation insists on exactly one
+        # unlimited tier (MonthlyTokenQuota = 0) AND at least one finite tier for finite quotas to
+        # map onto, so a single-tier table fails just as loudly as an empty one. The product ids
+        # must be real (GatewayTiers.All / infra's quotaTiers) — unknown ids are rejected by name.
+        # The CAPS are deliberately not the real ones: this proves the host starts and serves
+        # /health, not what dev's quotas are.
         docker run -d --name "$container" -p 8080:8080 \
           -e 'KeyProtection__Provider=DataProtection' \
           -e 'AzureAd__Instance=https://login.microsoftonline.com/' \
@@ -99,6 +109,12 @@ runs:
           -e 'AzureAd__TenantId=00000000-0000-0000-0000-000000000000' \
           -e 'AzureAd__ClientId=00000000-0000-0000-0000-000000000000' \
           -e 'AzureAd__Audience=api://00000000-0000-0000-0000-000000000000' \
+          -e 'Gateway__Tiers__0__ProductId=standard' \
+          -e 'Gateway__Tiers__0__DisplayName=Standard' \
+          -e 'Gateway__Tiers__0__MonthlyTokenQuota=1000000' \
+          -e 'Gateway__Tiers__1__ProductId=unlimited' \
+          -e 'Gateway__Tiers__1__DisplayName=Unlimited' \
+          -e 'Gateway__Tiers__1__MonthlyTokenQuota=0' \
           "$IMAGE"
         for i in $(seq 1 "$TIMEOUT"); do
           code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health || true)"

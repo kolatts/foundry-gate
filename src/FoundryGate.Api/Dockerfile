@@ -11,8 +11,19 @@
 #     -e AzureAd__Audience=api://00000000-0000-0000-0000-000000000000 \
 #     -e KeyProtection__Provider=DataProtection \
 #     -e AzureAd__Instance=https://login.microsoftonline.com/ \
+#     -e Gateway__Tiers__0__ProductId=standard \
+#     -e Gateway__Tiers__0__DisplayName=Standard \
+#     -e Gateway__Tiers__0__MonthlyTokenQuota=1000000 \
+#     -e Gateway__Tiers__1__ProductId=unlimited \
+#     -e Gateway__Tiers__1__DisplayName=Unlimited \
+#     -e Gateway__Tiers__1__MonthlyTokenQuota=0 \
 #     foundrygate-api:local
 #   curl -i http://localhost:8080/health          # 200 (hermetic liveness; no DB needed)
+#
+# Two tiers, and both are needed: GatewayOptions requires exactly one unlimited tier
+# (MonthlyTokenQuota = 0) and at least one finite tier, so a single entry fails as loudly as
+# none. The product ids must be real ones (FoundryGate.Domain.Constants.GatewayTiers); the caps
+# here are placeholders.
 #
 # Those settings are required by Program.cs's startup validation and MUST come from the
 # environment — the image ships no appsettings.local.json (.dockerignore, enforced by
