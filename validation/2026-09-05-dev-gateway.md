@@ -162,8 +162,9 @@ Highest-wins lifted **Core** to 2.52.0 and left **Grpc** at 2.1.0, and Grpc 2.1.
 Core 2.52.0 removed. The build was clean, 0 warnings, all tests green — the break is between two
 transitive assemblies at runtime.
 
-Fixed here by bumping `Microsoft.Azure.Functions.Worker` to 2.52.0 so the two move together.
-**Verification that reconciliation then runs is still outstanding** — it needs the next `Deploy All`.
+Fixed by bumping `Microsoft.Azure.Functions.Worker` to 2.52.0 so the two move together, and **verified
+live**: the first tick after `Deploy All` landed the new build succeeded, and reconciliation ran end to
+end. Numbers below.
 
 ## #178 — the reconciliation path, end to end
 
@@ -196,9 +197,9 @@ Three independent readings of the same traffic agreeing to the token. Against #1
   checkbox is satisfied. `Entries > 1` remains unobserved; the de-duplication is defending against
   something this workspace has not yet produced.
 
-### The Function half: blocked, not disproved
+### The Function half: blocked for hours, then proved in one tick
 
-Everything the job needs is correct on the deployed app:
+Everything the job needs was already correct on the deployed app:
 
 - `Gateway__LogAnalyticsWorkspaceId` = `062aeba1-151c-44c8-a554-1456d6d9fcc8` — the **GUID**, not the
   ARM id (which is separately present as `Gateway__LogAnalyticsWorkspaceResourceId`). The host starts,
@@ -209,17 +210,71 @@ Everything the job needs is correct on the deployed app:
   enabled — the #244 fix is in the deployed template, and `UP-3` now checks it on every attach so a
   regression is caught at attach time instead of after a four-hour ingestion hunt.
 
-And it has never run, for #261. So:
+And it had never run, for #261 — every invocation since the app was deployed died at binding time.
+`Deploy All` [run 33983870847](https://github.com/kolatts/foundry-gate/actions/runs/33983870847) landed
+the fixed worker at 18:44Z, and the very next tick was the first success in the app's life:
 
-- `QuotaAllocation.TokensUsed` for user 9 is **0** while the gateway and Log Analytics both say 13 124.
-- No `usage.synced` audit row exists.
-- The Log Analytics Reader assignment could not be exercised — the job never reached the query.
-- `MonthlyQuotaResetFunction` was read, not forced: it is enabled and scheduled, and has not ticked in
-  the observed window (daily at 00:01 UTC). It shares the worker, so it would fail identically.
+| TimeGenerated | Success | Duration |
+|---|---|---|
+| 17:45 / 18:00 / 18:15 / 18:30 | **False** | 37 / 42 / 61 / 71 ms |
+| **18:45** | **True** | **2 943 ms** |
 
-**#178 is therefore half proved.** The KQL is right and the numbers reconcile exactly; the job that
-consumes it has never executed. What remains is one verification after the next `Deploy All`, tracked
-on #261.
+The duration is its own evidence: tens of milliseconds is a `MissingMethodException` thrown before user
+code; ~3 seconds is the job querying Log Analytics and writing to SQL.
+
+**Four independent readings of the same traffic, all agreeing to the token:**
+
+| Source | `foundrygate-9` |
+|---|---|
+| `x-fg-tokens-consumed` headers, summed | 13 124 *(my traffic)* |
+| `x-fg-remaining-quota` delta | 13 124 |
+| `UsageBySubscription.kql`, at 18:47 | **13 220** |
+| `QuotaAllocation.TokensUsed`, reconciled at 18:45 | **13 220** |
+
+The last two include six further requests from the pipeline's own postdeployment tests, which ran
+between the two measurements. The point is that the KQL and the database agree **exactly**, on a value
+that was `13 220` and `0` respectively an hour earlier — and they went on agreeing: the 19:00 pass moved
+both to `13 252`.
+
+One `usage.synced` audit row, whose counts describe the environment correctly:
+
+```json
+{"subscriptionsSeen":9,"allocationsUpdated":3,"unknownSubscriptions":6,
+ "missingAllocations":0,"driftCount":0,"periodYear":2026,"periodMonth":9,
+ "periodsReconciled":["2026-09"]}
+```
+
+`allocationsUpdated: 3` is `foundrygate-1`, `-2` and `-9` — every real developer key in the workspace.
+`unknownSubscriptions: 6` is exactly the six `fgcycle-*` cycle fixtures, whose Log Analytics rows
+outlive the subscriptions themselves. So `ApimSubscriptionNames.TryGetUserId` partitions real
+developers from everything else correctly, on real data, which was the mapping question #178 existed to
+answer. The Functions identity's `Log Analytics Reader` assignment is confirmed by the same run — the
+job read the workspace with no 403.
+
+The 19:00 tick also succeeded (5 512 ms) and wrote a **second** `usage.synced` row —
+`allocationsUpdated: 1`, `tokensUsed` 13 220 → 13 252. That is the guard behaving correctly rather than
+the guard failing: something genuinely moved, and D-016 audits when it does. **The idle branch is still
+unobserved** — dev has had traffic on every pass so far, so "two hours of ticks with no traffic produce
+~1 row, not 8" remains an open item on #178, not something this run can claim.
+
+### What #178 still does not have
+
+`MonthlyQuotaResetFunction` and `EntraSyncFunction` share the worker and were failing identically, so
+they are unblocked — but neither has been *observed* running (daily 00:01 UTC and nightly). Section 3
+of #178 (the reset, its blob lease, missed-day recovery) and section 4 (tier drift) are untouched, as
+are the longer-horizon items in section 2: the **idle-guard soak** (two hours of ticks with no traffic
+→ ~1 row, not 8), a deliberate over-budget drift row, and the previous-period catch-up, which is only
+checkable on the 1st–3rd of a month.
+
+### The finding worth more than the fix
+
+Five consecutive failed invocations produced **no alert and no symptom anywhere an operator looks**: the
+host reported `Running`, all three functions reported enabled, the schedule log printed its next five
+occurrences correctly, `/health/ready` was green, and `Deploy All` — including its postdeployment tests
+— passed. Meanwhile `QuotaAllocation.TokensUsed` was `0` for every developer while the gateway and Log
+Analytics both held the true numbers, so every usage dashboard was wrong with nothing saying so.
+
+A timer that fails every tick is indistinguishable from a timer that has nothing to do. Filed as #266.
 
 ## What #237's floor looks like from the other side
 
