@@ -134,7 +134,11 @@ finally {
     # later `-Cleanup`) can find them.
     if ($CleanupSubscriptions) {
         try {
-            & (Join-Path $PSScriptRoot 'subscriptions.ps1') -Environment $Environment -Subscription $Subscription -Cleanup
+            # -OnlyThisRun: this fires automatically, and a full prefix sweep would delete a
+            # concurrent cycle's freshly minted fixtures out from under it — 401s mid-stage on
+            # a shared environment, which is exactly the situation attach mode invites.
+            # Orphans from an interrupted run are somebody's later `-Cleanup` without this flag.
+            & (Join-Path $PSScriptRoot 'subscriptions.ps1') -Environment $Environment -Subscription $Subscription -Cleanup -OnlyThisRun
         }
         catch {
             Write-Host "  Fixture-subscription cleanup failed: $($_.Exception.Message)" -ForegroundColor Red

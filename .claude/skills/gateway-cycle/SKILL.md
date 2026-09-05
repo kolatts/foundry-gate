@@ -159,13 +159,19 @@ her at 403 and can demonstrate neither wall. `-Reuse` keeps the ids already in t
 The **`fgcycle-` prefix** is load-bearing on a shared gateway: dev's APIM also carries the real
 developer keys the control plane issues as `foundrygate-{UserId}`, so a fixture has to be
 recognisable in the APIM blade and, above all, deletable without a human deciding key by key
-whether it is safe. `-Cleanup` deletes exactly the `fgcycle-*` subscriptions — **by prefix, not
-from the state file**, so keys left by an interrupted run or by another machine go too. Always
-finish an attached run with `cycle.ps1 -CleanupSubscriptions`, or:
+whether it is safe. `-Cleanup` deletes exactly the `fgcycle-*` subscriptions, in one of two
+scopes, because only one of them is safe to fire unattended:
 
 ```sh
-pwsh scripts/cycle/subscriptions.ps1 -Environment dev -Cleanup
+pwsh scripts/cycle/subscriptions.ps1 -Environment dev -Cleanup -OnlyThisRun   # this state file's ids
+pwsh scripts/cycle/subscriptions.ps1 -Environment dev -Cleanup                # every fgcycle-* on the service
 ```
+
+`cycle.ps1 -CleanupSubscriptions` fires the **`-OnlyThisRun`** form, so two cycles can share
+dev without deleting each other's fixtures out from under a running stage. The full sweep is
+what catches keys an interrupted run or another machine left behind — it pages through the
+whole subscription list, and it is a deliberate, human-invoked thing to do when nobody else is
+on the environment. Always finish an attached run with one or the other.
 
 The stage then **waits for each key to propagate**. A subscription the Management API has
 already created is not immediately accepted by the gateway; without the wait, the first few

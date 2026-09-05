@@ -579,6 +579,70 @@ E-007 described post-churn failures; this suggests a subscription-level Marketpl
 entitlement problem instead, which no agent can fix from the CLI — filed as `needs-human`
 (#231). Not retried, not deleted/recreated. The demo continued on the OpenAI path.
 
+
+## Empirical findings (live Azure, the deployed `dev` environment, 2026-09-05)
+
+The first run of the gateway cycle against an environment CI owns rather than one the run
+deployed. All three findings share a shape: **every configuration signal was green and the
+thing itself did not work.** E-014 said "a configuration check passes here; only a data check
+catches it" — these are three more of exactly that.
+
+**E-015 (dev's gateway 404'd on every model on every tier):** the alias map advertises
+`gpt → gpt-4-1-mini` on all three tiers; no Foundry account had that deployment.
+`fgdev-e7k2-eus2` held one deployment — `claude-sonnet-4-5`, in `Failed` (#231) — and
+`fgdev-e7k2-swc` held none. So every request through dev's gateway returned
+`404 DeploymentNotFound` while `Deploy All` was green, every resource reported healthy, and
+`/health/ready` passed. `createModelDeployments = false` is permanent on dev — correct for
+Anthropic (E-007) — and **nothing then owns creating the OpenAI deployment**: not ARM, and not
+the control plane, which can create one on request but never notices an alias pointing at
+nothing. The alias map and the deployment list are two facts that are never compared. Created
+out of band (E-007e's documented-safe exception); filed as #259 with the check that would have
+caught it on the merge that created dev.
+
+**E-016 (a tier's TPM has a ceiling too, and it is the backing deployment's capacity):**
+E-012 established the floor (a tier's TPM must clear one agent turn). Dev satisfied it at
+20 000 TPM and the developer's own meter was *still* unreachable, because `gpt-4-1-mini` was
+10 capacity units ≈ 10 000 TPM. Every 429 a standard-tier developer saw on dev was E-013's
+*second* kind — the deployment saturating, `x-fg-remaining-tpm: 6413` still on the clock —
+and their own budget could never bind. A tier is well-formed only between the two bounds:
+
+```
+one agent turn  <  tier.tpm  <  sum(capacity of the deployments its aliases route to) * 1000
+```
+
+Both bounds are invisible where a tier is configured. Raised to 60 units; filed as #260.
+`smoke.ps1`'s `T4a` now applies E-013's rule instead of reading the status code, which is how
+this surfaced at all — it had been reporting a backend 429 as a passing test of the gateway's
+meter.
+
+**E-017 (the reconciliation Function had never once succeeded, and nothing said so):**
+`UsageSyncFunction` fires on dev every 15 minutes and failed **every single invocation since
+the app was deployed** — five for five in a six-hour window, ~35 ms each, dying at binding time
+before any user code ran:
+
+```
+Method not found: 'Void Microsoft.Azure.Functions.Worker.DefaultTraceContext..ctor(System.String, System.String)'
+```
+
+`Microsoft.Azure.Functions.Worker` 2.1.0 pins Worker.Core **and** Worker.Grpc to its own
+version; `Worker.OpenTelemetry` 1.2.0 independently requires Worker.Core ≥ 2.52.0.
+Highest-wins lifted **Core** to 2.52.0 and left **Grpc** at 2.1.0, and Grpc 2.1.0 calls a
+constructor Core 2.52.0 removed. The build was clean with 0 warnings and 1604 passing tests —
+the break is between two transitive assemblies at runtime, so nothing before deployment could
+see it. The generalisable part is not the version bump: the host reported `Running`, the
+functions reported enabled, the schedule log printed its next five occurrences correctly, and
+`/health/ready` was green, for a job that had never done anything. **A timer that fails every
+time looks exactly like a timer that has nothing to do.** Filed as #261, which is why #178's
+Function half could not be checked at all.
+
+**E-018 (a token minted before an app-role assignment keeps coming back for an hour):**
+`az account get-access-token --resource api://<id>` and `--scope api://<id>/.default` share an
+MSAL cache entry. A token acquired before the `FoundryGate.Admin` app role was assigned kept
+being returned with no `roles` claim, so the API answered 403 on every admin route and nothing
+about the symptom suggested caching — the assignment was visibly present in Graph.
+`--scope api://<id>/access_as_user` is a different cache key and returns a token carrying the
+role immediately. Worth knowing before anyone spends an hour on the app registration.
+
 ### D-021: Session handoff — 2026-09-01/02 implementation pass summarised, nothing live yet
 **Date:** 2026-09-02
 **Decision:** Record the pass as done rather than keep expanding issue #101's comment thread.

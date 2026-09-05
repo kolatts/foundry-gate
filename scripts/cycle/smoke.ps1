@@ -268,10 +268,25 @@ if (-not $quotaReachable) {
     # environment, is keyed per subscription and is moving. That is the observable part of
     # the quota path that IS reachable here, so record it rather than leaving three SKIPs and
     # no evidence at all.
-    $rq1 = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
-    $before = Get-ResponseHeader $rq1 'x-fg-remaining-quota'
-    $rq2 = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
-    $after = Get-ResponseHeader $rq2 'x-fg-remaining-quota'
+    #
+    # RETRIED, for the same reason T4b and T5c are. This runs seconds after T4 hammered the
+    # shared Foundry deployment with 1500-max-token burn bodies, so a transient 429 carries no
+    # x-fg-remaining-quota at all — and a check whose entire job is "do not report an
+    # environmental fact as a failure" would then report a working meter as broken.
+    function Get-RemainingQuota {
+        for ($try = 1; $try -le 4; $try++) {
+            $r = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
+            $v = Get-ResponseHeader $r 'x-fg-remaining-quota'
+            if ($r.StatusCode -eq 200 -and $v -ne '') { return $v }
+            $wait = [int](Get-ResponseHeader $r 'Retry-After')
+            if ($wait -le 0 -or $wait -gt 65) { $wait = 15 }
+            Write-CycleInfo "  T5d probe got HTTP $($r.StatusCode); waiting ${wait}s and retrying"
+            Start-Sleep -Seconds $wait
+        }
+        return ''
+    }
+    $before = Get-RemainingQuota
+    $after = Get-RemainingQuota
     Assert-Check -Id 'T5d' -Name 'Monthly quota counter is live and decrementing (x-fg-remaining-quota)' `
         -Condition ($before -ne '' -and $after -ne '' -and [long]$after -lt [long]$before) `
         -Detail "dev-carol x-fg-remaining-quota $before -> $after across two requests against the $($standardTier.name)/power products on this gateway"

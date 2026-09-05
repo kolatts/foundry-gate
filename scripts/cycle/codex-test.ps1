@@ -235,7 +235,6 @@ else {
             -Detail ("SKIPPED BY DESIGN on this environment: $why. " +
             'The monthly counter cannot be reset once spent, so reaching it here would also leave the tier exhausted for anyone else on it until the month rolls over. ' +
             'C3 is proved on the cycle''s own gateway, whose power tier is deployed deliberately small — see validation/2026-09-05-gateway-cycle.md.')
-        $state.codexExecCount = $totalExecs
     }
     else {
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
@@ -262,8 +261,8 @@ else {
             Assert-Check -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Condition $false `
                 -Detail "dev-carol's monthly budget was not exhausted within $carolExecs execs / $TimeoutMinutes min."
         }
-        $state.codexExecCount = $totalExecs
     }
+    $state.codexExecCount = $totalExecs
 }
 
 # ---- C4: Claude Code against the Anthropic front door -----------------------------

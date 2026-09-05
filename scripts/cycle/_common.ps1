@@ -341,8 +341,7 @@ function Get-CycleTierFromPolicy {
     param(
         [Parameter(Mandatory)][string] $Subscription,
         [Parameter(Mandatory)][string] $ApimResourceId,
-        [Parameter(Mandatory)][string] $ProductId,
-        [string] $DisplayName = ''
+        [Parameter(Mandatory)][string] $ProductId
     )
     $file = [System.IO.Path]::GetTempFileName()
     try {
@@ -360,17 +359,23 @@ function Get-CycleTierFromPolicy {
         throw "Could not read the product policy for '$ProductId' on $ApimResourceId. Without it the tier's real limits are unknown and the enforcement checks would assert against a guess."
     }
 
-    $tpm = 0
-    $quota = 0
-    if ($xml -match 'tokens-per-minute\s*=\s*"(\d+)"') { $tpm = [int]$Matches[1] }
-    # `token-quota="N"`, not `token-quota-period` — the negative lookahead keeps the period
-    # attribute from matching first and yielding a nonsense number.
-    if ($xml -match 'token-quota\s*=\s*"(\d+)"') { $quota = [int]$Matches[1] }
+    # tokens-per-minute is REQUIRED on every rendered tier — `llm-token-limit` does not accept
+    # the element without it. So a miss here is a policy this code does not understand, not a
+    # tier with no cap, and it must be loud: every downstream decision (how big to make the
+    # burn request, whether the monthly wall is reachable at all) is computed from it, and a
+    # silent 0 would make the walls look either free or infinitely far away.
+    if ($xml -notmatch 'tokens-per-minute\s*=\s*"(\d+)"') {
+        throw "Could not read tokens-per-minute out of the '$ProductId' product policy on $ApimResourceId. The enforcement checks are sized from it, so guessing is not an option."
+    }
+    $tpm = [int]$Matches[1]
+
+    # `token-quota="N"` is genuinely optional — the unlimited tier omits it — and 0 is what the
+    # deploy-side code already means by "no monthly quota". The digits-only capture is what
+    # keeps `token-quota-period="Monthly"` from matching.
+    $quota = ($xml -match 'token-quota\s*=\s*"(\d+)"') ? [int]$Matches[1] : 0
 
     return @{
         name              = $ProductId
-        displayName       = ($DisplayName ? $DisplayName : $ProductId)
-        description       = "Read from the live product policy on $ProductId."
         monthlyTokenQuota = $quota
         tpm               = $tpm
     }
@@ -381,14 +386,17 @@ function Get-CycleTierFromPolicy {
  cap, at best. Purely arithmetic, and it is what decides whether the 403 wall is reachable on
  an environment at all: dev's standard tier is 5,000,000 tokens behind a 20,000/min cap, so
  the monthly quota is four hours away and no timeout a test may reasonably wait will see it.
- Returns [double]::PositiveInfinity for a tier with no monthly quota.
+ Returns [double]::PositiveInfinity when the wall cannot be reached — either because the tier
+ sets no monthly quota, or because it has no throughput to reach one with. Both are "do not
+ start a burn loop", which is the decision this feeds, and infinity is the answer that fails
+ safe: returning 0 for a zero-TPM tier would read as "reachable immediately" and start a burn
+ that can never finish.
 #>
 function Get-CycleQuotaBurnMinutes {
     param([Parameter(Mandatory)] $Tier)
     $quota = [double]$Tier.monthlyTokenQuota
     $tpm = [double]$Tier.tpm
-    if ($quota -le 0) { return [double]::PositiveInfinity }
-    if ($tpm -le 0) { return 0 }
+    if ($quota -le 0 -or $tpm -le 0) { return [double]::PositiveInfinity }
     return [math]::Round($quota / $tpm, 1)
 }
 

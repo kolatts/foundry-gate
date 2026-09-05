@@ -191,14 +191,9 @@ if ($AttachOnly) {
 
     # ---- The tiers, from the policies the gateway is actually running ----------------
     Write-CycleHeading 'Reading the tier limits off the live product policies'
-    $displayNames = @{}
-    if ($outputs.ContainsKey('quotaTierRows')) {
-        foreach ($row in @($outputs.quotaTierRows)) { $displayNames[[string]$row.productId] = [string]$row.displayName }
-    }
     $tiers = @()
     foreach ($productId in @($outputs.productIds)) {
-        $tier = Get-CycleTierFromPolicy -Subscription $Subscription -ApimResourceId $apimId -ProductId $productId `
-            -DisplayName ($displayNames.ContainsKey($productId) ? $displayNames[$productId] : $productId)
+        $tier = Get-CycleTierFromPolicy -Subscription $Subscription -ApimResourceId $apimId -ProductId $productId
         $burn = Get-CycleQuotaBurnMinutes -Tier $tier
         $burnText = [double]::IsPositiveInfinity($burn) ? 'no monthly quota' : "$burn min at full rate to exhaust"
         Write-Host ("  {0,-12} {1,10} tokens/month  {2,8} TPM   ({3})" -f $tier.name, $tier.monthlyTokenQuota, $tier.tpm, $burnText)
@@ -215,10 +210,17 @@ if ($AttachOnly) {
     $listed = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
         'monitor', 'diagnostic-settings', 'list', '--resource', $apimId
     )
-    # az has returned this command's payload both ways across versions: a bare array of
-    # settings, and an ARM-shaped { "value": [...] } envelope. Under Set-StrictMode reaching
-    # for the wrong one is a terminating error, so accept either rather than pinning a version.
-    $settings = @(($listed -is [System.Collections.IDictionary] -and $listed.ContainsKey('value')) ? $listed.value : $listed)
+    # Three shapes to survive, and getting any of them wrong throws under Set-StrictMode:
+    #   $null            -AllowFailure swallowed an az failure. `@($null)` is a ONE-element
+    #                    array containing $null, so an unguarded Where-Object on it throws
+    #                    ("property cannot be found") and aborts the whole attach — and if it
+    #                    didn't, the count below would report "1 diagnostic setting(s)" for an
+    #                    environment that returned none.
+    #   a bare array     what az returns today.
+    #   { value: [...] } the ARM envelope az has also returned across versions.
+    $settings = if ($null -eq $listed) { @() }
+    elseif ($listed -is [System.Collections.IDictionary] -and $listed.ContainsKey('value')) { @($listed.value) }
+    else { @($listed) }
     $dedicated = @($settings | Where-Object { $_.logAnalyticsDestinationType -eq 'Dedicated' })
     $llmCategories = @($settings | ForEach-Object { @($_.logs) } | Where-Object { $_.category -eq 'GatewayLlmLogs' -and $_.enabled })
     Add-CycleCheck -State $state -Id 'UP-3' -Name 'APIM diagnostic setting sends LLM logs to the dedicated table (#244)' `

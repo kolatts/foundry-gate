@@ -55,9 +55,8 @@ param(
     [switch] $Reuse,
     [Parameter(HelpMessage = 'Delete every fgcycle-* APIM subscription on this environment and create none.')]
     [switch] $Cleanup,
-    [Parameter(HelpMessage = 'Name prefix for the fixture subscriptions. Changing it breaks -Cleanup''s guarantee; there is no good reason to.')]
-    [ValidatePattern('^[a-z][a-z0-9-]*$')]
-    [string] $Prefix = 'fgcycle'
+    [Parameter(HelpMessage = 'With -Cleanup: remove only the ids in this state file, leaving a concurrent run''s fixtures alone.')]
+    [switch] $OnlyThisRun
 )
 
 Set-StrictMode -Version Latest
@@ -73,31 +72,64 @@ $apimName = $state.outputs.apimName
 $rg = $state.resourceGroup
 $apimId = "/subscriptions/$azSubId/resourceGroups/$rg/providers/Microsoft.ApiManagement/service/$apimName"
 
-# Logical name -> tier product. The logical names are what every later stage asks the state
-# file for; the APIM ids are built from $Prefix below.
+# The one name every fixture this script creates begins with. NOT a parameter: -Cleanup deletes
+# by this prefix, and that is only a safe thing to write because nothing else on the service
+# can be named with it. A knob here would turn a guarantee into a convention.
+$prefix = 'fgcycle'
+
+# Developer -> tier product. The APIM id is "$prefix-$name-$stamp"; the STATE key is "dev-$name",
+# which is what smoke.ps1 and codex-test.ps1 have always asked the state file for.
 $developers = [ordered]@{
-    'dev-alice' = 'standard'
-    'dev-bob'   = 'standard'
-    'dev-carol' = 'power'
+    'alice' = 'standard'
+    'bob'   = 'standard'
+    'carol' = 'power'
 }
-# 'dev-alice' -> 'alice'. The logical names predate the prefix and are load-bearing in
-# smoke.ps1/codex-test.ps1; stripping the old prefix here keeps the APIM id from reading
-# `fgcycle-dev-alice-...`, which on the dev environment is actively confusing.
-function Get-ShortName { param([string] $Logical) return ($Logical -replace '^dev-', '') }
 
 # ---- Cleanup ---------------------------------------------------------------------
-# Deletes by PREFIX, not from the state file: a run that was interrupted, or one from another
-# machine, left keys the state file here has never heard of, and those are exactly the ones
-# that go on quietly holding a spent monthly counter on a shared gateway.
+# Two scopes, because they answer different questions and only one of them is safe to run
+# unattended:
+#
+#   -Cleanup                a full sweep of every `fgcycle-*` subscription on the service. This
+#                           is the one that catches keys an interrupted run — or a run from
+#                           another machine — left behind, which are exactly the ones that go on
+#                           quietly holding a spent monthly counter on a shared gateway. It is
+#                           also the one that would delete a CONCURRENT run's fixtures out from
+#                           under it, so it stays a deliberate, human-invoked sweep.
+#   -Cleanup -OnlyThisRun   removes only the ids in this state file. cycle.ps1's automatic
+#                           `-CleanupSubscriptions` uses this, so two cycles can share dev
+#                           without sabotaging each other; orphans are then somebody's later
+#                           full sweep, not a 401 in the middle of a stage.
 if ($Cleanup) {
-    Write-CycleHeading "Removing $Prefix-* subscriptions from $apimName"
-    $all = Invoke-Az -Subscription $Subscription -Arguments @(
-        'rest', '--method', 'get',
-        '--url', "https://management.azure.com$apimId/subscriptions?api-version=$apiVersion"
-    )
-    $ours = @(@($all.value) | Where-Object { $_.name -like "$Prefix-*" })
+    $stateIds = @()
+    if ($state.ContainsKey('apimSubscriptions') -and $null -ne $state.apimSubscriptions) {
+        $stateIds = @($state.apimSubscriptions.Keys | ForEach-Object { [string]$state.apimSubscriptions[$_].subscriptionId })
+    }
+    if ($OnlyThisRun) {
+        Write-CycleHeading "Removing this run's fixtures from $apimName ($($stateIds.Count) in the state file)"
+    }
+    else {
+        Write-CycleHeading "Removing ALL $prefix-* subscriptions from $apimName"
+    }
+
+    # PAGED, not a single GET. ARM returns APIM subscriptions a page at a time with a
+    # `nextLink`, and on a shared environment the service also carries every real
+    # `foundrygate-{UserId}` key — so once dev has more than a page of developers, an
+    # unpaged sweep silently stops finding fixtures and leaves the counters it exists to
+    # release still held.
+    $all = @()
+    $url = "https://management.azure.com$apimId/subscriptions?api-version=$apiVersion"
+    while ($url) {
+        $page = Invoke-Az -Subscription $Subscription -Arguments @('rest', '--method', 'get', '--url', $url)
+        if ($null -eq $page) { break }
+        $all += @($page.value)
+        $url = $page.ContainsKey('nextLink') ? [string]$page.nextLink : ''
+    }
+
+    $ours = @($all | Where-Object {
+            $_.name -like "$prefix-*" -and (-not $OnlyThisRun -or $stateIds -contains $_.name)
+        })
     if ($ours.Count -eq 0) {
-        Write-Host "  Nothing to remove — no $Prefix-* subscriptions on $apimName." -ForegroundColor Green
+        Write-Host "  Nothing to remove — no matching $prefix-* subscriptions on $apimName." -ForegroundColor Green
     }
     foreach ($s in $ours) {
         Invoke-Az -Subscription $Subscription -Arguments @(
@@ -126,19 +158,20 @@ $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmm')
 foreach ($name in $developers.Keys) {
     $product = $developers[$name]
 
-    $existing = $state.apimSubscriptions[$name]
+    $stateKey = "dev-$name"
+    $existing = $state.apimSubscriptions[$stateKey]
     if ($Reuse -and $null -ne $existing -and $existing.ContainsKey('subscriptionId')) {
         $subscriptionId = [string]$existing.subscriptionId
-        Write-CycleInfo "reusing $name -> $subscriptionId"
+        Write-CycleInfo "reusing $stateKey -> $subscriptionId"
     }
     else {
-        $subscriptionId = "$Prefix-$(Get-ShortName $name)-$stamp"
+        $subscriptionId = "$prefix-$name-$stamp"
     }
 
     $body = @{
         properties = @{
             scope       = "$apimId/products/$product"
-            displayName = "FoundryGate cycle fixture — $(Get-ShortName $name) ($product)"
+            displayName = "FoundryGate cycle fixture — $name ($product)"
             state       = 'active'
             # allowTracing is deliberately left default: tracing writes request bodies to
             # the APIM trace, which is exactly the prompt content this gateway should not
@@ -164,14 +197,14 @@ foreach ($name in $developers.Keys) {
         '--url', "https://management.azure.com$apimId/subscriptions/$subscriptionId/listSecrets?api-version=$apiVersion"
     )
 
-    $state.apimSubscriptions[$name] = @{
+    $state.apimSubscriptions[$stateKey] = @{
         product        = $product
         subscriptionId = $subscriptionId
         primaryKey     = $secrets.primaryKey
         scope          = "$apimId/products/$product"
     }
     $shown = if ($ShowKeys) { $secrets.primaryKey } else { "$($secrets.primaryKey.Substring(0,4))… (redacted)" }
-    Write-Host "  $name -> $subscriptionId, product '$product', key $shown" -ForegroundColor Green
+    Write-Host "  $stateKey -> $subscriptionId, product '$product', key $shown" -ForegroundColor Green
 }
 
 Save-CycleState -State $state
@@ -191,7 +224,7 @@ $openaiUrl = $state.outputs.openaiApiUrl
 $probeBody = @{ model = 'fg-propagation-probe'; max_tokens = 1; messages = @(@{ role = 'user'; content = 'x' }) } | ConvertTo-Json -Compress
 $notReady = @()
 foreach ($name in $developers.Keys) {
-    $key = $state.apimSubscriptions[$name].primaryKey
+    $key = $state.apimSubscriptions["dev-$name"].primaryKey
     $ready = $false
     # Per key, not shared across the loop: a single deadline computed outside would give the
     # first key the whole budget and leave the rest a few seconds each, then report them as
@@ -203,11 +236,11 @@ foreach ($name in $developers.Keys) {
         Start-Sleep -Seconds 5
     }
     if ($ready) {
-        Write-Host "  $name ready" -ForegroundColor Green
+        Write-Host "  dev-$name ready" -ForegroundColor Green
     }
     else {
-        Write-Host "  $name still 401 after 180s — the next stage will fail on it." -ForegroundColor Red
-        $notReady += $name
+        Write-Host "  dev-$name still 401 after 180s — the next stage will fail on it." -ForegroundColor Red
+        $notReady += "dev-$name"
     }
 }
 
