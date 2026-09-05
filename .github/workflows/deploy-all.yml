@@ -266,9 +266,17 @@ jobs:
             echo "| Endpoint | URL |"
             echo "|---|---|"
             echo "| API | ${API_URL:-n/a} |"
-            echo "| API health | ${API_URL:+${API_URL}/health} |"
-            echo "| UI | ${UI_HOST:+https://${UI_HOST}} |"
-            echo "| Functions | ${FUNC_HOST:+https://${FUNC_HOST}} |"
+            # `:+` on its own collapses a missing value to an EMPTY CELL, which reads as "no link
+            # yet" rather than "we could not resolve this" — the API row already said n/a, so the
+            # other three now agree. Spelled out rather than nested parameter expansion: the
+            # compact `${X:+…}${X:-n/a}` form looks right and is not (both halves expand when X is
+            # set, concatenating the URL with its own host).
+            health_cell="n/a"; [ -n "$API_URL" ] && health_cell="${API_URL}/health"
+            ui_cell="n/a";     [ -n "$UI_HOST" ]  && ui_cell="https://${UI_HOST}"
+            func_cell="n/a";   [ -n "$FUNC_HOST" ] && func_cell="https://${FUNC_HOST}"
+            echo "| API health | ${health_cell} |"
+            echo "| UI | ${ui_cell} |"
+            echo "| Functions | ${func_cell} |"
             echo "| Image | \`${IMAGE:-n/a}\` |"
             echo ""
             echo "Infra outputs (registry, SQL server, Key Vault, APIM) are in the Infra job's summary."

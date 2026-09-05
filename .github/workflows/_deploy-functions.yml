@@ -123,10 +123,37 @@ jobs:
       - name: Verify
         id: verify
         run: |
-          state=$(az functionapp show --name "$FG_FUNCTION_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" --query state -o tsv)
-          hostname=$(az functionapp show --name "$FG_FUNCTION_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" --query defaultHostName -o tsv)
+          # `az functionapp show --query state` returns EMPTY on Flex Consumption — the ARM
+          # resource carries properties.state = "Running", but the `az functionapp` projection
+          # drops it for this SKU, so the assertion below could never pass (#252). Verified on
+          # func-foundrygate-dev-e7k2: `az functionapp show` -> null, while `az webapp show` and
+          # `az resource show` both -> Running. Read the ARM property directly: `az resource show`
+          # applies no command-specific projection, so it cannot develop the same blind spot.
+          # --api-version pinned to what modules/function-app.bicep declares: unpinned, the CLI
+          # asks the provider for its newest version at run time, which is the same "a projection
+          # you don't control decides what you read" problem in a milder form.
+          state=$(az resource show --name "$FG_FUNCTION_APP_NAME" --resource-group "$FG_RESOURCE_GROUP" \
+            --resource-type "Microsoft.Web/sites" --api-version 2024-04-01 --query properties.state -o tsv)
+          # The hostname is already a deployment output, resolved by the "Resolve infra outputs"
+          # step above — no reason to ask Azure a second time through the very projection this
+          # step just stopped trusting.
+          hostname="$FG_FUNCTION_APP_HOSTNAME"
           echo "hostname=${hostname}" >> "$GITHUB_OUTPUT"
           echo "State: ${state}"
+          # An unreadable state is its own failure, reported as such: comparing "" to "Running"
+          # would otherwise blame the app for what is a query problem — which is exactly how the
+          # original bug presented ("is '', expected Running").
+          if [ -z "$state" ]; then
+            echo "::error::Could not read the state of ${FG_FUNCTION_APP_NAME} — the ARM query returned nothing. The deploy itself may have succeeded; check the resource before re-running."
+            exit 1
+          fi
+          # An empty hostname is not fatal to the deploy, but it silently produces a dead
+          # `environment.url` and a blank cell in the run summary, so say so rather than ship a
+          # green run with two wrong links.
+          if [ -z "$hostname" ]; then
+            echo "::error::Infra outputs have no functionAppHostname — the run summary and the environment URL would be blank."
+            exit 1
+          fi
           if [ "$state" != "Running" ]; then
             echo "::error::Function App ${FG_FUNCTION_APP_NAME} is '${state}', expected Running."
             exit 1
