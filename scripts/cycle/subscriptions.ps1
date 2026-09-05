@@ -124,6 +124,38 @@ foreach ($name in $developers.Keys) {
 }
 
 Save-CycleState -State $state
+
+# ---- Wait for the keys to become usable ------------------------------------------
+# A subscription that the Management API has already created is NOT immediately accepted by
+# the gateway: the key has to propagate to the gateway nodes first. Observed live — smoke.ps1
+# started seconds after this script returned and the first three checks using the newest key
+# came back "401 Access denied due to invalid subscription key" while the same key worked a
+# minute later.
+#
+# The probe asks for a model no tier allows, so it costs nothing and consumes no quota: 403
+# means the key authenticated and reached the policy chain, which is exactly what the next
+# stage needs. 401 means it is still propagating.
+Write-CycleHeading 'Waiting for the keys to propagate to the gateway'
+$openaiUrl = $state.outputs.openaiApiUrl
+$probeBody = @{ model = 'fg-propagation-probe'; max_tokens = 1; messages = @(@{ role = 'user'; content = 'x' }) } | ConvertTo-Json -Compress
+$deadline = (Get-Date).AddSeconds(180)
+
+foreach ($name in $developers.Keys) {
+    $key = $state.apimSubscriptions[$name].primaryKey
+    $ready = $false
+    while (-not $ready -and (Get-Date) -lt $deadline) {
+        $probe = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers @{ 'api-key' = $key } -Body $probeBody
+        if ($probe.StatusCode -ne 401) { $ready = $true; break }
+        Start-Sleep -Seconds 5
+    }
+    if ($ready) {
+        Write-Host "  $name ready" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  $name still 401 after 180s — the next stage will fail on it." -ForegroundColor Red
+    }
+}
+
 Add-CycleCheck -State $state -Id 'SUB-1' -Name 'Developer keys issued against tier products' -Status 'PASS' `
     -Detail ("dev-alice=standard, dev-bob=standard, dev-carol=power on {0}" -f $apimName)
 
