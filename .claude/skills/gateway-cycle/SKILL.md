@@ -86,8 +86,11 @@ Observed live on dev 2026-09-05: a 429 carrying `x-fg-remaining-tpm=6413` and th
 requests to gpt-4.1-mini for gpt-4-1-mini in eastus2 have exceeded rate limit"*. The deployment
 was 10 capacity units (~10K TPM) behind a 20 000 TPM tier, so the **backend wall sat in front of
 the gateway wall** and the developer's own meter could never be reached. T4a reports that as a
-SKIP naming both numbers, not a PASS. The fix is the environment's, not the test's: raise the
-deployment's capacity above the highest tier TPM that routes to it (#260).
+SKIP naming both numbers, not a PASS. The fix is the environment's, not the test's: the
+deployment's capacity must clear the highest tier TPM that routes to it (#260). `main.bicep`
+ships `gpt-4-1-mini` at 100 units for that reason and the deploy now warns about any alias still
+below its tier's cap — the Claude defaults are among them, and raising a *live* Claude
+deployment's capacity is #205's call, not a cycle's.
 
 ---
 
@@ -267,8 +270,10 @@ under fresh deployment names.
    its own and sets `claudeAvailable=false` in the state file; every Claude-dependent check
    then reports SKIP.
 5. `up.ps1` auto-detects day-0 (no Cognitive Services account in the resource group) and
-   passes `createModelDeployments=false` on every other run. Do not override that with
-   `-CreateModelDeployments` unless the account is genuinely brand new.
+   passes `createAnthropicModelDeployments=false` on every other run. Do not override that with
+   `-CreateModelDeployments` unless the account is genuinely brand new. The flag guards **only**
+   the Claude deployments: OpenAI ones re-PUT idempotently, so ARM reconciles them every run
+   (#259) and a missing `gpt-4-1-mini` comes back on its own.
 6. `-SkipClaude` deploys no Anthropic models at all. Use it when a Claude create attempt has
    already been spent in this subscription and you only need the OpenAI demo.
 
@@ -300,7 +305,7 @@ after exactly one cycle. Purging APIM has nothing to do with the Anthropic creat
 problem, which is about Cognitive Services accounts — and those this mode keeps.
 APIM goes — it is the only meaningful idle cost —
 and the Foundry accounts and their model deployments survive, so the next `up.ps1` re-runs
-the template with `createModelDeployments=false` over them. Idle Foundry accounts cost
+the template with `createAnthropicModelDeployments=false` over them. Idle Foundry accounts cost
 nothing; consumption is per token. This is what makes "spin up and down frequently"
 survivable given rule 1 above.
 
@@ -365,8 +370,8 @@ pwsh scripts/cycle/report.ps1 -Path validation/2026-09-05-gateway-cycle.md
 | `404` from the backend on a Claude alias | the alias resolved but the deployment does not exist | E-007 — do **not** recreate it in a loop |
 | M1 times out with no LLM log rows | usually the destination type, not lag — check `AzureDiagnostics \| summarize count() by Category` | the diagnostic setting needs `logAnalyticsDestinationType: 'Dedicated'` (#244); if rows really are late, re-run `measure.ps1` then `report.ps1` |
 | `az` "Failed to parse string as JSON" on a deployment | cmd.exe ate the quotes out of a JSON parameter | use `Format-AzJsonArg` from `_common.ps1` |
-| `404` `DeploymentNotFound` on every request through an attached gateway | the alias map names a deployment that does not exist on the Foundry account | the alias map is a named value, the deployment is not created by ARM after day 0 — create the **OpenAI** one out of band (safe, E-007e) and never the Anthropic one (#259) |
-| `T4a` SKIP: "the 429 came from the BACKEND" | the Foundry deployment's capacity is below the tier's TPM cap | raise `--sku-capacity` above the highest tier TPM routed to it (#260) — the developer's own meter is otherwise unreachable |
+| `404` `DeploymentNotFound` on every request through an attached gateway | the alias map names a deployment that does not exist on the Foundry account | since #259 ARM reconciles OpenAI deployments on every run, so re-run the template first; if it is a **Claude** alias, the deployment is day-0-only and must never be recreated in a loop (E-007) |
+| `T4a` SKIP: "the 429 came from the BACKEND" | the Foundry deployment's capacity is below the tier's TPM cap | for an **OpenAI** deployment, raise `--sku-capacity` above the highest tier TPM routed to it (#260) — the developer's own meter is otherwise unreachable. For a **Claude** one, stop: a capacity PATCH against a live Claude deployment is #205's decision, not a cycle's |
 | `down.ps1` throws "Refusing to tear down the managed environment" | it is doing its job | use `infra-destroy.yml`; `-IKnowThisIsDev` exists only to make the override deliberate |
 | Evidence report shows `123 10 32 32 34...` instead of a body | fixed: `Invoke-WebRequest` returns `byte[]` when the response declares no charset | `Invoke-GatewayRequest` now decodes it |
 | Deployment fails with `DeploymentActive` | a previous nested deployment is still running | wait for it or cancel it; never start a second Claude create alongside one in flight |

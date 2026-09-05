@@ -19,7 +19,7 @@ az deployment sub what-if \
   --location "$LOCATION" \
   --template-file infra/main.bicep \
   --parameters "infra/parameters/${FG_ENV}.bicepparam" \
-  --parameters "createModelDeployments=${CREATE_MODEL_DEPLOYMENTS}" \
+  --parameters "createAnthropicModelDeployments=${CREATE_MODEL_DEPLOYMENTS}" \
   --result-format FullResourcePayloads \
   2>&1 | sed -r 's/\x1B\[[0-9;]*[A-Za-z]//g' | tee "$OUTPUT_FILE"
 status=${PIPESTATUS[0]}

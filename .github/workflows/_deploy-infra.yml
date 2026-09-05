@@ -16,7 +16,7 @@ name: Deploy Infrastructure (Reusable)
 # Two invariants from PR #111 are enforced here, not left to the operator:
 #   1. FG_API_IMAGE is set to the image the Container App is CURRENTLY running (or the public
 #      placeholder on day 0) so a re-run never resets the API — scripts/infra/resolve-api-image.sh.
-#   2. createModelDeployments=false unless the caller explicitly flips `create-model-deployments`
+#   2. createAnthropicModelDeployments=false unless the caller explicitly flips `create-model-deployments`
 #      for the very first run of a fresh environment (Anthropic deployments are create-once,
 #      CLAUDE.md / fable-refactor-log E-007).
 
@@ -41,7 +41,7 @@ on:
         type: string
         default: deploy
       create-model-deployments:
-        description: "Pass createModelDeployments=true. ONLY for the first deployment of a brand-new environment."
+        description: "Pass createAnthropicModelDeployments=true. ONLY for the first deployment of a brand-new environment; OpenAI deployments are reconciled every run regardless (#259)."
         required: false
         type: boolean
         default: false
@@ -289,7 +289,7 @@ jobs:
       - name: Warn when creating model deployments
         if: inputs.create-model-deployments
         run: |
-          echo "::warning title=createModelDeployments=true::This run PUTs the Anthropic/OpenAI model deployments. Anthropic deployments are create-once under ARM — re-running with this flag against an environment that already has them drives them to Failed. Only use it on the first deployment of a fresh environment."
+          echo "::warning title=createAnthropicModelDeployments=true::This run PUTs the Anthropic (Claude) model deployments. They are create-once under ARM — re-running with this flag against an environment that already has them drives them to Failed. Only use it on the first deployment of a fresh environment. OpenAI deployments are unaffected: ARM reconciles them on every run (#259)."
 
       # A what-if right before the deploy, in the same job: one environment approval covers both
       # for production, and the summary shows exactly what the deploy is about to change.
@@ -335,7 +335,7 @@ jobs:
             echo ""
             echo "- Deployment: \`${DEPLOYMENT_NAME}\` · commit \`${GITHUB_SHA::7}\` · by @${GITHUB_ACTOR}"
             echo "- FG_API_IMAGE used: \`${{ steps.image.outputs.image }}\`"
-            echo "- createModelDeployments: \`${{ inputs.create-model-deployments }}\`"
+            echo "- createAnthropicModelDeployments: \`${{ inputs.create-model-deployments }}\` (OpenAI deployments are reconciled every run, #259)"
             if [ "${{ steps.outputs.outputs.container-app-is-bootstrap-image }}" = "true" ]; then
               echo ""
               echo "> The Container App still runs the bootstrap placeholder. The next api deploy (api-deploy.yml / deploy-all.yml) replaces it with the real image."

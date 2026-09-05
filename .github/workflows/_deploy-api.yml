@@ -149,7 +149,7 @@ jobs:
           FG_SQL_ADMIN_GROUP_OBJECT_ID: ${{ vars.FG_SQL_ADMIN_GROUP_OBJECT_ID }}
           FG_SQL_ADMIN_GROUP_NAME: ${{ vars.FG_SQL_ADMIN_GROUP_NAME }}
         run: |
-          # createModelDeployments is always false here: an API deploy must never PUT the
+          # createAnthropicModelDeployments is always false here: an API deploy must never PUT the
           # create-once Anthropic model deployments (CLAUDE.md / fable-refactor-log E-007).
           bash .github/scripts/infra/deploy.sh "$FG_ENV" "$DEPLOYMENT_NAME" \
             "${{ vars.AZURE_LOCATION || 'eastus2' }}" false

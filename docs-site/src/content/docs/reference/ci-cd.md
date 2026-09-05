@@ -319,7 +319,10 @@ only for a day-0 run with `create-model-deployments=true` — the Marketplace pe
 environment, tick **create-model-deployments** — once. The infra stage deploys with the
 placeholder API image; the API stage detects that and replaces it via an infra re-run with the
 real image. Afterwards every run (automatic or manual) leaves `create-model-deployments` off:
-Anthropic deployments are create-once under ARM.
+Claude deployments are create-once under ARM. The flag maps to the template's
+`createAnthropicModelDeployments` and covers **only** them — OpenAI deployments upsert
+cleanly, so ARM reconciles them on every run
+([#259](https://github.com/kolatts/foundry-gate/issues/259)).
 
 **Change infra.** Open a PR touching `infra/**`; read the what-if comment (run under the
 read-only `dev-plan` identity); merge → `deploy-all.yml` runs the whole chain against dev,

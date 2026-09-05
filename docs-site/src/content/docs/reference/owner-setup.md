@@ -353,10 +353,13 @@ gh workflow run deploy-all.yml -f environment=dev \
   -f create-model-deployments=true -f run-seed-test=true
 ```
 
-`create-model-deployments=true` **once, ever**. Anthropic (Claude) deployments are
-create-once under ARM: a re-PUT of an existing one drives it to `Failed`, and a
-delete/recreate cycle can wedge the subscription's Marketplace agreement
-(`fable-refactor-log.md` E-007). Every later run leaves it `false`.
+`create-model-deployments=true` **once, ever**. It maps to the template's
+`createAnthropicModelDeployments`, and Anthropic (Claude) deployments are create-once under
+ARM: a re-PUT of an existing one drives it to `Failed`, and a delete/recreate cycle can wedge
+the subscription's Marketplace agreement (`fable-refactor-log.md` E-007). Every later run
+leaves it `false`. OpenAI-format deployments are unaffected either way — they upsert cleanly,
+so ARM reconciles them on every run
+([#259](https://github.com/kolatts/foundry-gate/issues/259)).
 
 ## 8. After the first deploy
 

@@ -372,8 +372,11 @@ the loop that Bicep cannot: the API and Functions managed identities get their c
 database users (`db grant-identities` — an Entra-only SQL server cannot grant a managed
 identity access through ARM), and the runner's own firewall rule is removed again, along
 with any left behind by a cancelled earlier run. Bicep re-runs pass
-`createModelDeployments=false` because Anthropic model deployments are create-once under
-ARM, and always pass the image the API is currently running so a re-run never resets it.
+`createAnthropicModelDeployments=false` because Claude model deployments are create-once
+under ARM, and always pass the image the API is currently running so a re-run never resets
+it. OpenAI-format deployments are exempt from that flag — they re-PUT idempotently, so ARM
+keeps them present on every run rather than leaving a missing one for nobody to notice
+([#259](https://github.com/kolatts/foundry-gate/issues/259)).
 That makes the ownership split explicit: Claude deployments belong to the infrastructure
 deploy end to end (created once, never re-PUT, never deleted from the app), while the API
 and admin UI list everything and manage OpenAI-format deployments

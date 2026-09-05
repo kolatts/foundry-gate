@@ -29,9 +29,9 @@ param apimSkuName = 'StandardV2'
 
 // Flip to true ONLY for the very first deployment. Anthropic deployments are
 // create-once under ARM — re-running with true re-PUTs them into a Failed state
-// (see modules/foundry.bicep). Model lifecycle after day 0 belongs to the control
-// plane, not ARM.
-param createModelDeployments = false
+// (see modules/foundry.bicep). OpenAI deployments are NOT covered by this flag:
+// they re-PUT idempotently, so ARM keeps them present on every run (#259).
+param createAnthropicModelDeployments = false
 
 // ---- Control plane ---------------------------------------------------------------
 param deployControlPlane = true

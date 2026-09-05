@@ -163,8 +163,9 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
 7. ### Deploy the whole stack once (day 0)
 
    Actions → **Deploy All** → Run workflow → `environment: dev`, tick
-   **create-model-deployments**. This is the only run that creates the model deployments —
-   Claude deployments are create-once under ARM, so every later run leaves the box unticked.
+   **create-model-deployments**. This is the only run that creates the *Claude* deployments —
+   they are create-once under ARM, so every later run leaves the box unticked. OpenAI
+   deployments need no flag: ARM reconciles them on every run.
    The chain is infra → database (dacpac + seed) → API → Functions and UI in parallel →
    post-deploy tests → a summary with every URL. Expect 20–30 minutes; APIM v2 provisioning
    is most of it.
