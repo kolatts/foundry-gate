@@ -224,7 +224,13 @@ $aliceId = if ($state.ContainsKey('apimSubscriptions') -and $state.apimSubscript
 }
 else { '' }
 $aliceRow = @($usageRows | Where-Object { $_.apimSubscriptionId -eq $aliceId })
-if ($aliceRow.Count -gt 0 -and $standardQuota -gt 0) {
+# Only when the quota wall was ACTUALLY reached. The whole point of the ratio is "the logged
+# total lands just above the cap the gateway stopped her at"; on an environment where T5 was
+# skipped by design (a 5M-token tier no test can burn) alice was never stopped, and the same
+# arithmetic prints a ratio of 0.01 that reads like a measurement failure instead of a test
+# that was never run.
+$quotaWallReached = @($state.checks | Where-Object { $_.id -eq 'T5a' -and $_.status -eq 'PASS' }).Count -gt 0
+if ($aliceRow.Count -gt 0 -and $standardQuota -gt 0 -and $quotaWallReached) {
     $ratio = [math]::Round($aliceRow[0].totalTokens / $standardQuota, 2)
     $line = "dev-alice ($aliceId) logged $($aliceRow[0].totalTokens) tokens against the $standardQuota standard-tier cap the gateway enforced against her — ratio $ratio."
     Write-CycleInfo $line

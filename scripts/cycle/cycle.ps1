@@ -39,6 +39,10 @@ param(
     [int] $Tpm = 12000,
     [switch] $CreateModelDeployments,
     [switch] $SkipClaude,
+    [Parameter(HelpMessage = 'Run against an already-deployed environment instead of deploying one. Implied (and forced) for dev/prod.')]
+    [switch] $AttachOnly,
+    [Parameter(HelpMessage = 'Delete the fgcycle-* fixture subscriptions after the run. Use it on a shared environment.')]
+    [switch] $CleanupSubscriptions,
     [ValidateSet('KeepFoundry', 'Full', 'None')]
     [string] $Teardown = 'KeepFoundry',
     [Parameter(HelpMessage = 'Skip the harness stage (codex/claude CLIs not installed, or not wanted).')]
@@ -52,6 +56,19 @@ $ErrorActionPreference = 'Stop'
 
 $cycleStarted = Get-Date
 $stageResults = [ordered]@{}
+
+# On dev/prod the cycle ATTACHES and never tears down. Both are consequences of the same
+# fact — CI owns those environments — and both are forced rather than defaulted, because a
+# `-Teardown KeepFoundry` typed out of habit against dev would delete its APIM, its SQL
+# server and its Container App. down.ps1 refuses independently; this stops the run reaching it.
+$managed = Test-CycleManagedEnvironment -Environment $Environment
+if ($managed) {
+    Write-Host "'$Environment' is a CI-managed environment: attaching to it, and teardown is disabled for this run." -ForegroundColor Yellow
+    if ($Teardown -ne 'None') {
+        Write-Host "  (-Teardown $Teardown ignored. Use the infra-destroy.yml workflow if you genuinely mean to destroy '$Environment'.)" -ForegroundColor Yellow
+        $Teardown = 'None'
+    }
+}
 
 function Invoke-Stage {
     param(
@@ -90,6 +107,7 @@ $upArgs = @{
 }
 if ($CreateModelDeployments) { $upArgs.CreateModelDeployments = $true }
 if ($SkipClaude) { $upArgs.SkipClaude = $true }
+if ($AttachOnly -or $managed) { $upArgs.AttachOnly = $true }
 
 try {
     # up and subscriptions are fatal: without a gateway and keys there is nothing to test,
@@ -109,6 +127,25 @@ try {
     Invoke-Stage -Name 'measure' -Script 'measure.ps1' -Arguments @{ Environment = $Environment } | Out-Null
 }
 finally {
+    # BEFORE teardown and before the report, because it is the one piece of cleanup that must
+    # happen even when a stage threw: on a shared gateway these fixture keys otherwise sit
+    # there holding a spent monthly counter that nothing can reset. Failing to clean up is
+    # never allowed to fail the run — the keys are named `fgcycle-*` exactly so a human (or a
+    # later `-Cleanup`) can find them.
+    if ($CleanupSubscriptions) {
+        try {
+            # -OnlyThisRun: this fires automatically, and a full prefix sweep would delete a
+            # concurrent cycle's freshly minted fixtures out from under it — 401s mid-stage on
+            # a shared environment, which is exactly the situation attach mode invites.
+            # Orphans from an interrupted run are somebody's later `-Cleanup` without this flag.
+            & (Join-Path $PSScriptRoot 'subscriptions.ps1') -Environment $Environment -Subscription $Subscription -Cleanup -OnlyThisRun
+        }
+        catch {
+            Write-Host "  Fixture-subscription cleanup failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "  Remove them by hand: pwsh scripts/cycle/subscriptions.ps1 -Environment $Environment -Cleanup" -ForegroundColor Red
+        }
+    }
+
     if ($Teardown -eq 'None') {
         Write-Host ''
         Write-Host 'Teardown skipped (-Teardown None). The gateway is STILL UP and APIM is billing.' -ForegroundColor Yellow

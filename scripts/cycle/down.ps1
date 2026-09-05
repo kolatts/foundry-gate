@@ -44,12 +44,40 @@ param(
     [Parameter(HelpMessage = 'Return as soon as the deletes are accepted rather than waiting for them to finish.')]
     [switch] $NoWait,
     [Parameter(HelpMessage = 'Required to tear down a resource group that contains control-plane resources. There is no good reason to pass this.')]
-    [switch] $AllowControlPlane
+    [switch] $AllowControlPlane,
+    [Parameter(HelpMessage = 'Required — and still almost certainly wrong — to point this script at dev or prod. Use the infra-destroy.yml workflow instead.')]
+    [switch] $IKnowThisIsDev
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/_common.ps1"
+
+# REFUSE dev and prod outright, before anything is read or deleted.
+#
+# The control-plane guard below is a good check but it is a check on CONTENTS, and contents
+# change: an environment mid-deploy, or one whose control plane a failed run left half
+# provisioned, can pass it. dev and prod are not "a resource group that happens to hold a SQL
+# server" — they are environments CI owns end to end, whose destruction has a sanctioned path
+# with a typed confirmation and a GitHub environment approval gate behind it. That path exists
+# so a teardown is a decision somebody signed for; a switch on a local script is not.
+if ((Test-CycleManagedEnvironment -Environment $Environment) -and -not $IKnowThisIsDev) {
+    throw @"
+Refusing to tear down the managed environment '$Environment'.
+
+'$Environment' is deployed and re-deployed by CI (deploy-all.yml on every merge to main) and
+holds the control plane — SQL, the Container App, the Static Web App, Key Vault. Tearing it
+down from here would destroy an environment other people and other workflows are using, and
+would leave no record that anyone decided to.
+
+The sanctioned path is the GitHub workflow, which requires a typed confirmation and an
+environment approval:
+
+  gh workflow run infra-destroy.yml -f environment=$Environment -f confirmation=DESTROY-$Environment
+
+If you are certain you want the local script anyway, pass -IKnowThisIsDev.
+"@
+}
 
 $state = Get-CycleState -Environment $Environment
 if (-not $Subscription) {

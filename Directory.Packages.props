@@ -36,7 +36,16 @@
     <PackageVersion Include="MudBlazor" Version="9.9.0" />
 
     <!-- Functions -->
-    <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="2.1.0" />
+    <!-- MUST stay >= the Worker.Core version Worker.OpenTelemetry drags in (2.52.0 today).
+         `Microsoft.Azure.Functions.Worker` pins Worker.Core AND Worker.Grpc to its own version;
+         Worker.OpenTelemetry 1.2.0 independently requires Worker.Core >= 2.52.0. At 2.1.0 NuGet
+         therefore resolved Core to 2.52.0 (highest wins) while leaving Grpc at 2.1.0 — and Grpc
+         2.1.0 calls `new DefaultTraceContext(string, string)`, a ctor Core 2.52.0 removed. Every
+         invocation on dev then died at binding time with
+             Method not found: 'Void Microsoft.Azure.Functions.Worker.DefaultTraceContext..ctor(System.String, System.String)'
+         before any user code ran: UsageSyncFunction fired on schedule every 15 minutes and failed
+         every single time, so nothing was ever reconciled (#261). Bump the two together. -->
+    <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="2.52.0" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.7" />
     <!-- Functions: worker telemetry → Azure Monitor (the worker's own OTel bridge, not the

@@ -21,6 +21,76 @@ stops the APIM meter.
 
 ---
 
+## Two modes: own the gateway, or attach to one
+
+The command above deploys a throwaway gateway (`test`), proves things against it, and deletes
+it. That is the default and it is what proves the walls, because the cycle chooses the tiers.
+
+The other mode runs the same checks against an environment **CI already deployed**:
+
+```sh
+pwsh scripts/cycle/cycle.ps1 -Subscription "Imagile Paid" -Environment dev -CleanupSubscriptions
+```
+
+| | `test` (owned) | `dev` / `prod` (attached) |
+|---|---|---|
+| `up.ps1` | deploys `infra/main.bicep` | reads the addresses out of the existing `foundrygate-<env>` deployment's outputs; deploys nothing |
+| Tier limits | chosen by the cycle, deliberately tiny | read off the **live product policies** — `tpm` exists only inside the rendered `llm-token-limit`, not in the outputs |
+| Teardown | KeepFoundry | **refused.** `down.ps1` throws; `cycle.ps1` forces `-Teardown None` |
+| Fixture keys | `fgcycle-*`, deleted by `-CleanupSubscriptions` | same, and it matters more — the same APIM also holds the real `foundrygate-{UserId}` keys |
+| 403 monthly wall | proved | **SKIPPED BY DESIGN** — see below |
+
+`-AttachOnly` is implied and cannot be turned off for `dev` and `prod`
+(`Test-CycleManagedEnvironment` in `_common.ps1`). Those environments are re-deployed by
+`Deploy All` on every merge to main, their template needs `FG_API_IMAGE` and
+`FG_ENTRA_API_CLIENT_ID` that only the workflow supplies, and they hold the control plane —
+SQL, the Container App, the Static Web App, Key Vault.
+
+**Never `down.ps1` against dev.** It refuses (`-IKnowThisIsDev` exists only so the refusal is
+a decision rather than a wall). Destroying an environment is `infra-destroy.yml`, which has a
+typed confirmation and a GitHub environment approval behind it:
+
+```sh
+gh workflow run infra-destroy.yml -f environment=dev -f confirmation=DESTROY-dev
+```
+
+### Why the 403 wall is skipped on a shared environment, and what replaces it
+
+Both walls come out of the same `llm-token-limit` element, and which of them a test can reach
+is arithmetic: `monthlyTokenQuota / tpm` minutes of continuous full-rate traffic. The cycle's
+own gateway is deployed at 40 000 tokens behind 12 000 TPM — about three minutes. Dev runs the
+shipped defaults, 5 000 000 behind 20 000 TPM — **250 minutes**, several dollars of tokens, and
+a monthly counter that APIM offers **no way to reset**, left spent for everyone on that tier
+until the calendar month rolls over.
+
+So on an attached environment `T5a/b/c` and `C3` are recorded `SKIP` with that arithmetic in
+the detail, and two checks stand in their place:
+
+- **`T5d`** — `x-fg-remaining-quota` is read twice and observed **decrementing**. The monthly
+  counter is live and keyed per subscription; only its wall is out of reach.
+- **`T4a/T4b`** — the same policy element, at the per-minute meter, which *is* reachable.
+
+Do not "fix" this by editing dev's product policy to shrink a tier. That tests a gateway
+nobody runs, and leaves dev enforcing something CI's next deploy will silently revert.
+
+### The other wall in front of the meter: backend capacity
+
+`T4a` asks **whose** 429 it got, because two of them live on that path:
+
+| | `x-fg-remaining-tpm` on the refusal | what it means |
+|---|---|---|
+| the gateway's meter | `0` | the developer's own per-minute budget. This is what T4a is for. |
+| the Foundry deployment | still has headroom | Azure OpenAI's capacity units, passed straight through (the OpenAI policy deliberately does not retry a single backend) |
+
+Observed live on dev 2026-09-05: a 429 carrying `x-fg-remaining-tpm=6413` and the body *"Your
+requests to gpt-4.1-mini for gpt-4-1-mini in eastus2 have exceeded rate limit"*. The deployment
+was 10 capacity units (~10K TPM) behind a 20 000 TPM tier, so the **backend wall sat in front of
+the gateway wall** and the developer's own meter could never be reached. T4a reports that as a
+SKIP naming both numbers, not a PASS. The fix is the environment's, not the test's: raise the
+deployment's capacity above the highest tier TPM that routes to it (#260).
+
+---
+
 ## Before you start
 
 | Requirement | Check |
@@ -61,6 +131,12 @@ its monthly budget at all. Verified live across 25 consecutive execs at both 8 0
 TPM — the 403 is simply unreachable from behind a tight 429. That is why `C3` runs on the
 generous-TPM tier ([#237](https://github.com/kolatts/foundry-gate/issues/237)).
 
+The other side of that floor was measured on dev, whose standard tier ships at 20 000 TPM:
+three consecutive `codex exec` runs each **completed with exit 0** and each spent exactly
+**9 574 tokens**, and the 429 arrived cleanly *between* execs rather than deadlocking inside
+one. Same policy, same CLI — the only difference is whether the per-minute cap is above or
+below one agent turn.
+
 PASS looks like: `UP-1 PASS`, a gateway URL printed, and every deployment listed as
 `Succeeded`. APIM StandardV2 provisioning dominates the wall clock.
 
@@ -75,10 +151,27 @@ Creates three APIM subscriptions against tier products, through the Management R
 | `dev-bob` | standard | TPM isolation control, then the Codex harness subject |
 | `dev-carol` | power | monthly-quota control, and the `C3` harness subject |
 
-**Every cycle mints fresh subscription ids** (`dev-alice-202609051530`). This is not
+**Every cycle mints fresh subscription ids** (`fgcycle-alice-202609051530`). This is not
 cosmetic: the monthly `token-quota` counter is keyed on the APIM subscription and there is no
-way to reset it, so reusing `dev-alice` means the *second* cycle in a calendar month starts
+way to reset it, so reusing `fgcycle-alice` means the *second* cycle in a calendar month starts
 her at 403 and can demonstrate neither wall. `-Reuse` keeps the ids already in the state file.
+
+The **`fgcycle-` prefix** is load-bearing on a shared gateway: dev's APIM also carries the real
+developer keys the control plane issues as `foundrygate-{UserId}`, so a fixture has to be
+recognisable in the APIM blade and, above all, deletable without a human deciding key by key
+whether it is safe. `-Cleanup` deletes exactly the `fgcycle-*` subscriptions, in one of two
+scopes, because only one of them is safe to fire unattended:
+
+```sh
+pwsh scripts/cycle/subscriptions.ps1 -Environment dev -Cleanup -OnlyThisRun   # this state file's ids
+pwsh scripts/cycle/subscriptions.ps1 -Environment dev -Cleanup                # every fgcycle-* on the service
+```
+
+`cycle.ps1 -CleanupSubscriptions` fires the **`-OnlyThisRun`** form, so two cycles can share
+dev without deleting each other's fixtures out from under a running stage. The full sweep is
+what catches keys an interrupted run or another machine left behind — it pages through the
+whole subscription list, and it is a deliberate, human-invoked thing to do when nobody else is
+on the environment. Always finish an attached run with one or the other.
 
 The stage then **waits for each key to propagate**. A subscription the Management API has
 already created is not immediately accepted by the gateway; without the wait, the first few
@@ -272,6 +365,10 @@ pwsh scripts/cycle/report.ps1 -Path validation/2026-09-05-gateway-cycle.md
 | `404` from the backend on a Claude alias | the alias resolved but the deployment does not exist | E-007 — do **not** recreate it in a loop |
 | M1 times out with no LLM log rows | usually the destination type, not lag — check `AzureDiagnostics \| summarize count() by Category` | the diagnostic setting needs `logAnalyticsDestinationType: 'Dedicated'` (#244); if rows really are late, re-run `measure.ps1` then `report.ps1` |
 | `az` "Failed to parse string as JSON" on a deployment | cmd.exe ate the quotes out of a JSON parameter | use `Format-AzJsonArg` from `_common.ps1` |
+| `404` `DeploymentNotFound` on every request through an attached gateway | the alias map names a deployment that does not exist on the Foundry account | the alias map is a named value, the deployment is not created by ARM after day 0 — create the **OpenAI** one out of band (safe, E-007e) and never the Anthropic one (#259) |
+| `T4a` SKIP: "the 429 came from the BACKEND" | the Foundry deployment's capacity is below the tier's TPM cap | raise `--sku-capacity` above the highest tier TPM routed to it (#260) — the developer's own meter is otherwise unreachable |
+| `down.ps1` throws "Refusing to tear down the managed environment" | it is doing its job | use `infra-destroy.yml`; `-IKnowThisIsDev` exists only to make the override deliberate |
+| Evidence report shows `123 10 32 32 34...` instead of a body | fixed: `Invoke-WebRequest` returns `byte[]` when the response declares no charset | `Invoke-GatewayRequest` now decodes it |
 | Deployment fails with `DeploymentActive` | a previous nested deployment is still running | wait for it or cancel it; never start a second Claude create alongside one in flight |
 
 ## Files

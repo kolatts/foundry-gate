@@ -1,7 +1,18 @@
 # Validation evidence
 
-Captured evidence from **real deployed FoundryGate gateways** — one file per spin-up /
-test / spin-down cycle, named `<date>-gateway-cycle.md`. The docs site links to this
+Captured evidence from **real deployed FoundryGate gateways** — one file per run. Two
+shapes, because there are two things worth proving:
+
+- `<date>-gateway-cycle.md` — a full spin-up / test / spin-down cycle against a throwaway
+  gateway the run itself deployed. The tiers are chosen deliberately small, so both walls
+  (the per-minute `429` and the monthly `403`) are reachable and get proved.
+- `<date>-dev-gateway.md` — the same checks run **attached** to the deployed `dev`
+  environment, which CI owns and which ships the real product tiers. Nothing is deployed
+  and nothing is torn down. The monthly `403` is out of reach there by arithmetic and is
+  recorded as SKIP-by-design with the numbers; what it buys instead is the control plane —
+  keys issued through the real API, and the reconciliation path behind them.
+
+The docs site links to this
 folder (not to individual files) from the landing page and from
 [Architecture at a glance](../docs-site/src/content/docs/architecture/diagram.mdx), so a
 new cycle's write-up is reachable the moment it is committed.

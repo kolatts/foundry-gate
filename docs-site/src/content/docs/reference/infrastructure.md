@@ -116,9 +116,51 @@ deleting the service only soft-deletes it and the name stays reserved, so withou
 spin-up fails with `ServiceAlreadyExistsInSoftDeletedState`. `-Mode Full` deletes and purges
 everything including the Foundry accounts, and is labelled with that risk.
 
+### Running the same checks against a deployed environment
+
+Everything above describes the cycle standing up its own throwaway gateway. The same scripts
+also **attach** to an environment that is already deployed — `dev` and `prod`, which CI owns:
+
+```bash
+pwsh scripts/cycle/cycle.ps1 -Subscription "<subscription name>" -Environment dev -CleanupSubscriptions
+```
+
+Nothing is deployed and nothing is torn down. `up.ps1` reads the addresses out of the existing
+`foundrygate-{env}` subscription deployment's outputs, and reads each tier's real limits **off
+the live product policy** — the deployment outputs carry `monthlyTokenQuota` but not `tpm`,
+which exists only inside the rendered `llm-token-limit` element.
+
+For `dev` and `prod` this mode is not optional. Attach is implied, `-Teardown` is forced to
+`None`, and `down.ps1` **refuses them outright**: those environments are re-deployed by
+`Deploy All` on every merge to `main` and hold the control plane — SQL, the Container App, the
+Static Web App, Key Vault. Destroying one is the `infra-destroy.yml` workflow, which requires a
+typed confirmation and a GitHub environment approval.
+
+The fixture keys are named `fgcycle-*` and `subscriptions.ps1 -Cleanup` removes exactly those,
+by prefix. That matters on a shared gateway: the same APIM service also carries the real
+developer keys the control plane issues as `foundrygate-{UserId}`.
+
+**The monthly `403` wall is out of reach there, and is recorded as such.** It is arithmetic:
+exhausting a tier's budget takes `monthlyTokenQuota / tpm` minutes of continuous full-rate
+traffic, so the demo tiers' 40 000 behind 12 000 TPM is about three minutes while the shipped
+`standard` tier's 5 000 000 behind 20 000 TPM is over four hours — and the counter is keyed on
+the APIM subscription with no way to reset it, so burning it would leave that tier spent for
+everyone on it until the month rolls over. The quota checks therefore report **SKIP by design**
+with that arithmetic, and a check in their place observes `x-fg-remaining-quota` decrementing:
+the wall is unreachable, the meter is demonstrably live. The per-minute `429` wall is reached
+normally.
+
+One thing to watch on any environment: a `429` is only the developer's own meter when
+`x-fg-remaining-tpm` is `0` on the refusal. A `429` with headroom still on that header is the
+backing Foundry deployment saturating, which means its capacity is below the tier's TPM cap and
+the developer's budget can never bind
+([#260](https://github.com/kolatts/foundry-gate/issues/260)).
+
 The agent-facing runbook, including the Anthropic create-once rules and the failure-mode
 table, is `.claude/skills/gateway-cycle/SKILL.md`. Committed evidence from real runs lives
-in [`validation/`](https://github.com/kolatts/foundry-gate/tree/main/validation).
+in [`validation/`](https://github.com/kolatts/foundry-gate/tree/main/validation), one file per
+run — `{date}-gateway-cycle.md` for a full spin-up/spin-down cycle, `{date}-dev-gateway.md` for
+an attached run against `dev`.
 
 ## Naming convention
 
