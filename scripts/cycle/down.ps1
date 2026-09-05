@@ -68,9 +68,28 @@ if ($null -eq $rg) {
 $resources = @(Invoke-Az -Subscription $Subscription -Arguments @('resource', 'list', '--resource-group', $rgName))
 
 if ($Mode -eq 'KeepFoundry') {
-    Write-CycleHeading "Tearing down $rgName (KeepFoundry — Cognitive Services accounts survive)"
-    $keep = @($resources | Where-Object { $_.type -eq 'Microsoft.CognitiveServices/accounts' })
-    $drop = @($resources | Where-Object { $_.type -ne 'Microsoft.CognitiveServices/accounts' })
+    Write-CycleHeading "Tearing down $rgName (KeepFoundry — Foundry accounts and the telemetry stores survive)"
+
+    # What survives, and why each one:
+    #   Cognitive Services accounts   Anthropic deployments are create-once per account
+    #                                 (E-007); destroying them spends the next spin-up's only
+    #                                 Claude create attempt. This is the headline reason.
+    #   Log Analytics + App Insights  they hold the billing-grade token logs, and Log
+    #                                 Analytics ingestion lags the traffic by longer than a
+    #                                 cycle takes — deleting them at teardown destroys the
+    #                                 measurement evidence minutes before it arrives, which
+    #                                 is exactly what happened on 2026-09-05. Keeping them
+    #                                 lets `measure.ps1` be re-run against the same state
+    #                                 file after the gateway is gone.
+    # Neither bills at rest: Foundry is per-token, the telemetry stores are per ingested GB
+    # and a cycle ingests megabytes. APIM, the one real idle cost, always goes.
+    $keepTypes = @(
+        'Microsoft.CognitiveServices/accounts'
+        'Microsoft.OperationalInsights/workspaces'
+        'Microsoft.Insights/components'
+    )
+    $keep = @($resources | Where-Object { $keepTypes -contains $_.type })
+    $drop = @($resources | Where-Object { $keepTypes -notcontains $_.type })
 
     foreach ($k in $keep) { Write-Host "  keep   $($k.type)/$($k.name)" -ForegroundColor Green }
     if ($drop.Count -eq 0) {

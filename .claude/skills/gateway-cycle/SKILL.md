@@ -181,7 +181,12 @@ pwsh scripts/cycle/down.ps1 -Mode Full     # clean slate, spends Claude create a
 ```
 
 **`KeepFoundry` (default).** Deletes everything in the resource group *except* the
-`Microsoft.CognitiveServices/accounts`, **and purges the soft-deleted APIM service**. That
+`Microsoft.CognitiveServices/accounts` and the telemetry stores (Log Analytics workspace,
+Application Insights), **and purges the soft-deleted APIM service**. The Foundry accounts
+survive for the create-once reason above; the telemetry stores survive because Log Analytics
+ingestion lags the traffic by longer than a cycle takes, so deleting them at teardown
+destroys the measurement evidence minutes before it arrives. Keeping them lets `measure.ps1`
+be re-run against the same state file after the gateway is gone. Neither bills at rest. That
 purge is load-bearing: deleting an APIM service only soft-deletes it and the name stays
 reserved, so without it the very next `up.ps1` fails with
 `ServiceAlreadyExistsInSoftDeletedState` and "spin up and down frequently" is impossible

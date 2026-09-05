@@ -83,7 +83,7 @@ if ($state.ContainsKey('upCompletedUtc') -and $state.upCompletedUtc) {
 
 Write-Host ''
 if ($apimCount -eq 0 -and $foundryCount -gt 0) {
-    Write-Host "  State: TORN DOWN (KeepFoundry). $foundryCount Foundry account(s) remain and cost nothing idle." -ForegroundColor Green
+    Write-Host "  State: TORN DOWN (KeepFoundry). $foundryCount Foundry account(s) and the telemetry stores remain, none of which bill at rest." -ForegroundColor Green
     Write-Host '  Next up.ps1 will re-run the template with createModelDeployments=false over them.'
 }
 elseif ($apimCount -gt 0) {
