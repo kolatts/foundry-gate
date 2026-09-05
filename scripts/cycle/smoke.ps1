@@ -164,11 +164,30 @@ if ($null -ne $tpm429) {
     Assert-Check -Id 'T4a' -Name 'TPM cap returns 429 with Retry-After' -Condition ($retryAfter -ne '') `
         -Detail "HTTP 429 after $tpmAttempts requests, Retry-After=$retryAfter, last x-fg-remaining-tpm=$lastRemainingTpm — $(Format-BodyExcerpt $tpm429.Body 160)"
 
-    # Counter isolation: bob is the SAME tier, so a shared counter would refuse him too.
-    $rb = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $bob) -Body (New-ChatBody)
+    # Counter isolation: bob is the SAME tier, so a SHARED counter would refuse him too.
+    #
+    # TWO DIFFERENT 429s live on this path and the difference is the whole assertion:
+    #   gateway  llm-token-limit refusing bob's own per-subscription bucket
+    #            -> x-fg-remaining-tpm = 0. This is what would mean isolation is broken.
+    #   backend  the shared Foundry deployment (gpt-4-1-mini, 10 capacity units) saturating
+    #            under alice's hammering, passed straight through by the OpenAI API policy,
+    #            which deliberately does not retry a single-backend 429
+    #            -> x-fg-remaining-tpm is still FULL, because bob spent nothing.
+    # Observed live: "dev-bob HTTP 429, x-fg-remaining-tpm=12000" — a full bucket next to a
+    # 429, which is the backend, not the meter. So the check reads the header rather than the
+    # status code, and retries first in case the deployment is only briefly saturated.
+    $rb = $null
+    for ($try = 1; $try -le 3; $try++) {
+        $rb = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $bob) -Body (New-ChatBody)
+        if ($rb.StatusCode -eq 200) { break }
+        Start-Sleep -Seconds 10
+    }
+    $bobRemaining = Get-ResponseHeader $rb 'x-fg-remaining-tpm'
+    $bobIsolated = ($rb.StatusCode -eq 200) -or ($rb.StatusCode -eq 429 -and $bobRemaining -ne '0' -and $bobRemaining -ne '')
     Assert-Check -Id 'T4b' -Name 'Same-tier dev-bob unaffected while dev-alice is 429 (counter keyed on subscription)' `
-        -Condition ($rb.StatusCode -eq 200) `
-        -Detail "dev-bob HTTP $($rb.StatusCode), x-fg-remaining-tpm=$(Get-ResponseHeader $rb 'x-fg-remaining-tpm') while dev-alice is throttled"
+        -Condition $bobIsolated `
+        -Detail ("dev-bob HTTP {0}, x-fg-remaining-tpm={1} while dev-alice is throttled{2}" -f `
+            $rb.StatusCode, $bobRemaining, ($rb.StatusCode -eq 429 ? ' (429 from the shared Foundry deployment, not from bob''s own meter — his bucket is untouched)' : ''))
 }
 else {
     Assert-Check -Id 'T4a' -Name 'TPM cap returns 429 with Retry-After' -Condition $false `

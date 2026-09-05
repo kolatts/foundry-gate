@@ -79,8 +79,13 @@ function Invoke-Kql {
 # `az monitor log-analytics query` lives in an extension, not core az. Installing it on
 # demand keeps the cycle runnable on a fresh machine; --only-show-errors and the explicit
 # --yes stop it prompting, which would hang an unattended run.
-$extensions = @(Invoke-Az -Subscription $subscription -AllowFailure -Arguments @('extension', 'list'))
-if (-not ($extensions | Where-Object { $_.name -eq 'log-analytics' })) {
+# NOT through Invoke-Az: `az extension` is a client-side command group and REJECTS
+# --subscription outright ("unrecognized arguments"), which Invoke-Az appends to everything.
+# That is how this stage used to die before running a single query.
+$extensionNames = @()
+$listedJson = (& az extension list --query '[].name' --output json 2>$null) -join ''
+if (-not [string]::IsNullOrWhiteSpace($listedJson)) { $extensionNames = @(ConvertFrom-Json $listedJson) }
+if ($extensionNames -notcontains 'log-analytics') {
     Write-CycleInfo 'Installing the az log-analytics extension.'
     & az extension add --name log-analytics --yes --only-show-errors 2>$null | Out-Null
 }
