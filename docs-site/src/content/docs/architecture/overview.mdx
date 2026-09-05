@@ -354,10 +354,13 @@ authorizes every resource as a write, so no read-only identity can run it — an
 switched off pending a decision (#229). A pull request runs its own copy of the workflow files,
 so the identity, not the workflow, is the boundary. The owner-side OIDC setup is **done for dev**
 (the [Owner Setup Runbook](/foundry-gate/reference/owner-setup/) is the commands that did it);
-**what has not happened yet** is the first full run against Azure, tracked in #105. Badges on the
-diagram mark the
-difference; the [CI/CD reference](/foundry-gate/reference/ci-cd/) lists every workflow, trigger
-and variable.
+and the whole chain has now **run green against Azure on `dev`** — infra, database, API, UI,
+Functions and post-deploy tests (#105, closed). It took five attempts, and each failure was a real
+defect the 1545 hermetic tests could not see: a gateway template that could only be applied once,
+two Azure regions closed to new SQL servers, a Graph role with no application-type variant, a smoke
+test that started the container with no configuration, and a CLI projection that made the Functions
+check unpassable. **Production has never been deployed.** Badges on the diagram mark which is which;
+the [CI/CD reference](/foundry-gate/reference/ci-cd/) lists every workflow, trigger and variable.
 
 <DeployPipeline />
 
