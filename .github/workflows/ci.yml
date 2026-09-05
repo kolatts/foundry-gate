@@ -38,7 +38,10 @@ jobs:
           path: TestResults
           if-no-files-found: ignore
 
-  # Docs build sanity on PRs that touch the site (not a required check).
+  # Docs build sanity on PRs that touch the site (not a required check). infra/ and src/
+  # are in the path filter because the architecture diagram is GENERATED from them
+  # (docs-site/scripts/generate-architecture.mjs, #221): a Bicep or Functions change with
+  # no docs edit is exactly the case where the committed model would go stale.
   docs-build:
     runs-on: ubuntu-latest
     steps:
@@ -49,7 +52,7 @@ jobs:
         shell: bash
         run: |
           if git fetch origin "${{ github.base_ref }}" --depth=1 && \
-             git diff --quiet "origin/${{ github.base_ref }}"...HEAD -- docs-site/ content/; then
+             git diff --quiet "origin/${{ github.base_ref }}"...HEAD -- docs-site/ content/ infra/ src/; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -67,3 +70,11 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      # `npm run build` regenerates src/generated via prebuild; if that moved the
+      # committed model, the PR changed the architecture without updating the diagram.
+      - name: Architecture model is up to date
+        if: steps.docs.outputs.changed == 'true'
+        run: |
+          git diff --exit-code docs-site/src/generated \
+            || { echo "::error::Run 'npm run generate:architecture' in docs-site/ and commit docs-site/src/generated."; exit 1; }

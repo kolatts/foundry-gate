@@ -1,0 +1,261 @@
+---
+// The journey of one request, in five checks — the visual companion to the prose on
+// "Why FoundryGate?". Conceptual by intent (it shows the ORDER of the checks, which is a
+// policy-reading, not a resource), but the numbers it quotes come from the generated
+// architecture model so the tier figures can never drift from infra/main.bicep.
+import arch from '../generated/architecture.json';
+import FgIcon from './FgIcon.astro';
+
+const tiers = arch.infra.quotaTiers;
+const aliasCount = new Set(tiers.flatMap((t) => t.aliases.map((a) => a.alias))).size;
+const fmt = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : n >= 1000 ? `${n / 1000}K` : String(n));
+const tpmRange = `${fmt(Math.min(...tiers.map((t) => t.tpm)))}–${fmt(Math.max(...tiers.map((t) => t.tpm)))}`;
+
+const steps = [
+  {
+    icon: 'terminal' as const,
+    title: 'The tool sends a request',
+    detail: 'Claude Code or Codex CLI, with the developer\'s own key in the header it already sends.',
+  },
+  {
+    icon: 'key' as const,
+    title: 'Whose key is this?',
+    detail: `The key is an APIM subscription, and it belongs to exactly one of ${tiers.length} tier products. No product, no service.`,
+  },
+  {
+    icon: 'shield' as const,
+    title: 'Is this model allowed here?',
+    detail: `The tier's alias map is the allowlist — ${aliasCount} aliases across the tiers. Anything else is refused before it costs a token.`,
+  },
+  {
+    icon: 'gauge' as const,
+    title: 'Is there budget left?',
+    detail: `Two counters, both on this developer alone: ${tpmRange} tokens a minute, and the monthly budget their tier carries.`,
+  },
+  {
+    icon: 'chip' as const,
+    title: 'The model answers',
+    detail: 'Routed with a managed identity to a Foundry account — the nearest region first, another region if that one is throttling.',
+  },
+];
+
+const outcomes = [
+  { code: '200', tone: 'ok', label: 'Answered', detail: 'Headers come back saying what it cost and what is left.' },
+  { code: '429', tone: 'warn', label: 'Slow down', detail: 'Too fast this minute. Retry-After tells the tool how long to wait; it waits by itself.' },
+  { code: '403', tone: 'stop', label: 'Stopped', detail: 'Monthly budget spent, or a model this tier does not carry. It says which, and when it comes back.' },
+];
+---
+
+<figure class="fgj not-content" aria-label="The journey of one request through the gateway">
+  <ol class="fgj-track">
+    {steps.map((step, i) => (
+      <li class="fgj-step" style={`--i:${i}`}>
+        <span class="fgj-step__marker">
+          <span class="fgj-step__num">{i + 1}</span>
+          <FgIcon name={step.icon} size={17} class="fgj-step__icon" />
+        </span>
+        <span class="fgj-step__body">
+          <span class="fgj-step__title">{step.title}</span>
+          <span class="fgj-step__detail">{step.detail}</span>
+        </span>
+      </li>
+    ))}
+  </ol>
+
+  <p class="fgj-outcome-label">…and one of three answers comes back, decided right there:</p>
+
+  <div class="fgj-outcomes">
+    {outcomes.map((o) => (
+      <div class={`fgj-outcome fgj-outcome--${o.tone}`}>
+        <span class="fgj-outcome__code">{o.code}</span>
+        <span class="fgj-outcome__label">{o.label}</span>
+        <span class="fgj-outcome__detail">{o.detail}</span>
+      </div>
+    ))}
+  </div>
+
+  <figcaption class="fgj-caption">
+    Every one of those checks happens at the gate, on the request itself — nothing is
+    decided after the fact, and no database is asked.
+  </figcaption>
+</figure>
+
+<style>
+  .fgj {
+    margin: 1.5rem 0 2rem;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+  }
+
+  .fgj-track {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.55rem;
+    position: relative;
+  }
+
+  .fgj-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.7rem;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--fg-border-subtle, #1C2E44);
+    border-left: 3px solid color-mix(in srgb, var(--fg-azure, #0078D4) 70%, transparent);
+    border-radius: 8px;
+    background: var(--fg-bg-raised, #101B2A);
+    position: relative;
+  }
+
+  /* The connector: a short line from each card down to the next. */
+  .fgj-step:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 1.55rem;
+    bottom: -0.55rem;
+    height: 0.55rem;
+    border-left: 2px dashed color-mix(in srgb, var(--fg-azure-neon, #4DCFFF) 55%, transparent);
+  }
+
+  .fgj-step__marker {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    color: var(--fg-azure-neon, #4DCFFF);
+    background: color-mix(in srgb, var(--fg-azure, #0078D4) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--fg-azure, #0078D4) 40%, transparent);
+  }
+
+  .fgj-step__num {
+    position: absolute;
+    top: -0.35rem;
+    left: -0.35rem;
+    width: 1.05rem;
+    height: 1.05rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    font-size: 0.6rem;
+    font-weight: 700;
+    color: var(--fg-bg-base, #07090F);
+    background: var(--fg-azure-neon, #4DCFFF);
+  }
+
+  .fgj-step__body { display: grid; gap: 0.12rem; min-width: 0; }
+
+  .fgj-step__title {
+    font-weight: 600;
+    color: var(--fg-text-primary, #EDF2F7);
+  }
+
+  .fgj-step__detail {
+    color: var(--fg-text-muted, #7E96AD);
+    font-size: 0.76rem;
+  }
+
+  /* A one-shot cascade: each card settles in turn, so the eye reads the order. */
+  @media (prefers-reduced-motion: no-preference) {
+    .fgj-step {
+      animation: fgj-settle 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+      animation-delay: calc(var(--i) * 90ms);
+    }
+
+    .fgj-step__marker::before {
+      content: '';
+      position: absolute;
+      inset: -3px;
+      border-radius: 50%;
+      border: 1px solid var(--fg-azure-neon, #4DCFFF);
+      opacity: 0;
+      animation: fgj-ping 0.9s ease-out both;
+      animation-delay: calc(var(--i) * 90ms + 200ms);
+    }
+  }
+
+  @keyframes fgj-settle {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  @keyframes fgj-ping {
+    0%   { opacity: 0.9; transform: scale(0.85); }
+    100% { opacity: 0;   transform: scale(1.5); }
+  }
+
+  .fgj-outcome-label {
+    margin: 1rem 0 0.5rem;
+    font-size: 0.78rem;
+    color: var(--fg-text-secondary, #C4D0DC);
+  }
+
+  .fgj-outcomes {
+    display: grid;
+    gap: 0.6rem;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  }
+
+  .fgj-outcome {
+    display: grid;
+    gap: 0.15rem;
+    padding: 0.65rem 0.8rem;
+    border-radius: 8px;
+    border: 1px solid var(--fg-border-subtle, #1C2E44);
+    border-top: 3px solid var(--fgj-tone, var(--fg-border-strong, #2A4260));
+    background: var(--fg-bg-raised, #101B2A);
+  }
+
+  .fgj-outcome--ok   { --fgj-tone: var(--fg-success, #22C55E); }
+  .fgj-outcome--warn { --fgj-tone: var(--fg-ember-soft, #FFB347); }
+  .fgj-outcome--stop { --fgj-tone: var(--fg-ember-hot, #FF5400); }
+
+  .fgj-outcome__code {
+    font-family: 'Monaspace Argon', ui-monospace, Consolas, monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--fgj-tone);
+  }
+
+  .fgj-outcome__label {
+    font-weight: 600;
+    font-size: 0.78rem;
+    color: var(--fg-text-primary, #EDF2F7);
+  }
+
+  .fgj-outcome__detail {
+    font-size: 0.74rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  .fgj-caption {
+    margin-top: 0.7rem;
+    font-size: 0.74rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
+  /* Once there is room for at least two cards side by side, the steps become a wrapping
+     grid: the numbered badges carry the order, so the vertical connectors — which would
+     point at the wrong neighbour across a wrap — are dropped. The Starlight content
+     column is ~600px at a 1440px viewport, so this settles at 2–3 across, never 5 slivers. */
+  @media (min-width: 640px) {
+    .fgj-track {
+      grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+      gap: 0.6rem;
+    }
+
+    .fgj-step {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.5rem;
+      border-left: 1px solid var(--fg-border-subtle, #1C2E44);
+      border-top: 3px solid color-mix(in srgb, var(--fg-azure, #0078D4) 70%, transparent);
+    }
+
+    .fgj-step:not(:last-child)::after { content: none; }
+  }
+</style>

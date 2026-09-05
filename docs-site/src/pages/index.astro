@@ -5,8 +5,104 @@
 // don't understand technology. Plain language only in the hero and story
 // sections. Demo data below is hardcoded fake data; the "This is real"
 // section shows genuine responses captured from a live gateway (2026-09-01).
+// Imports stay at the very top of the frontmatter: the Astro compiler hoists them, and
+// hoisting one from below `rawBase + '/'` mangles that line (esbuild then reports an
+// unterminated string literal). Keep new imports here.
+import FgIcon from '../components/FgIcon.astro';
+
 const rawBase = import.meta.env.BASE_URL;
 const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
+
+// Where the repo keeps the captured evidence from real deployed gateways. Linked as a
+// FOLDER on GitHub rather than a file, so a new cycle's write-up never leaves a dead link.
+const validationFolder = 'https://github.com/kolatts/foundry-gate/tree/main/validation';
+
+// The four-step story, one card each. Icons come from the shared inline-SVG set so the
+// landing page and the docs draw the same pictures for the same ideas.
+const story = [
+  {
+    icon: 'person' as const,
+    label: 'Someone joins',
+    desc: 'A developer joins your company — they get their own AI key, automatically. No forms, no tickets.',
+  },
+  {
+    icon: 'meter' as const,
+    label: 'Every request is counted',
+    desc: 'Each AI request they make is measured against their personal monthly budget.',
+  },
+  {
+    icon: 'stop' as const,
+    label: 'Overspending stops itself',
+    desc: 'When the budget runs out, requests stop — instantly. Not at the end of the month. Right then.',
+  },
+  {
+    icon: 'hand' as const,
+    label: 'Need more?',
+    desc: 'One click for the developer to ask. One click for you to approve.',
+  },
+];
+
+// What a developer's tool actually sees. Plain language on purpose — the real captured
+// responses are further down the page under "This is real".
+const signals = [
+  {
+    tone: 'ok',
+    code: '200',
+    title: 'It just works',
+    desc: 'The answer comes back, and with it a note saying what it cost and how much budget is left.',
+  },
+  {
+    tone: 'warn',
+    code: '429',
+    title: 'Slow down a moment',
+    desc: 'Going too fast this minute. The gate says how long to wait, and coding tools wait on their own.',
+  },
+  {
+    tone: 'stop',
+    code: '403',
+    title: 'Budget spent',
+    desc: 'The monthly budget is gone. Requests stop the same second — and the message says when it comes back.',
+  },
+];
+
+const docCards = [
+  {
+    icon: 'book' as const,
+    title: 'Why FoundryGate?',
+    desc: 'The whole idea in plain words, then the technical version.',
+    href: `${base}getting-started/why-foundrygate/`,
+  },
+  {
+    icon: 'graph' as const,
+    title: 'Architecture at a glance',
+    desc: 'One picture of the whole system — generated from the code itself.',
+    href: `${base}architecture/diagram/`,
+  },
+  {
+    icon: 'terminal' as const,
+    title: 'CLI setup',
+    desc: 'Point Claude Code or Codex CLI at your gateway in a few lines.',
+    href: `${base}getting-started/cli-setup/`,
+  },
+  {
+    icon: 'cloud' as const,
+    title: 'Fork guide',
+    desc: 'Deploy the whole thing into your own Azure subscription.',
+    href: `${base}getting-started/fork-guide/`,
+  },
+  {
+    icon: 'spark' as const,
+    title: 'API reference',
+    desc: 'Every endpoint the admin app exposes, and who may call it.',
+    href: `${base}reference/api/`,
+  },
+  {
+    icon: 'gauge' as const,
+    title: 'Cost & capacity',
+    desc: 'What it costs to run, and how many developers one deployment carries.',
+    href: `${base}reference/cost-and-capacity/`,
+  },
+];
 ---
 
 <!DOCTYPE html>
@@ -307,13 +403,35 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       transform: translateY(-2px);
     }
 
+    /* Icon + step number in one 30px badge: the picture carries the meaning, the
+       number keeps the four cards in order when they wrap to one column. */
     .flow-icon {
-      color: var(--fg-azure-neon);
-      font-size: 13px;
-      font-weight: 700;
-      line-height: 1.4;
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
       flex-shrink: 0;
+      border-radius: 8px;
+      color: var(--fg-azure-neon);
+      background: color-mix(in srgb, var(--fg-azure) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--fg-azure) 28%, transparent);
+    }
+
+    .flow-num {
+      position: absolute;
+      top: -6px;
+      left: -6px;
+      width: 15px;
+      height: 15px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
       font-family: var(--fg-font-mono);
+      font-size: 9px;
+      font-weight: 700;
+      color: var(--fg-bg-base);
+      background: var(--fg-azure-neon);
     }
 
     .flow-label {
@@ -656,6 +774,159 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       font-size: 12px;
       color: var(--fg-text-muted);
       font-style: italic;
+    }
+
+    /* ── Signals (what a developer's tool sees) ─────────── */
+    .signal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 1rem;
+    }
+
+    .signal {
+      padding: 1.1rem 1.15rem 1.2rem;
+      border-radius: 12px;
+      border: 1px solid var(--fg-border-subtle);
+      border-top: 3px solid var(--signal-tone);
+      background: color-mix(in srgb, var(--fg-bg-surface) 88%, transparent);
+      transition: transform 0.25s cubic-bezier(0.16,1,0.3,1), box-shadow 0.25s, border-color 0.2s;
+    }
+
+    .signal:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 12px 32px color-mix(in srgb, #000 40%, transparent);
+    }
+
+    .signal--ok   { --signal-tone: var(--fg-success); }
+    .signal--warn { --signal-tone: var(--fg-ember-soft); }
+    .signal--stop { --signal-tone: var(--fg-ember-hot); }
+
+    .signal-head {
+      display: flex;
+      align-items: baseline;
+      gap: 0.6rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .signal-code {
+      font-family: var(--fg-font-mono);
+      font-size: 1.55rem;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--signal-tone);
+    }
+
+    .signal-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg-text-primary);
+    }
+
+    .signal-desc {
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--fg-text-secondary);
+    }
+
+    /* ── Live evidence link ─────────────────────────────── */
+    .evidence-link {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-top: 1.25rem;
+      padding: 0.9rem 1.1rem;
+      border-radius: 10px;
+      border: 1px dashed var(--fg-border-strong);
+      background: color-mix(in srgb, var(--fg-bg-surface) 60%, transparent);
+      color: var(--fg-text-secondary);
+      transition: border-color 0.2s, background 0.2s, transform 0.25s cubic-bezier(0.16,1,0.3,1);
+    }
+
+    .evidence-link:hover {
+      border-color: var(--fg-azure);
+      background: var(--fg-bg-surface);
+      transform: translateY(-2px);
+    }
+
+    .evidence-link > :global(.fg-icon) {
+      color: var(--fg-success);
+      margin-top: 2px;
+    }
+
+    .evidence-link strong {
+      display: block;
+      font-size: 13.5px;
+      color: var(--fg-text-primary);
+      margin-bottom: 0.15rem;
+    }
+
+    .evidence-desc {
+      display: block;
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--fg-text-muted);
+    }
+
+    .evidence-desc code {
+      font-family: var(--fg-font-mono);
+      font-size: 11.5px;
+      color: var(--fg-azure-neon);
+    }
+
+    .evidence-arrow {
+      margin-left: auto;
+      align-self: center;
+      color: var(--fg-text-muted);
+      font-size: 15px;
+    }
+
+    /* ── Docs cards ─────────────────────────────────────── */
+    .doc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+    }
+
+    .doc-card {
+      display: grid;
+      gap: 0.35rem;
+      padding: 1.1rem 1.15rem 1.2rem;
+      border-radius: 12px;
+      border: 1px solid var(--fg-border-subtle);
+      background: color-mix(in srgb, var(--fg-bg-surface) 80%, transparent);
+      transition: border-color 0.2s, transform 0.25s cubic-bezier(0.16,1,0.3,1), box-shadow 0.25s;
+    }
+
+    .doc-card:hover {
+      border-color: var(--fg-azure);
+      transform: translateY(-3px);
+      box-shadow: 0 12px 32px color-mix(in srgb, #000 40%, transparent);
+    }
+
+    .doc-card-icon {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      margin-bottom: 0.35rem;
+      color: var(--fg-azure-neon);
+      background: color-mix(in srgb, var(--fg-azure) 12%, transparent);
+      border: 1px solid color-mix(in srgb, var(--fg-azure) 26%, transparent);
+    }
+
+    .doc-card-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--fg-text-primary);
+    }
+
+    .doc-card:hover .doc-card-title { color: var(--fg-azure-neon); }
+
+    .doc-card-desc {
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--fg-text-muted);
     }
 
     /* ── Bottom CTA & footer ────────────────────────────── */
@@ -1012,37 +1283,18 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
       </p>
 
       <div class="hero-flow">
-        <div class="flow-step">
-          <span class="flow-icon">1</span>
-          <div>
-            <div class="flow-label">Someone joins</div>
-            <div class="flow-desc">A developer joins your company — they get their own AI key, automatically. No forms, no tickets.</div>
+        {story.map((step, i) => (
+          <div class="flow-step">
+            <span class="flow-icon">
+              <FgIcon name={step.icon} size={19} />
+              <span class="flow-num">{i + 1}</span>
+            </span>
+            <div>
+              <div class="flow-label">{step.label}</div>
+              <div class="flow-desc">{step.desc}</div>
+            </div>
           </div>
-        </div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step">
-          <span class="flow-icon">2</span>
-          <div>
-            <div class="flow-label">Every request is counted</div>
-            <div class="flow-desc">Each AI request they make is measured against their personal monthly budget.</div>
-          </div>
-        </div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step">
-          <span class="flow-icon">3</span>
-          <div>
-            <div class="flow-label">Overspending stops itself</div>
-            <div class="flow-desc">When the budget runs out, requests stop — instantly. Not at the end of the month. Right then.</div>
-          </div>
-        </div>
-        <div class="flow-arrow">→</div>
-        <div class="flow-step">
-          <span class="flow-icon">4</span>
-          <div>
-            <div class="flow-label">Need more?</div>
-            <div class="flow-desc">One click for the developer to ask. One click for you to approve.</div>
-          </div>
-        </div>
+        ))}
       </div>
 
       <div class="cta-group">
@@ -1198,6 +1450,29 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     </div>
   </section>
 
+  <!-- ─── What a developer sees (three plain-language signals) ─ -->
+  <section class="section" id="what-you-see">
+    <span class="section-eyebrow" data-reveal>◎ What a developer sees</span>
+    <h2 data-reveal style="--reveal-delay:60ms">Three answers. That's the whole system.</h2>
+    <p class="section-sub" data-reveal style="--reveal-delay:120ms">
+      From the developer's side there's nothing to install and nothing to learn. They point
+      their usual coding tool at your gateway, and every request comes back one of three
+      ways.
+    </p>
+
+    <div class="signal-grid">
+      {signals.map((sig, i) => (
+        <div class={`signal signal--${sig.tone}`} data-reveal style={`--reveal-delay:${i * 90}ms`}>
+          <div class="signal-head">
+            <span class="signal-code">{sig.code}</span>
+            <span class="signal-title">{sig.title}</span>
+          </div>
+          <p class="signal-desc">{sig.desc}</p>
+        </div>
+      ))}
+    </div>
+  </section>
+
   <!-- ─── This is real (live gateway evidence) ───────────── -->
   <section class="section" id="this-is-real">
     <span class="section-eyebrow" data-reveal>⬛ This is real</span>
@@ -1275,6 +1550,39 @@ const base = rawBase.endsWith('/') ? rawBase : rawBase + '/';
     <p class="proof-note">
       Captured from a live FoundryGate gateway on 2026-09-01. Header names and timings are unedited.
     </p>
+
+    <a class="evidence-link" href={validationFolder} target="_blank" rel="noopener" data-reveal>
+      <FgIcon name="check" size={18} />
+      <span>
+        <strong>Live evidence</strong>
+        <span class="evidence-desc">
+          Every test run against a real deployed gateway is written up in the
+          <code>validation/</code> folder of the repository — one file per cycle, with the
+          raw responses.
+        </span>
+      </span>
+      <span class="evidence-arrow" aria-hidden="true">↗</span>
+    </a>
+  </section>
+
+  <!-- ─── Explore the docs (card navigation) ─────────────── -->
+  <section class="section" id="explore">
+    <span class="section-eyebrow" data-reveal>❑ Explore</span>
+    <h2 data-reveal style="--reveal-delay:60ms">Start wherever you like.</h2>
+    <p class="section-sub" data-reveal style="--reveal-delay:120ms">
+      The docs go from plain English to full detail. Take the first card if you want the
+      idea, the second if you want the picture, the rest when you're ready to build.
+    </p>
+
+    <div class="doc-grid">
+      {docCards.map((card, i) => (
+        <a class="doc-card" href={card.href} data-reveal style={`--reveal-delay:${i * 60}ms`}>
+          <span class="doc-card-icon"><FgIcon name={card.icon} size={20} /></span>
+          <span class="doc-card-title">{card.title}</span>
+          <span class="doc-card-desc">{card.desc}</span>
+        </a>
+      ))}
+    </div>
   </section>
 
   <!-- ─── Final CTA ──────────────────────────────────────── -->
