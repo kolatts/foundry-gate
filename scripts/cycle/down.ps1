@@ -42,7 +42,9 @@ param(
     [ValidateSet('KeepFoundry', 'Full')]
     [string] $Mode = 'KeepFoundry',
     [Parameter(HelpMessage = 'Return as soon as the deletes are accepted rather than waiting for them to finish.')]
-    [switch] $NoWait
+    [switch] $NoWait,
+    [Parameter(HelpMessage = 'Required to tear down a resource group that contains control-plane resources. There is no good reason to pass this.')]
+    [switch] $AllowControlPlane
 )
 
 Set-StrictMode -Version Latest
@@ -65,7 +67,27 @@ if ($null -eq $rg) {
     exit 0
 }
 
-$resources = @(Invoke-Az -Subscription $Subscription -Arguments @('resource', 'list', '--resource-group', $rgName))
+$resources = @(Invoke-Az -Subscription $Subscription -Arguments @('resource', 'list', '--resource-group', $rgName) | Where-Object { $null -ne $_ })
+
+# REFUSE to tear down a control-plane environment. -Environment is a free string defaulting to
+# `test`, and KeepFoundry — the DEFAULT mode, with no confirmation prompt — deletes every
+# resource in rg-foundrygate-$Environment that is not Foundry or telemetry. That is correct for
+# the gateway-only test environment this tool exists for, and catastrophic one typo later:
+# `down.ps1 -Environment dev` would take the SQL server, the Container App and the Static Web
+# App with it, because dev.bicepparam sets deployControlPlane = true. Nothing about the name
+# "KeepFoundry" warns you about that, so the script checks instead of trusting the name.
+$controlPlaneTypes = @(
+    'Microsoft.Sql/servers'
+    'Microsoft.App/containerApps'
+    'Microsoft.Web/staticSites'
+    'Microsoft.KeyVault/vaults'
+    'Microsoft.ContainerRegistry/registries'
+)
+$controlPlane = @($resources | Where-Object { $controlPlaneTypes -contains $_.type })
+if ($controlPlane.Count -gt 0 -and -not $AllowControlPlane) {
+    foreach ($c in $controlPlane) { Write-Host "  $($c.type)/$($c.name)" -ForegroundColor Red }
+    throw "$rgName holds $($controlPlane.Count) control-plane resource(s), listed above. scripts/cycle/ is a gateway-only test harness and will not delete a control-plane environment. If you genuinely mean to, pass -AllowControlPlane."
+}
 
 if ($Mode -eq 'KeepFoundry') {
     Write-CycleHeading "Tearing down $rgName (KeepFoundry — Foundry accounts and the telemetry stores survive)"

@@ -138,11 +138,14 @@ Save-CycleState -State $state
 Write-CycleHeading 'Waiting for the keys to propagate to the gateway'
 $openaiUrl = $state.outputs.openaiApiUrl
 $probeBody = @{ model = 'fg-propagation-probe'; max_tokens = 1; messages = @(@{ role = 'user'; content = 'x' }) } | ConvertTo-Json -Compress
-$deadline = (Get-Date).AddSeconds(180)
-
+$notReady = @()
 foreach ($name in $developers.Keys) {
     $key = $state.apimSubscriptions[$name].primaryKey
     $ready = $false
+    # Per key, not shared across the loop: a single deadline computed outside would give the
+    # first key the whole budget and leave the rest a few seconds each, then report them as
+    # "still 401 after 180s" when nothing was wrong with them.
+    $deadline = (Get-Date).AddSeconds(180)
     while (-not $ready -and (Get-Date) -lt $deadline) {
         $probe = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers @{ 'api-key' = $key } -Body $probeBody
         if ($probe.StatusCode -ne 401) { $ready = $true; break }
@@ -153,11 +156,22 @@ foreach ($name in $developers.Keys) {
     }
     else {
         Write-Host "  $name still 401 after 180s — the next stage will fail on it." -ForegroundColor Red
+        $notReady += $name
     }
 }
 
-Add-CycleCheck -State $state -Id 'SUB-1' -Name 'Developer keys issued against tier products' -Status 'PASS' `
-    -Detail ("dev-alice=standard, dev-bob=standard, dev-carol=power on {0}" -f $apimName)
+# SUB-1 reflects what actually happened. It used to be an unconditional PASS, which put a
+# green check in the evidence report for a stage that had just told the console every key
+# was still 401 — the one shape of wrong a check must never have.
+Add-CycleCheck -State $state -Id 'SUB-1' -Name 'Developer keys issued against tier products' `
+    -Status ($notReady.Count -eq 0 ? 'PASS' : 'FAIL') `
+    -Detail $(if ($notReady.Count -eq 0) {
+        "dev-alice=standard, dev-bob=standard, dev-carol=power on $apimName; all keys answering"
+    }
+    else {
+        # ${} required: a bare `$apimName:` is parsed as a scoped variable reference.
+        "Still 401 after 180s on ${apimName}: $($notReady -join ', ')"
+    })
 
 Write-CycleInfo "Keys stored in $(Get-CycleStatePath -Environment $Environment) (gitignored)."
 

@@ -7,8 +7,11 @@
     file is the single source, so re-running measure.ps1 later (Log Analytics ingestion lags)
     and then re-rendering picks up the new numbers without repeating the whole cycle.
 
-    Everything printed here is a recorded observation. Keys are redacted through
-    Protect-CycleSecret on the way into the state file and again on the way out.
+    Everything printed here is a recorded observation. Keys are redacted by
+    Protect-CycleSecret on the way INTO the state file, which is where the guarantee actually
+    lives — by the time this runs in a full cycle, down.ps1 has already dropped
+    apimSubscriptions from the state, so the second pass below has no key list left to match
+    against and is defence in depth rather than the primary control.
 
 .EXAMPLE
     pwsh scripts/cycle/report.ps1 -Path validation/2026-09-05-gateway-cycle.md
@@ -69,7 +72,14 @@ if ($state.ContainsKey('quotaTiers')) {
     $std = @($state.quotaTiers | Where-Object { $_.name -eq 'standard' })[0]
     Add-Line "| Standard tier under test | $($std.monthlyTokenQuota) tokens/month, $($std.tpm) TPM |"
 }
-Add-Line "| Claude deployment | $([bool]$state.claudeAvailable ? 'available' : '**not available** — see below') |"
+# ContainsKey-guarded: up.ps1 writes claudeAvailable only after a successful deploy, and under
+# Set-StrictMode a missing hashtable key THROWS. Unguarded, a failed `up` made report.ps1 throw
+# from inside cycle.ps1's finally block — losing the evidence report in exactly the case it
+# exists for.
+$claudeState = if (-not $state.ContainsKey('claudeAvailable')) { 'not determined (the deploy did not get that far)' }
+elseif ([bool]$state.claudeAvailable) { 'available' }
+else { '**not available** — see below' }
+Add-Line "| Claude deployment | $claudeState |"
 Add-Line "| Teardown | $($state.ContainsKey('teardownMode') ? $state.teardownMode : 'not run') |"
 Add-Line "| Checks | **$pass PASS**, $fail FAIL, $skip SKIP |"
 if ($state.ContainsKey('cycleElapsedSeconds')) {

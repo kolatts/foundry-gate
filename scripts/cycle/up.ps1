@@ -224,7 +224,10 @@ if ($SkipClaude) {
 
 if ($WhatIf) {
     Write-CycleHeading 'what-if'
-    $whatIfArgs = @('deployment', 'sub', 'what-if') + $deployArgs[3..($deployArgs.Count - 1)] + @('--name', $DeploymentName, '--location', $Location)
+    # Swap the verb rather than slicing $deployArgs by index. The previous form took
+    # $deployArgs[3..] and re-appended --name/--location, which both duplicated those two
+    # arguments and silently broke the moment anyone reordered $deployArgs above.
+    $whatIfArgs = @('deployment', 'sub', 'what-if') + $deployArgs[3..($deployArgs.Count - 1)]
     Invoke-Az -Subscription $Subscription -Raw -Arguments $whatIfArgs | Write-Host
 }
 

@@ -66,7 +66,9 @@ function Invoke-Stage {
     $ok = $true
     try {
         & (Join-Path $PSScriptRoot $Script) @Arguments
-        if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) { $ok = $false }
+        # Null guard FIRST: under Set-StrictMode an unset $LASTEXITCODE is a terminating
+        # error, so testing it before the guard meant the guard could never run.
+        if ($null -ne $LASTEXITCODE -and $LASTEXITCODE -ne 0) { $ok = $false }
     }
     catch {
         $ok = $false

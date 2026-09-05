@@ -253,6 +253,10 @@ if (-not [bool]$state.claudeAvailable) {
     Add-CycleCheck -State $state -Id 'C4' -Name 'claude -p completes against the gateway (Foundry mode)' -Status 'SKIP' `
         -Detail 'No Anthropic deployment reached Succeeded on this cycle (E-007), so the Claude Code env-var block is not verified by this run.'
 }
+elseif (-not ($claudePath = Resolve-CliPath -Name 'claude')) {
+    Add-CycleCheck -State $state -Id 'C4' -Name 'claude -p completes against the gateway (Foundry mode)' -Status 'SKIP' `
+        -Detail 'A Claude deployment exists, but the claude CLI is not on PATH on this machine.'
+}
 else {
     $claudeWork = Join-Path (Split-Path (Get-CycleStatePath -Environment $Environment)) "claude-work-$Environment"
     if (-not (Test-Path $claudeWork)) { New-Item -ItemType Directory -Path $claudeWork -Force | Out-Null }
@@ -266,7 +270,9 @@ else {
         $env:ANTHROPIC_DEFAULT_SONNET_MODEL = 'sonnet'
         $env:ANTHROPIC_DEFAULT_HAIKU_MODEL = 'haiku'
         $env:ANTHROPIC_DEFAULT_OPUS_MODEL = 'sonnet'  # power tier has no opus alias; point it at one it does have
-        $p = Start-Process -FilePath 'claude' -NoNewWindow -Wait -PassThru `
+        # Through Resolve-CliPath for the same reason codex is: Start-Process needs a real
+        # launchable file, and a bare name can resolve to an extension-less shim it cannot run.
+        $p = Start-Process -FilePath $claudePath -NoNewWindow -Wait -PassThru `
             -ArgumentList @('-p', 'reply with the single word pong') `
             -WorkingDirectory $claudeWork -RedirectStandardOutput $outFile -RedirectStandardError $errFile
         $out = (Get-Content -Path $outFile -Raw -ErrorAction SilentlyContinue) ?? ''

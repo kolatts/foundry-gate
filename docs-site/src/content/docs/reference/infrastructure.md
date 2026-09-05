@@ -80,20 +80,41 @@ pwsh scripts/cycle/cycle.ps1 -Subscription "<subscription name>"
 ```
 
 Roughly 35–55 minutes, unattended. It deploys the template with the `standard` tier shrunk
-to demo size (40 000 tokens/month, 8 000 TPM) so the 403 and 429 paths are reachable in a
-handful of requests, issues three developer keys against tier products, runs the enforcement
-matrix, drives a real Codex CLI session into both walls, reconciles the token counts out of
-Log Analytics with `UsageBySubscription.kql`, tears the gateway down and writes a markdown
+to demo size, issues three developer keys against tier products, runs the enforcement matrix,
+drives a real Codex CLI session into both walls, reconciles the token counts out of Log
+Analytics with `UsageBySubscription.kql`, tears the gateway down and writes a markdown
 evidence report to `validation/`.
+
+The two demo tiers have deliberately opposite shapes, because no single tier can demonstrate
+both meters:
+
+| Demo tier | Monthly | TPM | Proves |
+|---|---|---|---|
+| `standard` | 40 000 | 12 000 | the **429** wall — a tight per-minute cap |
+| `power` | 60 000 | 100 000 | the **403** wall — a small budget with room to spend it |
+
+The TPM floor is not arbitrary. `codex exec` spends ~9–10K tokens on its system prompt before
+doing anything, so a tier whose per-minute cap sits below one agent turn deadlocks the
+harness: it 429s, retries, keeps the bucket empty, gives up without finishing, and therefore
+never spends its monthly budget at all — the 403 becomes unreachable from behind the 429.
+Verified live across 25 consecutive execs at both 8 000 and 12 000 TPM
+([#237](https://github.com/kolatts/foundry-gate/issues/237)). These are the *demo* tiers only;
+the shipped defaults in `infra/main.bicep` are unaffected.
 
 Individual stages (`up`, `subscriptions`, `smoke`, `codex-test`, `measure`, `down`,
 `status`) can be run on their own; they share a gitignored state file under
 `scripts/cycle/.state/`.
 
 Teardown defaults to **`KeepFoundry`**, which deletes everything in the resource group
-*except* the Foundry accounts. That is not a convenience — Anthropic deployments are
-create-once per account, so destroying the accounts spends the next spin-up's only Claude
-create attempt. `-Mode Full` deletes and purges everything, and is labelled with that risk.
+*except* the Foundry accounts and the telemetry stores (Log Analytics workspace, Application
+Insights), and purges the soft-deleted APIM service. Each survivor earns its place: Anthropic
+deployments are create-once per account, so destroying the accounts spends the next spin-up's
+only Claude create attempt; Log Analytics ingestion lags the traffic by longer than a cycle
+takes, so deleting the workspace destroys the measurement evidence minutes before it arrives.
+Neither bills at rest — APIM, the one real idle cost, always goes. The APIM purge matters too:
+deleting the service only soft-deletes it and the name stays reserved, so without it the next
+spin-up fails with `ServiceAlreadyExistsInSoftDeletedState`. `-Mode Full` deletes and purges
+everything including the Foundry accounts, and is labelled with that risk.
 
 The agent-facing runbook, including the Anthropic create-once rules and the failure-mode
 table, is `.claude/skills/gateway-cycle/SKILL.md`. Committed evidence from real runs lives
@@ -132,7 +153,7 @@ workflows resolve resources from these patterns — changing one is a contract c
 | `monitoring.bicep` | Log Analytics (62-day retention — two full quota months) + App Insights |
 | `foundry.bicep` | one AIServices account + chained model deployments; keys disabled |
 | `foundry-rbac.bicep` | APIM identity → Cognitive Services User on each account |
-| `apim.bicep` | APIM v2, App Insights logger, `GatewayLlmLogs` diagnostic |
+| `apim.bicep` | APIM v2, App Insights logger, `GatewayLlmLogs` diagnostic (resource-specific — see below) |
 | `ai-gateway.bicep` | backends, priority pool + breakers, front-door APIs, tier products, alias named values |
 | `control-plane.bicep` | orchestrates everything below; owns the control-plane naming |
 | `managed-identities.bicep` | the two user-assigned identities |
@@ -144,6 +165,27 @@ workflows resolve resources from these patterns — changing one is a contract c
 | `control-plane-rbac.bicep` | all role assignments below |
 | `container-app.bicep` | Container Apps environment (logs via diagnostic setting — no workspace key) + the API app; bootstrap-image detection (port 80, `/health`-only probes) |
 | `function-app.bicep` | Flex Consumption plan + Function App, identity-based storage |
+
+### The gateway diagnostic setting must be resource-specific
+
+`apim.bicep` sets `logAnalyticsDestinationType: 'Dedicated'` on the diagnostic setting, and
+that line is load-bearing. Without it Azure Monitor sends `GatewayLogs` and `GatewayLlmLogs`
+to the legacy catch-all `AzureDiagnostics` table instead of the resource-specific
+`ApiManagementGatewayLlmLog` and `ApiManagementGatewayLogs` tables — and those two are exactly
+what `src/FoundryGate.Functions/Kql/UsageBySubscription.kql` joins.
+
+The failure is silent in every direction: the diagnostic setting reports enabled, rows really
+do arrive promptly, and the reconciliation query is valid and runs without error against a
+table that has no rows. Reconciliation simply returns nothing, forever
+([#244](https://github.com/kolatts/foundry-gate/issues/244)). If per-developer totals ever come
+back empty, check the destination type before suspecting ingestion lag:
+
+```kusto
+search * | summarize Rows = count() by $table
+AzureDiagnostics | summarize Rows = count() by Category
+```
+
+A fork that enables the gateway's GenAI diagnostic setting by hand needs the same property.
 
 ## Control-plane parameters
 
