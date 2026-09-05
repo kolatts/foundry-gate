@@ -209,10 +209,23 @@ if ($null -ne $quota403) {
     Assert-Check -Id 'T5b' -Name 'x-fg-remaining-quota reached 0 before the refusal' -Condition ($lastRemainingQuota -eq '0') `
         -Detail "last observed x-fg-remaining-quota=$lastRemainingQuota"
 
-    $rc = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
+    # What this proves is that the MONTHLY QUOTA counter is per-subscription: alice being out
+    # of budget must not touch carol. A transient 429 is a different meter entirely (carol's
+    # own TPM bucket, which an earlier stage may have just drained), so it is retried rather
+    # than counted as a failure — observed live once, where carol answered 429 with her
+    # monthly quota still showing the full 1000000 untouched.
+    $rc = $null
+    for ($try = 1; $try -le 3; $try++) {
+        $rc = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers (New-OpenAIHeaders $carol) -Body (New-ChatBody)
+        if ($rc.StatusCode -ne 429) { break }
+        $wait = [int](Get-ResponseHeader $rc 'Retry-After')
+        if ($wait -le 0 -or $wait -gt 65) { $wait = 20 }
+        Write-CycleInfo "dev-carol is TPM-throttled (not quota-blocked); waiting ${wait}s and retrying"
+        Start-Sleep -Seconds $wait
+    }
     Assert-Check -Id 'T5c' -Name 'Power-tier dev-carol still 200 while standard-tier dev-alice is quota-blocked' `
         -Condition ($rc.StatusCode -eq 200) `
-        -Detail "dev-carol HTTP $($rc.StatusCode), x-fg-remaining-quota=$(Get-ResponseHeader $rc 'x-fg-remaining-quota')"
+        -Detail "dev-carol HTTP $($rc.StatusCode), x-fg-remaining-quota=$(Get-ResponseHeader $rc 'x-fg-remaining-quota') while dev-alice is 403"
 }
 else {
     Assert-Check -Id 'T5a' -Name 'Monthly token quota exhausted -> 403' -Condition $false `

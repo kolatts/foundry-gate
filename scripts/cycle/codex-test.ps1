@@ -26,10 +26,16 @@
           system prompt alone, so a standard-tier key's 8K/minute cap throttles Codex
           *inside* its first session and "does Codex work at all" would be measuring the
           wrong thing.
-      C2/C3 run as dev-bob (standard tier), whose demo-sized budget smoke.ps1 deliberately
-          leaves intact. Two or three execs put him through the TPM wall and then the
-          monthly-quota wall, and the script records what Codex does at each: exit code and
-          stderr, next to the gateway's own answer probed independently.
+      C2  runs as dev-bob (standard tier, tight TPM). One or two execs put him through the
+          TPM wall, and what Codex does there is the finding: it 429s, retries, keeps the
+          bucket empty and eventually gives up with exit 1 without completing the exec.
+      C3  runs as dev-carol (power tier: generous TPM, small monthly budget). That is the
+          only shape in which a harness can reach the MONTHLY wall — from behind a tight TPM
+          cap codex never finishes an exec and so never spends its monthly budget at all
+          (#237, observed live across 25 consecutive execs at both 8000 and 12000 TPM).
+
+    Each wall records what Codex did — exit code and stderr — next to the gateway's own
+    answer, probed independently, because Codex reshapes and retries what it is told.
 
     and then, if a Claude deployment reached Succeeded, a Claude Code pass (`claude -p`)
     with the Foundry env vars from the same doc page. Claude Code is SKIPped, not failed,
@@ -149,11 +155,12 @@ function Invoke-CodexExec {
     }
 }
 
-# What the gateway is currently telling dev-bob, independent of how Codex renders it.
+# What the gateway is currently telling a given key, independent of how Codex renders it.
 # Codex retries and reshapes transport errors, so its own output is evidence of BEHAVIOUR;
 # this probe is evidence of the gateway's ANSWER.
 function Get-GatewayVerdict {
-    $r = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers @{ 'api-key' = $bobKey } `
+    param([Parameter(Mandatory)][string] $Key)
+    $r = Invoke-GatewayRequest -Uri "$openaiUrl/chat/completions" -Headers @{ 'api-key' = $Key } `
         -Body (@{ model = 'gpt'; max_tokens = 8; messages = @(@{ role = 'user'; content = 'ping' }) } | ConvertTo-Json -Compress)
     return [pscustomobject]@{
         StatusCode     = $r.StatusCode
@@ -178,36 +185,54 @@ if (-not $firstOk) {
     Add-CycleCheck -State $state -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Status 'SKIP' -Detail 'C1 did not succeed.'
 }
 else {
-    # ---- C2/C3: run codex until the gateway says 429, then until it says 403 -------
-    # codex burns ~9K tokens per exec on its own system prompt (T11), so a standard-tier
-    # key with a demo-sized budget hits both walls within a handful of runs.
-    Write-CycleHeading 'C2/C3 — running codex exec as dev-bob (standard tier) until the gateway refuses'
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
-    $seen429 = $null
-    $seen403 = $null
-    $execs = 1
-    while ($execs -lt $MaxExecs -and (Get-Date) -lt $deadline -and $null -eq $seen403) {
-        $execs++
-        $run = Invoke-CodexExec -Key $bobKey -Prompt "Write a 200-word explanation of TCP congestion control. Run number $execs. Do not run any commands."
-        $verdict = Get-GatewayVerdict
-        Write-CycleInfo ("exec {0}: codex exit={1}; gateway now {2} (tpm={3} quota={4})" -f $execs, $run.ExitCode, $verdict.StatusCode, $verdict.RemainingTpm, $verdict.RemainingQuota)
+    $totalExecs = 1
 
-        if ($null -eq $seen429 -and ($verdict.StatusCode -eq 429 -or $run.StdErr -match '429')) {
-            $seen429 = [pscustomobject]@{ Exec = $execs; Run = $run; Verdict = $verdict }
-        }
-        if ($verdict.StatusCode -eq 403 -and $verdict.FgError -eq '') {
-            $seen403 = [pscustomobject]@{ Exec = $execs; Run = $run; Verdict = $verdict }
+    # ---- C2: the TPM wall, on the tight-TPM tier ----------------------------------
+    # One exec is enough: codex spends ~9-10K tokens on its system prompt, which is most of
+    # a standard-tier minute, so the 429 arrives inside the first or second session.
+    Write-CycleHeading 'C2 — codex exec as dev-bob (standard tier, tight TPM) until the gateway says 429'
+    $seen429 = $null
+    $bobExecs = 0
+    while ($bobExecs -lt 3 -and $null -eq $seen429) {
+        $bobExecs++; $totalExecs++
+        $run = Invoke-CodexExec -Key $bobKey -Prompt "Write a 200-word explanation of TCP congestion control. Run number $bobExecs. Do not run any commands."
+        $verdict = Get-GatewayVerdict -Key $bobKey
+        Write-CycleInfo ("dev-bob exec {0}: codex exit={1}; gateway now {2} (tpm={3} quota={4})" -f $bobExecs, $run.ExitCode, $verdict.StatusCode, $verdict.RemainingTpm, $verdict.RemainingQuota)
+        if ($verdict.StatusCode -eq 429 -or $run.StdErr -match '429') {
+            $seen429 = [pscustomobject]@{ Exec = $bobExecs; Run = $run; Verdict = $verdict }
         }
     }
 
     if ($null -ne $seen429) {
         Assert-Check -Id 'C2' -Name 'Codex observed behaviour at the TPM 429 wall' -Condition $true `
-            -Detail ("after {0} execs: gateway 429 Retry-After={1}, x-fg-remaining-tpm={2}; codex exit={3}; stderr={4}" -f `
+            -Detail ("after {0} exec(s): gateway 429 Retry-After={1}, x-fg-remaining-tpm={2}; codex exit={3}; stderr={4}" -f `
                 $seen429.Exec, $seen429.Verdict.RetryAfter, $seen429.Verdict.RemainingTpm, $seen429.Run.ExitCode, (Format-BodyExcerpt $seen429.Run.StdErr 240))
     }
     else {
         Add-CycleCheck -State $state -Id 'C2' -Name 'Codex observed behaviour at the TPM 429 wall' -Status 'SKIP' `
-            -Detail "No 429 observed in $execs execs — the monthly quota was reached first (smoke.ps1 already proves the TPM path as T4a)."
+            -Detail "No 429 in $bobExecs execs against the standard tier (smoke.ps1 proves the TPM path independently as T4a)."
+    }
+
+    # ---- C3: the monthly wall, on the generous-TPM tier ---------------------------
+    # It HAS to be this tier. From behind a tight TPM cap codex 429s, retries, keeps the
+    # bucket empty and gives up without finishing an exec — so it never spends its monthly
+    # budget and the 403 is unreachable (#237, seen across 25 consecutive execs at both 8000
+    # and 12000 TPM). With TPM well above one exec, each run completes and the small monthly
+    # budget is gone in a handful of them.
+    Write-CycleHeading 'C3 — codex exec as dev-carol (power tier, generous TPM, small monthly budget) until the gateway says 403'
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $seen403 = $null
+    $carolExecs = 0
+    while ($totalExecs -lt $MaxExecs -and (Get-Date) -lt $deadline -and $null -eq $seen403) {
+        $carolExecs++; $totalExecs++
+        $run = Invoke-CodexExec -Key $carolKey -Prompt "Write a 200-word explanation of TCP congestion control. Run number $carolExecs. Do not run any commands."
+        $verdict = Get-GatewayVerdict -Key $carolKey
+        Write-CycleInfo ("dev-carol exec {0}: codex exit={1}; gateway now {2} (tpm={3} quota={4})" -f $carolExecs, $run.ExitCode, $verdict.StatusCode, $verdict.RemainingTpm, $verdict.RemainingQuota)
+        # Our own policy denials always set x-fg-error; a bare 403 is APIM's native
+        # token-quota refusal, which is the thing under test.
+        if ($verdict.StatusCode -eq 403 -and $verdict.FgError -eq '') {
+            $seen403 = [pscustomobject]@{ Exec = $carolExecs; Run = $run; Verdict = $verdict }
+        }
     }
 
     if ($null -ne $seen403) {
@@ -217,9 +242,9 @@ else {
     }
     else {
         Assert-Check -Id 'C3' -Name 'Codex observed behaviour at the monthly-quota 403 wall' -Condition $false `
-            -Detail "dev-bob's monthly budget was not exhausted within $execs execs / $TimeoutMinutes min."
+            -Detail "dev-carol's monthly budget was not exhausted within $carolExecs execs / $TimeoutMinutes min."
     }
-    $state.codexExecCount = $execs
+    $state.codexExecCount = $totalExecs
 }
 
 # ---- C4: Claude Code against the Anthropic front door -----------------------------

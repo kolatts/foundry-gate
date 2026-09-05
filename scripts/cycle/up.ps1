@@ -141,7 +141,12 @@ if ($create -and -not $SkipClaude) {
 # to az, which mangles anything outside the console code page.
 $quotaTiers = @(
     @{ name = 'standard'; displayName = 'Standard'; description = "Cycle demo tier - $MonthlyTokenQuota tokens/month, $Tpm TPM, small so 429/403 are reachable."; monthlyTokenQuota = $MonthlyTokenQuota; tpm = $Tpm }
-    @{ name = 'power'; displayName = 'Power'; description = 'Cycle demo tier - larger budget, stays 200 while standard is blocked.'; monthlyTokenQuota = 1000000; tpm = 40000 }
+    # The harness tier. TPM is deliberately generous and the MONTHLY budget deliberately
+    # small, which is the only shape in which an agent harness can reach the monthly wall:
+    # a tight TPM cap starves codex before it finishes an exec, so it never spends a monthly
+    # budget at all (#237). Standard, above, is the opposite shape and is what proves the
+    # TPM wall. Between them the two tiers cover both meters with real traffic.
+    @{ name = 'power'; displayName = 'Power'; description = 'Cycle demo tier - generous TPM, small monthly budget, so a real harness can reach the 403.'; monthlyTokenQuota = 60000; tpm = 100000 }
     @{ name = 'unlimited'; displayName = 'Unlimited'; description = 'Cycle demo tier - no native monthly quota, TPM smoothing only.'; monthlyTokenQuota = 0; tpm = 100000 }
 )
 $quotaTiersJson = Format-AzJsonArg -Value $quotaTiers -AsArray
