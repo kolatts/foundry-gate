@@ -318,12 +318,16 @@ silently cancelled. They stay as `workflow_dispatch` buttons for redeploying one
 Gating it all: six GitHub Environments (`dev`, `dev-plan`, `ui-preview`, `production`,
 `dev-destroy`, `prod-destroy`); `dev` is restricted to protected branches, so no pull request
 can reach the identity that is Owner on the subscription. The two Environments a pull request
-*can* reach are deliberately tiny: `dev-plan` is Reader on the subscription and does nothing but
-a what-if, and `ui-preview` holds a single custom role — `FoundryGate SWA Preview Publisher`,
-defined in `infra/modules/swa-preview-role.bicep` — assignable only on the dev Static Web App.
-A pull request runs its own copy of the workflow files, so the identity, not the workflow, is
-the boundary. **What has not happened yet**: a run against Azure. That needs the owner-side OIDC
-setup (#109) and is the live validation tracked in #105. Badges on the diagram mark the
+*can* reach are deliberately tiny: `ui-preview` holds a single custom role —
+`FoundryGate SWA Preview Publisher`, defined in `infra/modules/swa-preview-role.bicep` —
+assignable only on the dev Static Web App, and `dev-plan` was meant to be Reader-and-nothing-else
+for the PR what-if. That second one turned out to be impossible — ARM's what-if preflight
+authorizes every resource as a write, so no read-only identity can run it — and the PR what-if is
+switched off pending a decision (#229). A pull request runs its own copy of the workflow files,
+so the identity, not the workflow, is the boundary. The owner-side OIDC setup is **done for dev**
+(the [Owner Setup Runbook](/foundry-gate/reference/owner-setup/) is the commands that did it);
+**what has not happened yet** is the first full run against Azure, tracked in #105. Badges on the
+diagram mark the
 difference; the [CI/CD reference](/foundry-gate/reference/ci-cd/) lists every workflow, trigger
 and variable.
 

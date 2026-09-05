@@ -151,10 +151,22 @@ az rest --method POST \
 
 ### Nothing gets hardcoded into the repo
 
-`src/FoundryGate.Web/wwwroot/appsettings.json` keeps its zero-GUID placeholders. The
-deployed file is written at publish time by `_deploy-ui.yml` from
-`FG_ENTRA_WEB_CLIENT_ID` / `FG_ENTRA_API_CLIENT_ID` / `FG_API_BASE_URL`, so one repo
-serves every environment and a fork never inherits someone else's tenant.
+`src/FoundryGate.Web/wwwroot/appsettings.json` keeps its zero-GUID placeholders — do not
+edit it. `_deploy-ui.yml` rewrites the **published** copy after `dotnet publish`, from
+four sources:
+
+| Key it writes | Where the value comes from |
+|---|---|
+| `AzureAd.Authority` | `vars.AZURE_TENANT_ID` (so this variable is not optional — sign-in breaks without it) |
+| `AzureAd.ClientId` | `vars.FG_ENTRA_WEB_CLIENT_ID` |
+| `Api.Scopes` | `api://{vars.FG_ENTRA_API_CLIENT_ID}/access_as_user` |
+| `Api.BaseUrl` | the infra output `containerAppFqdn` — **not** a variable |
+
+`FG_API_BASE_URL` is a different thing: only the SWA *preview* job reads it, because a
+preview makes no subscription-scope call and so cannot resolve the FQDN from deployment
+outputs. Unset `FG_ENTRA_*` degrade to zero GUIDs with a `::warning::` rather than
+failing the deploy, so the pipeline can be proven before the app registrations exist. One
+repo serves every environment, and a fork never inherits someone else's tenant.
 
 ## 3. The SQL admin group
 
@@ -183,8 +195,22 @@ the deploy identity.
 | App registration | Federated subjects | RBAC |
 |---|---|---|
 | `foundrygate-ci-$ENV` | `environment:$ENV`, `environment:$ENV-destroy` | **Owner** on the subscription |
-| `foundrygate-ci-$ENV-plan` | `environment:$ENV-plan` | **Reader** on the subscription |
+| `foundrygate-ci-$ENV-plan` | `environment:$ENV-plan` | **Reader** — but see the warning below; this identity is currently unused |
 | `foundrygate-ci-ui-preview` | `environment:ui-preview` | custom SWA role, granted after the first deploy |
+
+:::caution[The PR-track what-if identity does not currently work — #229]
+`az deployment sub what-if` reads as a read-only operation and is documented across this
+repo as one, but ARM runs its **full preflight**, which authorizes every resource in the
+template *as a write*. A Reader identity fails with one `Authorization failed for template
+resource …/write` per resource — thirteen of them for this template. The narrowest
+identity that can what-if `main.bicep` is roughly `Contributor`, which is exactly the blast
+radius a separate PR-track identity exists to avoid.
+
+So create the registration and its federated credential if you like, but leave
+`dev-plan`'s three `AZURE_*` variables **unset**: `_deploy-infra.yml` then skips the job
+with a `::notice::` instead of failing every PR. #229 carries the options and is waiting on
+a decision.
+:::
 
 ```bash
 for n in ci-$ENV ci-$ENV-plan ci-ui-preview; do
@@ -238,31 +264,60 @@ a service principal member. Verify from the principal's side instead:
 
 ## 5. GitHub Environment variables
 
+The Environments themselves must already exist (`gh api -X PUT
+repos/$REPO/environments/dev`) — a variable POST against a missing Environment 404s. This
+repo's six were created earlier; a fork creates its own.
+
 ```bash
-set-var() { # env name value
-  gh api "repos/$REPO/environments/$1/variables/$2" >/dev/null 2>&1 \
-    && gh api -X PATCH "repos/$REPO/environments/$1/variables/$2" -f name="$2" -f value="$3" \
-    || gh api -X POST  "repos/$REPO/environments/$1/variables"    -f name="$2" -f value="$3"
+set-var() { # env name value — create or update, whichever applies
+  if gh api "repos/$REPO/environments/$1/variables/$2" >/dev/null 2>&1; then
+    gh api -X PATCH "repos/$REPO/environments/$1/variables/$2" -f name="$2" -f value="$3"
+  else
+    gh api -X POST "repos/$REPO/environments/$1/variables" -f name="$2" -f value="$3"
+  fi
 }
+
+for e in dev dev-destroy; do
+  set-var "$e" AZURE_CLIENT_ID        "<foundrygate-ci-$ENV client id>"
+  set-var "$e" AZURE_TENANT_ID        "$TENANT_ID"
+  set-var "$e" AZURE_SUBSCRIPTION_ID  "$SUB_ID"
+  set-var "$e" FG_ENTRA_API_CLIENT_ID "$API_APP_ID"
+  set-var "$e" FG_ENTRA_WEB_CLIENT_ID "$WEB_APP_ID"
+done
+
+for v in AZURE_CLIENT_ID:"<ui-preview client id>" AZURE_TENANT_ID:"$TENANT_ID" \
+         AZURE_SUBSCRIPTION_ID:"$SUB_ID" FG_STATIC_WEB_APP_NAME:stapp-foundrygate-$ENV \
+         FG_RESOURCE_GROUP:rg-foundrygate-$ENV FG_ENTRA_API_CLIENT_ID:"$API_APP_ID" \
+         FG_ENTRA_WEB_CLIENT_ID:"$WEB_APP_ID"; do
+  set-var ui-preview "${v%%:*}" "${v#*:}"
+done
 ```
 
-| Environment | Variables |
-|---|---|
-| `dev`, `dev-destroy` | `AZURE_CLIENT_ID` (deploy identity), `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `FG_ENTRA_API_CLIENT_ID`, `FG_ENTRA_WEB_CLIENT_ID` |
-| `dev-plan` | the three `AZURE_*` ids, using the **Reader** identity |
-| `ui-preview` | the three `AZURE_*` ids (preview identity), `FG_STATIC_WEB_APP_NAME`, `FG_RESOURCE_GROUP`, `FG_ENTRA_API_CLIENT_ID`, `FG_ENTRA_WEB_CLIENT_ID`, and `FG_API_BASE_URL` after the deploy |
+`dev-plan` gets **nothing** — see the caution in step 4. `ui-preview` also needs
+`FG_API_BASE_URL`, which only exists after the deploy (step 8).
 
-Leave `dev-plan` and `ui-preview` with **no** required reviewers and **no** branch policy:
+The `if`/`else` is deliberate rather than `&& … || …`: with the short-circuit form, a
+PATCH that fails for any reason (rate limit, transient 5xx) falls through to a POST that
+then 409s on the variable that already exists.
+
+Leave `dev-plan` and `ui-preview` with **no** required reviewers and **no** branch policy —
 both exist to serve PR-track jobs on unprotected branches, and a protection rule on either
-silently stops the thing it protects.
+silently stops the thing it protects. `dev-destroy` is the opposite case and does need its
+gate (required reviewer + 5 minute wait): it carries the same subscription-**Owner**
+identity as `dev`, pointed at `infra-destroy.yml`.
 
 Read them back with
 `gh api repos/$REPO/environments/dev/variables --jq '.variables[] | "\(.name)=\(.value)"'`.
 
 ## 6. Graph app roles for the managed identities
 
+:::note
 `id-foundrygate-api-$ENV` and `id-foundrygate-func-$ENV` do not exist until the first
-deploy — do this **after** step 7. Managed identities are service principals with no
+deploy has created them, so this step runs **after step 7**, alongside step 8. It is
+written here because it belongs with the other identity work.
+:::
+
+Managed identities are service principals with no
 application object, so `az ad app permission` does not apply; assign the app roles on the
 Graph service principal directly.
 
@@ -302,15 +357,25 @@ delete/recreate cycle can wedge the subscription's Marketplace agreement
 
 ## 8. After the first deploy
 
-Three things need values only the deploy can produce.
+Four things need values only the deploy can produce.
 
 ```bash
-OUT="az deployment sub show -n foundrygate-$ENV --query properties.outputs"
-SWA_HOST=$($OUT.staticWebAppHostname.value -o tsv)
-API_FQDN=$($OUT.containerAppFqdn.value -o tsv)
-ROLE_ID=$($OUT.swaPreviewRoleDefinitionId.value -o tsv)
-SCOPE=$($OUT.swaPreviewRoleAssignableScope.value -o tsv)
+SWA_HOST=$(az deployment sub show -n "foundrygate-$ENV" \
+  --query properties.outputs.staticWebAppHostname.value -o tsv)
+API_FQDN=$(az deployment sub show -n "foundrygate-$ENV" \
+  --query properties.outputs.containerAppFqdn.value -o tsv)
+SWA_ROLE_ID=$(az deployment sub show -n "foundrygate-$ENV" \
+  --query properties.outputs.swaPreviewRoleDefinitionId.value -o tsv)
+SWA_ROLE_SCOPE=$(az deployment sub show -n "foundrygate-$ENV" \
+  --query properties.outputs.swaPreviewRoleAssignableScope.value -o tsv)
 ```
+
+Spelled out rather than folded into one reusable command string: the compact version
+depends on bash word-splitting to glue the `--query` path onto the command, which zsh —
+the default shell on macOS — does not do, leaving all four variables silently empty. And
+`SWA_ROLE_ID`, not `ROLE_ID`: that name is already the `FoundryGate.Admin` app-role GUID
+from step 1, and reusing it breaks the app-role grant for anyone working this page
+top-to-bottom in one shell.
 
 1. **SPA redirect URI** for the real hostname — append, do not replace, or local dev
    sign-in breaks:
@@ -326,8 +391,15 @@ SCOPE=$($OUT.swaPreviewRoleAssignableScope.value -o tsv)
    a custom one scoped to exactly that Static Web App:
 
    ```bash
-   az role assignment create --assignee "<ui-preview client id>" --role "$ROLE_ID" --scope "$SCOPE"
+   az role assignment create \
+     --assignee-object-id "<ui-preview SP object id>" \
+     --assignee-principal-type ServicePrincipal \
+     --role "$SWA_ROLE_ID" --scope "$SWA_ROLE_SCOPE"
    ```
 
-3. **`FG_API_BASE_URL`** on `ui-preview` — `https://$API_FQDN/api/v1/`. The preview jobs
-   make no subscription-scope call by design, so they cannot read it from the outputs.
+3. **`FG_API_BASE_URL`** on `ui-preview` — `set-var ui-preview FG_API_BASE_URL
+   "https://$API_FQDN/api/v1/"`. The preview jobs make no subscription-scope call by
+   design, so they cannot read it from the outputs.
+
+4. **The managed identities' Graph app roles** — step 6 above, which could not run before
+   the identities existed.

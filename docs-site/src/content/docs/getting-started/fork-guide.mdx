@@ -44,13 +44,16 @@ This guide takes you from a blank Azure subscription to a running FoundryGate de
    - Value: `FoundryGate.Admin`
    - Allowed member types: Users/Groups
 
-   **Graph API permissions are granted later, not here.** The Entra sync calls Microsoft Graph as the
-   API's user-assigned managed identity (`id-foundrygate-api-{env}`, created by the Bicep deploy) — there is
-   no client secret. After the first infra deploy, grant that identity the Graph *application* roles
-   `Application.Read.All`, `User.Read.All` and `GroupMember.ReadBasic.All` as app-role assignments on the
-   Microsoft Graph service principal (the [Infrastructure Reference](/foundry-gate/reference/infrastructure/#role-assignments)
-   lists them; [#120](https://github.com/kolatts/foundry-gate/issues/120) has a PowerShell snippet). Then set
-   `Entra__Enabled=true` on the API.
+   **Graph API permissions are granted later, not here.** The Entra sync calls Microsoft Graph as a
+   user-assigned managed identity (created by the Bicep deploy) — there is no client secret. After the
+   first infra deploy, grant the Graph *application* roles `Application.Read.All`, `User.Read.All` and
+   `GroupMember.ReadBasic.All` as app-role assignments on the Microsoft Graph service principal to
+   **both** `id-foundrygate-api-{env}` **and** `id-foundrygate-func-{env}`. Both, because the nightly
+   `EntraSyncFunction` calls Graph as the *Functions* identity — grant only the API's and every nightly
+   run fails with `Authorization_RequestDenied` while the on-demand sync in the UI works fine, which is a
+   confusing way to find out. The [Owner Setup Runbook](/foundry-gate/reference/owner-setup/#6-graph-app-roles-for-the-managed-identities)
+   has the loop that does both; [#120](https://github.com/kolatts/foundry-gate/issues/120) has a
+   PowerShell equivalent. Then set `Entra__Enabled=true` on **both** hosts.
 
 3. ### Configure APIM
 
@@ -195,7 +198,7 @@ Check that the `foundrygate` product is published and your APIM subscription is 
 `Entra__Enabled` is still `false` on the API — the response says so, and names the Graph roles. Turn it on once the roles below are granted. (It is a 503 rather than a 400 because nothing is wrong with the request: the host has not been configured for the feature.)
 
 **`POST /users/sync` fails with 500 (`Authorization_RequestDenied` in the API logs)**  
-The API's managed identity (`id-foundrygate-api-{env}`) is missing one of the Graph application roles `Application.Read.All`, `User.Read.All`, `GroupMember.ReadBasic.All`. Grant them as app-role assignments on the Microsoft Graph service principal (see [#120](https://github.com/kolatts/foundry-gate/issues/120)); no restart is needed.
+The API's managed identity (`id-foundrygate-api-{env}`) is missing one of the Graph application roles `Application.Read.All`, `User.Read.All`, `GroupMember.ReadBasic.All`. Grant them as app-role assignments on the Microsoft Graph service principal ([Owner Setup Runbook §6](/foundry-gate/reference/owner-setup/#6-graph-app-roles-for-the-managed-identities)); no restart is needed. If the on-demand sync works but the **nightly** one fails the same way, it is the other identity — `id-foundrygate-func-{env}` needs the same three roles.
 
 **`POST /users/sync` returns `skippedGroupAssignmentCount > 0` and never deactivates anyone**  
 Group assignments *are* expanded to their members ([#121](https://github.com/kolatts/foundry-gate/issues/121)), so this count is `0` on a healthy tenant. Non-zero means the API could not read one of the assigned groups — usually a missing `GroupMember.ReadBasic.All`, sometimes a group that has been deleted. The run saw only part of your developer population, so it deliberately deactivates nobody; the group is named in the API log and in the `users.synced` audit row. Fix the role (or unassign the deleted group) and re-run.

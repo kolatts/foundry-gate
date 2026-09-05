@@ -194,8 +194,9 @@ gateway is still enforcing — loud and reconcilable rather than silently diverg
 honest failure mode for a missing role.
 
 Not expressible in Bicep. Two of these the deploy pipeline now does itself through the
-`foundrygate` CLI; the rest remain operator steps tracked in
-[#109](https://github.com/kolatts/foundry-gate/issues/109):
+`foundrygate` CLI; the rest are operator steps, with the exact commands in the
+[Owner Setup Runbook](/foundry-gate/reference/owner-setup/) and the remaining production
+work tracked in [#109](https://github.com/kolatts/foundry-gate/issues/109):
 
 | Step | Who does it |
 |---|---|
