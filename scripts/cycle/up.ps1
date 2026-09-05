@@ -134,13 +134,29 @@ if ($create -and -not $SkipClaude) {
     Write-Host '  NOTE: this run will make its ONE Anthropic create attempt (E-007). It is never retried.' -ForegroundColor Yellow
 }
 
-# ---- 2b. Clear a soft-deleted APIM holding the name ------------------------------
-# APIM soft-deletes on delete and keeps the name reserved, so a deploy into a name whose
-# previous service is still in the soft-deleted state fails with
-# ServiceAlreadyExistsInSoftDeletedState. down.ps1 purges on the way out; this is the
-# recovery path for a gateway torn down some other way (a hand-run `az apim delete`, an
-# older cycle, someone deleting the resource group in the portal).
+# ---- 2b. Make sure the APIM name is actually free --------------------------------
+# Two different ways a previous teardown blocks this deploy, and they need different waits:
+#
+#   still deleting  the service is mid-transition and ARM answers `ServiceLocked: The API
+#                   Service ... is transitioning at this time`. Only time fixes it.
+#   soft-deleted    the delete finished but the NAME stays reserved, and ARM answers
+#                   `ServiceAlreadyExistsInSoftDeletedState`. Only a purge fixes it.
+#
+# A teardown immediately followed by a spin-up — which is the normal shape of "run the cycle
+# again" — hits the first, then the second. So: wait out any transition, then purge.
 $apimName = "apim-foundrygate-$Environment-$((Select-String -Path $paramFile -Pattern "nameSuffix\s*=\s*'([^']+)'").Matches[0].Groups[1].Value)"
+
+$transitionDeadline = (Get-Date).AddMinutes(15)
+while ((Get-Date) -lt $transitionDeadline) {
+    $existing = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+        'apim', 'show', '--name', $apimName, '--resource-group', $resourceGroup, '--query', 'provisioningState'
+    )
+    # Absent (the usual case) or already Succeeded: nothing to wait for.
+    if ($null -eq $existing -or $existing -eq 'Succeeded') { break }
+    Write-CycleInfo "APIM $apimName is $existing — waiting for it to settle before deploying."
+    Start-Sleep -Seconds 30
+}
+
 $softDeleted = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
     'apim', 'deletedservice', 'list', '--query', "[?name=='$apimName']"
 )
