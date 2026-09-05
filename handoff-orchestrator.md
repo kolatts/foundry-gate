@@ -94,8 +94,26 @@ this red run until the owner actions below are done.
 
 ## Owner actions, in order
 
-These cannot be done by an agent (Entra/Graph app registrations, RBAC grants, GitHub
-Environment variables/reviewers). Full reference:
+> **Status 2026-09-05 — dev is done.** Everything in steps 1–5 below was executed for
+> `dev` from a CLI session signed in as the owner (`az` + `gh`), not by hand in the
+> portal, and the exact commands are the runbook in
+> `docs-site/src/content/docs/reference/owner-setup.md`. An agent with an owner-signed-in
+> `az`/`gh` CLI *can* do all of it — the earlier "cannot be done by an agent" wording was
+> about privileges, not tooling. Production identities are deliberately **not** created
+> yet (#109). The identifiers created for dev:
+>
+> | Thing | Name | Client / object id |
+> |---|---|---|
+> | API app registration | `FoundryGate.Api (dev)` | `7e7d0561-0973-411d-ba62-a667cbfec1d9` |
+> | SPA app registration | `FoundryGate.Web (dev)` | `21b82312-f9f9-4be6-b243-34bf7256b557` |
+> | CI deploy identity (Owner) | `foundrygate-ci-dev` | `88f05620-03f2-408e-810f-0e25f668b6a7` |
+> | PR what-if identity (Reader) | `foundrygate-ci-dev-plan` | `ec8f8758-43f7-4a5c-9ad4-70d71807ec76` |
+> | SWA preview identity | `foundrygate-ci-ui-preview` | `073418b1-a73f-4997-8805-5f3a9ec0fbda` |
+> | SQL admin group | `SG_FOUNDRYGATE_SQL_ADMINS` | `186dafe0-e7af-4bc8-940d-cac5314ffe82` |
+
+The steps below stay as the reference shape (and are what a **production** environment
+still needs). Full reference:
+`docs-site/src/content/docs/reference/owner-setup.md`,
 `docs-site/src/content/docs/reference/infrastructure.md` and
 `docs-site/src/content/docs/reference/ci-cd.md`.
 
