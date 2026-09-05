@@ -121,7 +121,7 @@ workflows resolve resources from these patterns — changing one is a contract c
 |---|---|---|---|
 | `deployControlPlane` | `true` | `true` | default `false` (gateway only) |
 | `appEnvironment` | `qa` | `prod` | `ASPNETCORE_ENVIRONMENT` — lowercase `qa`/`prod`; `local` is docker-only |
-| `sqlAdminGroupObjectId` / `sqlAdminGroupName` | `SG_IMAGILE_SQL_ADMINS` | `$FG_SQL_ADMIN_GROUP_OBJECT_ID` / `$FG_SQL_ADMIN_GROUP_NAME` (required) | SQL server administrator (Entra-only auth; no SQL login exists) |
+| `sqlAdminGroupObjectId` / `sqlAdminGroupName` | `SG_FOUNDRYGATE_SQL_ADMINS` | `$FG_SQL_ADMIN_GROUP_OBJECT_ID` / `$FG_SQL_ADMIN_GROUP_NAME` (required) | SQL server administrator (Entra-only auth; no SQL login exists) |
 | `sqlDatabaseSku` | `GP_S_Gen5` ×1 — serverless, 60-min auto-pause | `GP_Gen5_2`, provisioned | serverless is derived from the SKU name (`GP_S_*`) |
 | `sqlBackupStorageRedundancy` | `Local` | `Geo` | |
 | `sqlZoneRedundant` | `false` | `true` | survives the loss of one availability zone without a restore; adds ~60% to the SQL compute meter (see [Cost & capacity](/foundry-gate/reference/cost-and-capacity/)) |
@@ -194,8 +194,9 @@ gateway is still enforcing — loud and reconcilable rather than silently diverg
 honest failure mode for a missing role.
 
 Not expressible in Bicep. Two of these the deploy pipeline now does itself through the
-`foundrygate` CLI; the rest remain operator steps tracked in
-[#109](https://github.com/kolatts/foundry-gate/issues/109):
+`foundrygate` CLI; the rest are operator steps, with the exact commands in the
+[Owner Setup Runbook](/foundry-gate/reference/owner-setup/) and the remaining production
+work tracked in [#109](https://github.com/kolatts/foundry-gate/issues/109):
 
 | Step | Who does it |
 |---|---|

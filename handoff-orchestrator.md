@@ -52,7 +52,7 @@ create-once (E-007) — never re-PUT, never delete/recreate in a loop.
 **CI/CD**: single `deploy-all.yml` chain on push to main — infra → dacpac db deploy
 (runner IP whitelist → firewall wait → deploy → seed → grant identities → remove
 firewall rule) → api/functions/ui → postdeployment tests → summary, OIDC only (no
-credential JSON). GitHub Environments: `dev`, `dev-plan` (Reader-only, PR what-if),
+credential JSON). GitHub Environments: `dev`, `dev-plan` (read-only, PR what-if),
 `ui-preview` (SWA preview publish, custom role), `production` (1 reviewer),
 `dev-destroy` (reviewer + 5 min), `prod-destroy` (reviewer + 30 min, needs a **second**
 reviewer — only one collaborator exists today), `github-pages`. A production
@@ -84,18 +84,36 @@ Bicep. The gateway data plane was live-validated once (2026-09-01, Imagile Paid)
 purged. Every "live-validate X" issue below describes work that literally cannot be
 attempted until a real `dev` deploy exists.
 
-The first `Deploy All` run on main **stops at the OIDC guard by design**: `dev`'s
-`AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` variables are unset, so
-`Infra - Deploy (dev)` fails loudly with `GitHub Environment 'dev' is missing the
-variable(s): ...` and every downstream stage is skipped. Confirmed run:
-https://github.com/kolatts/foundry-gate/actions/runs/33596580833. This is the intended
-failure mode, not a bug — every push to main touching a deployable path will produce
-this red run until the owner actions below are done.
+Until 2026-09-05 the first `Deploy All` run on main **stopped at the OIDC guard by
+design**: `dev`'s `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_SUBSCRIPTION_ID` variables
+were unset, so `Infra - Deploy (dev)` failed loudly with `GitHub Environment 'dev' is
+missing the variable(s): ...` and every downstream stage was skipped. Confirmed run:
+https://github.com/kolatts/foundry-gate/actions/runs/33596580833. That was the intended
+failure mode, not a bug. **All three variables are now set** (see the status block under
+"Owner actions" below), so the guard passes and the chain runs for real.
 
 ## Owner actions, in order
 
-These cannot be done by an agent (Entra/Graph app registrations, RBAC grants, GitHub
-Environment variables/reviewers). Full reference:
+> **Status 2026-09-05 — dev is done.** Everything in steps 1–5 below was executed for
+> `dev` from a CLI session signed in as the owner (`az` + `gh`), not by hand in the
+> portal, and the exact commands are the runbook in
+> `docs-site/src/content/docs/reference/owner-setup.md`. An agent with an owner-signed-in
+> `az`/`gh` CLI *can* do all of it — the earlier "cannot be done by an agent" wording was
+> about privileges, not tooling. Production identities are deliberately **not** created
+> yet (#109). The identifiers created for dev:
+>
+> | Thing | Name | Client / object id |
+> |---|---|---|
+> | API app registration | `FoundryGate.Api (dev)` | `7e7d0561-0973-411d-ba62-a667cbfec1d9` |
+> | SPA app registration | `FoundryGate.Web (dev)` | `21b82312-f9f9-4be6-b243-34bf7256b557` |
+> | CI deploy identity (Owner) | `foundrygate-ci-dev` | `88f05620-03f2-408e-810f-0e25f668b6a7` |
+> | PR what-if identity (Reader; job off, #229) | `foundrygate-ci-dev-plan` | `ec8f8758-43f7-4a5c-9ad4-70d71807ec76` |
+> | SWA preview identity | `foundrygate-ci-ui-preview` | `073418b1-a73f-4997-8805-5f3a9ec0fbda` |
+> | SQL admin group | `SG_FOUNDRYGATE_SQL_ADMINS` | `186dafe0-e7af-4bc8-940d-cac5314ffe82` |
+
+The steps below stay as the reference shape (and are what a **production** environment
+still needs). Full reference:
+`docs-site/src/content/docs/reference/owner-setup.md`,
 `docs-site/src/content/docs/reference/infrastructure.md` and
 `docs-site/src/content/docs/reference/ci-cd.md`.
 
@@ -108,13 +126,15 @@ Environment variables/reviewers). Full reference:
   bootstrap deploy succeed but rejects every token until the real id is set).
 - **`FoundryGate.Web`** SPA app registration with the SWA hostname
   (`stapp-foundrygate-{env}.<n>.azurestaticapps.net`, output `staticWebAppHostname`) as
-  redirect URI. Set `FG_ENTRA_WEB_CLIENT_ID`; update
-  `src/FoundryGate.Web/wwwroot/appsettings.json` placeholders.
+  redirect URI. Set `FG_ENTRA_WEB_CLIENT_ID`. **Do not** edit
+  `src/FoundryGate.Web/wwwroot/appsettings.json` — it keeps its zero-GUID placeholders,
+  and `_deploy-ui.yml` writes the real values into the published copy at deploy time.
 
 ### 2. Dedicated SQL Entra admin group (#109 item 3–4)
 
-- Create `SG_FOUNDRYGATE_SQL_ADMINS` (dev) and a separate production group. Dev currently
-  falls back to `SG_IMAGILE_SQL_ADMINS` (`2ed4d6b7-575c-4046-aeb0-eb51bc254ef5`);
+- `SG_FOUNDRYGATE_SQL_ADMINS` **exists for dev** (`186dafe0-e7af-4bc8-940d-cac5314ffe82`,
+  created 2026-09-05) and `dev.bicepparam` points at it; the earlier tenant-wide
+  `SG_IMAGILE_SQL_ADMINS` fallback is gone. **Production still needs its own group** —
   `prod.bicepparam` has **no default** and fails loudly (`FG_SQL_ADMIN_GROUP_OBJECT_ID`,
   `FG_SQL_ADMIN_GROUP_NAME` required, no fallback) until the production group exists.
 - Add the CI OIDC app registration (step 3 below) to that group — Azure SQL is
@@ -137,10 +157,17 @@ az ad app federated-credential create --id <appObjectId> --parameters '{
 for `<env>` in `dev`, `production`, `dev-destroy`, `prod-destroy` — **plus two more,
 narrower identities added mid-pass**:
 
-- **`dev-plan`** (PR what-if only): a **separate, Reader-only** app registration.
+- **`dev-plan`** (PR what-if only): a **separate, read-only** app registration.
   Subject `repo:kolatts/foundry-gate:environment:dev-plan`. RBAC: **Reader** on the
-  subscription, nothing else. Variables: `AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/
-  `AZURE_SUBSCRIPTION_ID` (the Reader app), optionally `AZURE_LOCATION`.
+  subscription, nothing else. **This does not work, and the job is currently off** — see
+  **#229** (`needs-human`). `az deployment sub what-if` runs ARM's full preflight, which
+  authorizes every resource in the template *as a write*, so a Reader identity fails with
+  thirteen `Authorization failed for template resource …/write` errors. The narrowest
+  identity that can what-if this template is roughly `Contributor`, which is precisely the
+  blast radius `dev-plan` exists to avoid. The app registration, its federated credential
+  and its Reader assignment all exist; its three `AZURE_*` variables are deliberately
+  **unset**, which makes `_deploy-infra.yml` skip the job with a `::notice::` instead of
+  failing every PR. #229 has the four options and needs an owner decision.
 - **`ui-preview`** (SWA PR previews, #155): a **third** app registration, preview-only.
   Subject `repo:kolatts/foundry-gate:environment:ui-preview`. RBAC is a **custom role**
   (no built-in role covers `Microsoft.Web/staticSites` actions without `Contributor`'s

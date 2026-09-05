@@ -40,9 +40,11 @@ param deployControlPlane = true
 
 // Entra security group that administers Azure SQL (Entra-only auth, no SQL login). The
 // CI OIDC principal must be a member for the dacpac deploy to connect (#109). Object ids
-// are identifiers, not secrets. Dev shares the tenant's existing SQL admin group.
-param sqlAdminGroupObjectId = '2ed4d6b7-575c-4046-aeb0-eb51bc254ef5'
-param sqlAdminGroupName = 'SG_IMAGILE_SQL_ADMINS'
+// are identifiers, not secrets. Dedicated dev group, created 2026-09-05 — members are the
+// owner and the `foundrygate-ci-dev` OIDC service principal. Replaces the earlier
+// tenant-wide `SG_IMAGILE_SQL_ADMINS` fallback.
+param sqlAdminGroupObjectId = '186dafe0-e7af-4bc8-940d-cac5314ffe82'
+param sqlAdminGroupName = 'SG_FOUNDRYGATE_SQL_ADMINS'
 
 // Serverless GP_S_Gen5 x1 (the main.bicep default): auto-pauses after 60 idle minutes.
 // That pause is real only because nothing polls the database — the API's readiness probe
