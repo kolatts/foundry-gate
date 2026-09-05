@@ -33,6 +33,10 @@
 //   stapp-foundrygate-{env}            Static Web App
 param environmentName string
 param location string
+
+@description('Region for the Azure SQL logical server. Defaults to `location`; override only when the primary region refuses new SQL servers (see modules/sql.bicep).')
+param sqlLocation string = location
+
 param nameSuffix string
 param tags object = {}
 
@@ -160,7 +164,7 @@ module sql 'sql.bicep' = {
   params: {
     sqlServerName: names.sqlServer
     sqlDatabaseName: names.sqlDatabase
-    location: location
+    location: sqlLocation
     tags: controlPlaneTags
     entraAdminGroupObjectId: sqlAdminGroupObjectId
     entraAdminGroupName: sqlAdminGroupName

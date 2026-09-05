@@ -122,6 +122,7 @@ workflows resolve resources from these patterns — changing one is a contract c
 | `deployControlPlane` | `true` | `true` | default `false` (gateway only) |
 | `appEnvironment` | `qa` | `prod` | `ASPNETCORE_ENVIRONMENT` — lowercase `qa`/`prod`; `local` is docker-only |
 | `sqlAdminGroupObjectId` / `sqlAdminGroupName` | `SG_FOUNDRYGATE_SQL_ADMINS` | `$FG_SQL_ADMIN_GROUP_OBJECT_ID` / `$FG_SQL_ADMIN_GROUP_NAME` (required) | SQL server administrator (Entra-only auth; no SQL login exists) |
+| `sqlLocation` | `centralus` | set it explicitly | region for the SQL logical server, defaulting to `location`. Dev overrides it because **`eastus2` and `eastus` are both closed to new Azure SQL servers** on this subscription — see below |
 | `sqlDatabaseSku` | `GP_S_Gen5` ×1 — serverless, 60-min auto-pause | `GP_Gen5_2`, provisioned | serverless is derived from the SKU name (`GP_S_*`) |
 | `sqlBackupStorageRedundancy` | `Local` | `Geo` | |
 | `sqlZoneRedundant` | `false` | `true` | survives the loss of one availability zone without a restore; adds ~60% to the SQL compute meter (see [Cost & capacity](/foundry-gate/reference/cost-and-capacity/)) |
@@ -143,6 +144,45 @@ workflows resolve resources from these patterns — changing one is a contract c
 Nothing in a parameter file is a secret: SQL is Entra-only, storage is identity-based,
 registry pulls are identity-based, and the App Insights connection string is a module
 output. Entra object ids and client ids are identifiers, not credentials.
+
+### Why `sqlLocation` exists
+
+Azure closes individual regions to **new** Azure SQL logical servers as a capacity action,
+and there is no way to see it coming: it is not a quota you can read, not a SKU
+availability query, not anything `az sql server list-usages` reports. The only signal is
+attempting a create and getting `ProvisioningDisabled` / `RegionDoesNotAllowProvisioning`.
+
+Probed on the dev subscription, 2026-09-05:
+
+| Region | New SQL server |
+|---|---|
+| `eastus2` | refused |
+| `eastus` | refused |
+| `centralus` | created |
+
+Both the primary region and its obvious neighbour were shut, which is why dev's SQL lives
+in `centralus` while everything else stays in `eastus2`. Existing servers in a closed
+region keep working — only creation is blocked, and it can reopen (or close) without
+notice. The cross-region hop between the Container App and SQL is a real latency cost,
+accepted for dev.
+
+**Set `sqlLocation` explicitly for production** rather than letting it inherit `location`,
+so a prod day-0 does not discover this the way dev did
+([#241](https://github.com/kolatts/foundry-gate/issues/241)). The alternative is a support
+request (Issue type *Service and subscription limits*) to reopen the primary region — worth
+it when co-location matters, not worth blocking a first deploy on.
+
+:::danger[`sqlLocation` is immutable once the server exists]
+`Microsoft.Sql/servers.location` cannot be changed in place. Setting it is a **one-shot
+decision per environment**: change it after the first deploy and the incremental deployment
+*fails* rather than moving anything, and the recovery is exporting the database and
+re-creating it on a new server. Pick it before an environment's first deploy — afterwards it
+is a migration, not a parameter.
+
+Two things must agree with it: `sqlZoneRedundant` requires a region that actually has
+availability zones, and `sqlBackupStorageRedundancy = 'Geo'` geo-pairs from *this* region,
+not from `location`.
+:::
 
 ## Role assignments
 

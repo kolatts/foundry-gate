@@ -51,6 +51,17 @@ param sqlAdminGroupName = 'SG_FOUNDRYGATE_SQL_ADMINS'
 // deliberately hits the hermetic /health, not /health/ready (modules/container-app.bicep).
 param sqlBackupStorageRedundancy = 'Local'
 
+// NOT eastus2, and this is not a preference. On 2026-09-05 both eastus2 and eastus were
+// closed to new Azure SQL logical servers for this subscription — the ARM deploy fails with
+// `ProvisioningDisabled` and a direct `az sql server create` with
+// `RegionDoesNotAllowProvisioning`; no quota or SKU query predicts either. centralus was
+// open; probed directly (#241). The cross-region hop to the Container App in eastus2 is
+// acceptable for dev.
+//
+// Immutable: `Microsoft.Sql/servers.location` cannot change in place, so moving this back to
+// eastus2 if the region reopens is a database migration, not a param edit.
+param sqlLocation = 'centralus'
+
 param entraApiClientId = readEnvironmentVariable('FG_ENTRA_API_CLIENT_ID', '00000000-0000-0000-0000-000000000000')
 param apiContainerImage = readEnvironmentVariable('FG_API_IMAGE')
 
