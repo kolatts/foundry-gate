@@ -209,13 +209,14 @@ else
             return;
         }
 
+        var created = new List<FoundryDeploymentResponse>();
+
         _busy = true;
         try
         {
             // One POST per account, in order, each reported on its own: the API creates one deployment
             // in one account by design (E-007), and a second region failing must not read as the first
             // one having failed too.
-            var created = new List<FoundryDeploymentResponse>();
             foreach (var accountName in plan.AccountNames)
             {
                 var result = await Api.CreateFoundryDeploymentAsync(plan.Template with { AccountName = accountName });
@@ -244,12 +245,15 @@ else
 
             _provisioned = created[0].DeploymentName;
             await LoadAsync();
-            await PollUntilSettledAsync(created);
         }
         finally
         {
             _busy = false;
         }
+
+        // Deliberately outside the busy block: waiting for ARM is not a reason to disable the page for
+        // a minute, and the poll loop renders as it goes.
+        await PollUntilSettledAsync(created);
     }
 
     /// <summary>
@@ -270,32 +274,51 @@ else
             return;
         }
 
+        // Captured once: Dispose() cancels and then disposes the source, and reading .Token afterwards
+        // throws ObjectDisposedException rather than the cancellation this loop is waiting for.
+        var cancellationToken = _pageCts.Token;
+
         _polling = true;
+
+        // The loop runs inside the click handler's await chain, so Blazor renders nothing until it
+        // returns unless it asks — without these the "waiting for Azure" line and every refreshed row
+        // would appear all at once, a minute after they stopped being news.
+        StateHasChanged();
+
         try
         {
             for (var attempt = 0; attempt < MaxPollAttempts && pending.Count > 0; attempt++)
             {
-                await Task.Delay(PollInterval, _pageCts.Token);
+                await Task.Delay(PollInterval, cancellationToken);
 
+                var settled = false;
                 foreach (var (accountName, deploymentName) in pending.ToList())
                 {
-                    var result = await Api.GetFoundryDeploymentAsync(accountName, deploymentName, _pageCts.Token);
+                    var result = await Api.GetFoundryDeploymentAsync(accountName, deploymentName, cancellationToken);
 
                     // A read that failed says nothing about the deployment, but it does say polling is
                     // not going to answer the question — stop asking rather than burning the budget.
                     if (result is not { IsSuccess: true, Value: not null })
                     {
                         _ = pending.Remove((accountName, deploymentName));
+                        settled = true;
                         continue;
                     }
 
                     if (TerminalStates.Contains(result.Value.ProvisioningState, StringComparer.OrdinalIgnoreCase))
                     {
                         _ = pending.Remove((accountName, deploymentName));
+                        settled = true;
                     }
                 }
 
-                await LoadAsync();
+                // The grid is a multi-account ARM listing; re-reading it every three seconds to render
+                // the same chips is the expensive way to display nothing new. Only a state that moved
+                // is worth a refresh.
+                if (settled)
+                {
+                    await LoadAsync();
+                }
             }
         }
         catch (OperationCanceledException)
@@ -305,6 +328,7 @@ else
         finally
         {
             _polling = false;
+            StateHasChanged();
         }
     }
 

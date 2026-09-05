@@ -124,6 +124,76 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
     }
 
     [Fact]
+    public async Task Reading_a_tier_twice_asks_APIM_once()
+    {
+        // Rendering /models asks for every tier's map twice — once for the counts, once per tier for
+        // the rows — and each read would otherwise re-enumerate every Foundry account behind it.
+        const string Tier = GatewayTiers.Power;
+        factory.Apim.SeedNamedValue(GatewayModelMap.NamedValueName(Tier), "{}");
+
+        using var client = await AdminClientAsync();
+        var path = new Uri($"{TiersPath}/{Tier}/models", UriKind.Relative);
+
+        _ = await client.GetAsync(path);
+        var afterFirst = factory.Apim.Calls.Count(call => call == $"GetNamedValue:{GatewayModelMap.NamedValueName(Tier)}");
+
+        _ = await client.GetAsync(path);
+
+        Assert.Equal(afterFirst, factory.Apim.Calls.Count(call => call == $"GetNamedValue:{GatewayModelMap.NamedValueName(Tier)}"));
+    }
+
+    [Fact]
+    public async Task A_write_replaces_what_the_next_read_serves()
+    {
+        // The read cache must not outlive the change it describes: an admin who allows a model and
+        // sees the old list would reasonably conclude the write failed.
+        const string Tier = GatewayTiers.Power;
+        var oid = Guid.NewGuid().ToString();
+        _ = await factory.SeedUserAsync(oid);
+        _ = factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, "cache-busting-model");
+        factory.Apim.SeedNamedValue(GatewayModelMap.NamedValueName(Tier), "{}");
+        factory.ClearCaches();
+
+        using var client = factory.CreateClientAs(oid, isAdmin: true);
+        var path = new Uri($"{TiersPath}/{Tier}/models", UriKind.Relative);
+
+        var before = await client.GetFromJsonAsync<GatewayTierModelsResponse>(path, JsonOptions);
+        Assert.Empty(before!.Aliases);
+
+        _ = await client.PutAsJsonAsync(
+            path,
+            new ReplaceTierModelsRequest
+            {
+                Aliases = [Alias("cachebuster", "cache-busting-model", GatewayModelMap.OpenAiPool, ModelProviderType.OpenAi)],
+            },
+            JsonOptions);
+
+        var after = await client.GetFromJsonAsync<GatewayTierModelsResponse>(path, JsonOptions);
+
+        Assert.Equal("cachebuster", Assert.Single(after!.Aliases).Alias);
+    }
+
+    [Fact]
+    public async Task A_half_written_map_entry_is_dropped_rather_than_rendered()
+    {
+        // plans/25: an entry missing any of its three fields is blocked by the policy exactly as an
+        // absent one is. Reporting it as a row would promise a model the gateway refuses — and would
+        // make the projection look a null deployment name up.
+        const string Tier = GatewayTiers.Unlimited;
+        factory.Apim.SeedNamedValue(
+            GatewayModelMap.NamedValueName(Tier),
+            """{"broken":{"backend":"foundry-anthropic-pool","provider":"anthropic"}}""");
+
+        using var client = await AdminClientAsync();
+
+        var models = await client.GetFromJsonAsync<GatewayTierModelsResponse>(
+            new Uri($"{TiersPath}/{Tier}/models", UriKind.Relative),
+            JsonOptions);
+
+        Assert.Empty(models!.Aliases);
+    }
+
+    [Fact]
     public async Task An_unknown_tier_is_404()
     {
         using var client = await AdminClientAsync();
@@ -143,6 +213,7 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         _ = factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, "audited-openai-model");
         factory.Apim.SeedNamedValue(GatewayModelMap.NamedValueName(Tier), "{}");
 
+        factory.ClearCaches();
         using var client = factory.CreateClientAs(oid, isAdmin: true);
 
         var response = await client.PutAsJsonAsync(
@@ -188,6 +259,7 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
             name,
             "{\"noop\":{\"deployment\":\"noop-model\",\"backend\":\"" + backend + "\",\"provider\":\"openai\"}}");
 
+        factory.ClearCaches();
         using var client = factory.CreateClientAs(oid, isAdmin: true);
 
         var before = factory.Apim.Calls.Count(call => call.StartsWith("SetNamedValue:", StringComparison.Ordinal));
@@ -216,6 +288,7 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         _ = await factory.SeedUserAsync(oid);
         _ = factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, "malformed-alias-model");
 
+        factory.ClearCaches();
         using var client = factory.CreateClientAs(oid, isAdmin: true);
 
         var response = await client.PutAsJsonAsync(
@@ -235,6 +308,7 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         var oid = Guid.NewGuid().ToString();
         _ = await factory.SeedUserAsync(oid);
 
+        factory.ClearCaches();
         using var client = factory.CreateClientAs(oid, isAdmin: true);
 
         var response = await client.PutAsJsonAsync(
@@ -258,6 +332,7 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         // Primary only, routed at the pool: the failover-into-404 shape infra/main.bicep warns about.
         _ = factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, "single-region-model");
 
+        factory.ClearCaches();
         using var client = factory.CreateClientAs(oid, isAdmin: true);
 
         var response = await client.PutAsJsonAsync(
@@ -279,6 +354,7 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         _ = await factory.SeedUserAsync(oid);
         _ = factory.FoundryClient.Seed(ApiTestFactory.PrimaryFoundryAccount, "dupe-model");
 
+        factory.ClearCaches();
         using var client = factory.CreateClientAs(oid, isAdmin: true);
 
         var response = await client.PutAsJsonAsync(
@@ -307,6 +383,7 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         factory.Apim.ThrowOnSetNamedValue = new RequestFailedException(412, "Precondition failed.");
         try
         {
+            factory.ClearCaches();
             using var client = factory.CreateClientAs(oid, isAdmin: true);
 
             var response = await client.PutAsJsonAsync(
@@ -325,11 +402,16 @@ public class GatewayEndpointTests(ApiTestFactory factory) : IClassFixture<ApiTes
         }
     }
 
-    /// <summary>An admin whose <c>User</c> row exists — every mutation needs one (403 otherwise).</summary>
+    /// <summary>
+    /// An admin whose <c>User</c> row exists — every mutation needs one (403 otherwise) — with the
+    /// host's read caches dropped, because this class seeds APIM named values and ARM deployments
+    /// behind the app's back and the service caches both for 15 seconds.
+    /// </summary>
     private async Task<HttpClient> AdminClientAsync()
     {
         var oid = Guid.NewGuid().ToString();
         _ = await factory.SeedUserAsync(oid);
+        factory.ClearCaches();
         return factory.CreateClientAs(oid, isAdmin: true);
     }
 

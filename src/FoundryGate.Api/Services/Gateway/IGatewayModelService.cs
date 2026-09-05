@@ -16,7 +16,8 @@ namespace FoundryGate.Api.Services.Gateway;
 /// <b>Why the named value and not configuration.</b> <c>GatewayOptions.ModelAliases</c> carries the
 /// same map, flattened, for the developer-facing <c>GET /users/me</c> panel — but it is a snapshot of
 /// what the last <em>deploy</em> wrote. What the gateway enforces is the named value, so every read
-/// here goes to APIM. (That the two can now diverge until the next deploy is tracked separately.)
+/// here goes to APIM. (That the two can now diverge until the next deploy is
+/// <see href="https://github.com/kolatts/foundry-gate/issues/232">#232</see>.)
 /// </para>
 /// <para>
 /// <b>Validation refuses maps that would 404 rather than 403.</b> An alias must be lower-case and

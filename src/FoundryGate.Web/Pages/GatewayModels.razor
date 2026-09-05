@@ -268,17 +268,21 @@ else
             var deploymentsResult = await Api.GetFoundryDeploymentsAsync();
             _deployments = deploymentsResult is { IsSuccess: true, Value: not null } ? deploymentsResult.Value : [];
 
+            // Concurrently, not one after another: the tiers are independent reads and a fork with six
+            // of them should not open this page six round trips slowly.
+            var modelResults = await Task.WhenAll(_tiers.Select(tier => Api.GetGatewayTierModelsAsync(tier.Tier)));
+
             _aliasesByTier.Clear();
-            foreach (var tier in _tiers)
+            for (var i = 0; i < _tiers.Count; i++)
             {
-                var modelsResult = await Api.GetGatewayTierModelsAsync(tier.Tier);
+                var modelsResult = modelResults[i];
                 if (!modelsResult.IsSuccess || modelsResult.Value is null)
                 {
-                    _unavailable = modelsResult.Message ?? $"Couldn't read the models allowed for {tier.DisplayName}.";
+                    _unavailable = modelsResult.Message ?? $"Couldn't read the models allowed for {_tiers[i].DisplayName}.";
                     return;
                 }
 
-                _aliasesByTier[tier.Tier] = modelsResult.Value.Aliases;
+                _aliasesByTier[_tiers[i].Tier] = modelsResult.Value.Aliases;
             }
 
             _unavailable = null;

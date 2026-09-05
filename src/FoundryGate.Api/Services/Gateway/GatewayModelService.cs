@@ -13,6 +13,7 @@ using FoundryGate.Domain.Config;
 using FoundryGate.Domain.Constants;
 using FoundryGate.Domain.Exceptions;
 using FoundryGate.Domain.Gateway.Contracts;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace FoundryGate.Api.Services.Gateway;
 
@@ -29,9 +30,26 @@ public sealed partial class GatewayModelService(
     IAuditService auditService,
     ICurrentUserAccessor currentUser,
     AppDbContext dbContext,
+    IMemoryCache cache,
     ILogger<GatewayModelService> logger)
     : IGatewayModelService
 {
+    /// <summary>
+    /// How long a tier's map and the Foundry deployment placement are reused. Rendering <c>/models</c>
+    /// asks for every tier's map twice — once for the counts on <c>GET /gateway/tiers</c>, once per
+    /// tier for the rows — and each of those reads would otherwise re-enumerate every Foundry account
+    /// to answer "does this deployment exist". Short enough that an edit made in the Azure portal shows
+    /// up while the admin is still looking, and a write through this service replaces its own entry
+    /// rather than waiting for it to expire.
+    /// </summary>
+    public static readonly TimeSpan ReadCacheDuration = TimeSpan.FromSeconds(15);
+
+    /// <summary><see cref="IMemoryCache"/> key for the deployment-name → accounts placement map.</summary>
+    public const string PlacementCacheKey = "FoundryGate.Gateway.DeploymentPlacement";
+
+    /// <summary><see cref="IMemoryCache"/> key for one tier's parsed alias map.</summary>
+    public static string MapCacheKey(string tierProductId) => $"FoundryGate.Gateway.ModelMap.{tierProductId}";
+
     /// <summary>
     /// How the named value is written: camelCase, no indentation. The bicep writes it with ARM's
     /// <c>string()</c>, which is compact camelCase too — a value written here and a value written by a
@@ -125,6 +143,8 @@ public sealed partial class GatewayModelService(
         }
 
         // ---- commit point: APIM has accepted the new map. Nothing below observes cancellationToken. ----
+        _ = cache.Set(MapCacheKey(configured.ProductId), desired, ReadCacheDuration);
+
         logger.LogInformation(
             "Gateway tier {Tier} model allowlist replaced: {Before} -> {After} aliases ({Aliases})",
             configured.ProductId,
@@ -231,18 +251,29 @@ public sealed partial class GatewayModelService(
     /// <summary>Reads and parses one tier's named value; an absent or unparseable map is an empty allowlist, which is what the gateway itself makes of it.</summary>
     private async Task<SortedDictionary<string, ModelMapEntry>> ReadMapAsync(string tierProductId, CancellationToken cancellationToken)
     {
+        if (cache.TryGetValue(MapCacheKey(tierProductId), out SortedDictionary<string, ModelMapEntry>? cached) && cached is not null)
+        {
+            return cached;
+        }
+
         var namedValueName = GatewayModelMap.NamedValueName(tierProductId);
         var raw = await apim.GetNamedValueAsync(namedValueName, cancellationToken);
 
         if (string.IsNullOrWhiteSpace(raw))
         {
-            return new SortedDictionary<string, ModelMapEntry>(StringComparer.Ordinal);
+            return Cache(tierProductId, []);
         }
 
         try
         {
             var parsed = JsonSerializer.Deserialize<Dictionary<string, ModelMapEntry>>(raw, MapJson) ?? [];
-            return new SortedDictionary<string, ModelMapEntry>(parsed, StringComparer.Ordinal);
+
+            // plans/25: an entry missing any of its three fields is blocked by the policy exactly as an
+            // absent one is, so a half-written entry is dropped here rather than rendered as a row —
+            // and the projection below never has to look a null deployment name up.
+            return Cache(
+                tierProductId,
+                [.. parsed.Where(entry => !string.IsNullOrWhiteSpace(entry.Value?.Deployment))]);
         }
         catch (JsonException exception)
         {
@@ -252,13 +283,30 @@ public sealed partial class GatewayModelService(
                 exception,
                 "APIM named value {NamedValue} does not hold a readable model alias map; reporting the tier as permitting no models",
                 namedValueName);
-            return new SortedDictionary<string, ModelMapEntry>(StringComparer.Ordinal);
+            return Cache(tierProductId, []);
         }
+    }
+
+    /// <summary>Stores a tier's parsed map under <see cref="MapCacheKey"/> and hands it back.</summary>
+    private SortedDictionary<string, ModelMapEntry> Cache(string tierProductId, IEnumerable<KeyValuePair<string, ModelMapEntry>> entries)
+    {
+        var map = new SortedDictionary<string, ModelMapEntry>(StringComparer.Ordinal);
+        foreach (var (alias, entry) in entries)
+        {
+            map[alias] = entry;
+        }
+
+        return cache.Set(MapCacheKey(tierProductId), map, ReadCacheDuration);
     }
 
     /// <summary>Deployment name → the configured accounts that carry it, case-insensitively on both.</summary>
     private async Task<IReadOnlyDictionary<string, List<string>>> ReadDeploymentPlacementAsync(CancellationToken cancellationToken)
     {
+        if (cache.TryGetValue(PlacementCacheKey, out IReadOnlyDictionary<string, List<string>>? cached) && cached is not null)
+        {
+            return cached;
+        }
+
         // ListDeploymentsAsync raises FeatureNotConfiguredException (503) when Foundry addressing is
         // absent — the honest answer, since "does this deployment exist?" cannot be answered without it.
         var all = await deployments.ListDeploymentsAsync(cancellationToken);
@@ -275,7 +323,7 @@ public sealed partial class GatewayModelService(
             accounts.Add(deployment.AccountName);
         }
 
-        return placement;
+        return cache.Set<IReadOnlyDictionary<string, List<string>>>(PlacementCacheKey, placement, ReadCacheDuration);
     }
 
     private IReadOnlyList<GatewayModelAliasResponse> Project(

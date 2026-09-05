@@ -209,8 +209,10 @@ public sealed class ArmApimManagementClient : IApimManagementClient
             IsSecret = false,
         };
 
+        // No ifMatch: ARM reads `If-Match: *` as "must already exist", which would turn the first write
+        // to a tier whose named value no deploy has created into a 412 the caller cannot act on.
         var namedValues = _armClient.GetApiManagementServiceResource(_serviceId).GetApiManagementNamedValues();
-        _ = await namedValues.CreateOrUpdateAsync(WaitUntil.Completed, namedValueName, content, ifMatch: ETag.All, cancellationToken: cancellationToken);
+        _ = await namedValues.CreateOrUpdateAsync(WaitUntil.Completed, namedValueName, content, cancellationToken: cancellationToken);
     }
 
     private ApiManagementSubscriptionResource Subscription(string subscriptionName) =>
