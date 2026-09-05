@@ -57,11 +57,38 @@ function Assert-Check {
 }
 
 <#
- Runs a KQL query and returns the rows as an array of hashtables, or $null on failure.
- The query is flattened to a single line: `az ... --analytics-query` takes one argument,
- and a multi-line KQL string does not survive Windows argument parsing intact.
- Flattening means `//` comments must be stripped first, or everything after the first one
- is commented out.
+ Reads one column out of a KQL result row.
+
+ Deliberately defensive. The row comes back through `az ... --output json` and
+ `ConvertFrom-Json -AsHashtable`, and under Set-StrictMode a column that is absent — or
+ present under a different casing than the query's alias — is a terminating error, which is
+ how this stage died with "The property 'Rows' cannot be found on this object" before
+ running anything. A measurement stage must degrade to "no data" rather than crash: the
+ whole point of it is to report on a gateway whose logs may not have arrived yet.
+#>
+function Get-KqlValue {
+    param(
+        [Parameter(Mandatory)] $Row,
+        [Parameter(Mandatory)][string] $Column,
+        $Default = 0
+    )
+    if ($null -eq $Row) { return $Default }
+    $keys = if ($Row -is [hashtable] -or $Row -is [System.Collections.IDictionary]) { $Row.Keys } else { $Row.PSObject.Properties.Name }
+    foreach ($k in $keys) {
+        if ([string]$k -ieq $Column) {
+            $v = if ($Row -is [hashtable] -or $Row -is [System.Collections.IDictionary]) { $Row[$k] } else { $Row.$k }
+            if ($null -eq $v -or "$v" -eq '') { return $Default }
+            return $v
+        }
+    }
+    return $Default
+}
+
+<#
+ Runs a KQL query and returns the rows, or $null on failure. The query is flattened to a
+ single line: `az ... --analytics-query` takes one argument and a multi-line KQL string does
+ not survive Windows argument parsing intact. Flattening means `//` comment lines must be
+ stripped first, or everything after the first one would be commented out.
 #>
 function Invoke-Kql {
     param([Parameter(Mandatory)][string] $Query)
@@ -98,8 +125,8 @@ $correlationCount = 0
 while ((Get-Date) -lt $deadline) {
     $probe = Invoke-Kql -Query 'ApiManagementGatewayLlmLog | summarize Rows = count(), Correlations = dcount(CorrelationId)'
     if ($null -ne $probe -and @($probe).Count -gt 0) {
-        $rowCount = [int]$probe[0].Rows
-        $correlationCount = [int]$probe[0].Correlations
+        $rowCount = [int](Get-KqlValue -Row $probe[0] -Column 'Rows')
+        $correlationCount = [int](Get-KqlValue -Row $probe[0] -Column 'Correlations')
         if ($rowCount -gt 0) { break }
     }
     Write-CycleInfo 'no rows yet, sleeping 60s'
@@ -127,14 +154,14 @@ $usageRows = @()
 if ($null -ne $usage) {
     foreach ($row in @($usage)) {
         $usageRows += @{
-            apimSubscriptionId = [string]$row.ApimSubscriptionId
-            promptTokens       = [int]$row.PromptTokens
-            completionTokens   = [int]$row.CompletionTokens
-            totalTokens        = [int]$row.TotalTokens
-            requestCount       = [int]$row.RequestCount
+            apimSubscriptionId = [string](Get-KqlValue -Row $row -Column 'ApimSubscriptionId' -Default '(unknown)')
+            promptTokens       = [int](Get-KqlValue -Row $row -Column 'PromptTokens')
+            completionTokens   = [int](Get-KqlValue -Row $row -Column 'CompletionTokens')
+            totalTokens        = [int](Get-KqlValue -Row $row -Column 'TotalTokens')
+            requestCount       = [int](Get-KqlValue -Row $row -Column 'RequestCount')
         }
         Write-Host ("  {0,-24} prompt={1,-8} completion={2,-8} total={3,-8} requests={4}" -f `
-                $row.ApimSubscriptionId, $row.PromptTokens, $row.CompletionTokens, $row.TotalTokens, $row.RequestCount)
+                (Get-KqlValue -Row $row -Column 'ApimSubscriptionId' -Default '(unknown)'), (Get-KqlValue -Row $row -Column 'PromptTokens'), (Get-KqlValue -Row $row -Column 'CompletionTokens'), (Get-KqlValue -Row $row -Column 'TotalTokens'), (Get-KqlValue -Row $row -Column 'RequestCount'))
     }
 }
 $state.usageBySubscription = $usageRows
@@ -163,23 +190,23 @@ ApiManagementGatewayLlmLog
 
 if ($null -ne $dupe -and @($dupe).Count -gt 0) {
     $d = $dupe[0]
-    $multi = [int]$d.MultiEntry
-    $naive = [long]$d.NaiveSum
-    $deduped = [long]$d.DedupedSum
+    $multi = [int](Get-KqlValue -Row $d -Column 'MultiEntry')
+    $naive = [long](Get-KqlValue -Row $d -Column 'NaiveSum')
+    $deduped = [long](Get-KqlValue -Row $d -Column 'DedupedSum')
     $inflation = if ($deduped -gt 0) { [math]::Round($naive / $deduped, 3) } else { 0 }
     $state.d017 = @{
-        correlations         = [int]$d.Correlations
+        correlations         = [int](Get-KqlValue -Row $d -Column 'Correlations')
         multiEntry           = $multi
-        maxEntriesPerRequest = [int]$d.MaxEntriesPerRequest
+        maxEntriesPerRequest = [int](Get-KqlValue -Row $d -Column 'MaxEntriesPerRequest')
         naiveSum             = $naive
         dedupedSum           = $deduped
         inflationFactor      = $inflation
     }
     $verdict = if ($multi -gt 0) {
-        "CONFIRMED: $multi of $($d.Correlations) CorrelationIds carry more than one entry (max $($d.MaxEntriesPerRequest) per request). A naive sum() would report $naive tokens against the de-duplicated $deduped — an inflation factor of $inflation."
+        "CONFIRMED: $multi of $(Get-KqlValue -Row $d -Column 'Correlations') CorrelationIds carry more than one entry (max $(Get-KqlValue -Row $d -Column 'MaxEntriesPerRequest') per request). A naive sum() would report $naive tokens against the de-duplicated $deduped — an inflation factor of $inflation."
     }
     else {
-        "NOT EXERCISED on this traffic: every one of $($d.Correlations) CorrelationIds produced exactly one entry, so max() and sum() agree ($deduped tokens). The de-duplication is still correct, but this cycle's request shapes (small, non-streamed) did not produce the chunked multi-entry case the D-017 note is about."
+        "NOT EXERCISED on this traffic: every one of $(Get-KqlValue -Row $d -Column 'Correlations') CorrelationIds produced exactly one entry, so max() and sum() agree ($deduped tokens). The de-duplication is still correct, but this cycle's request shapes (small, non-streamed) did not produce the chunked multi-entry case the D-017 note is about."
     }
     Add-CycleCheck -State $state -Id 'M3' -Name 'D-017 de-duplication assumption checked against live data' -Status 'PASS' -Detail $verdict
     Write-CycleInfo $verdict
@@ -197,8 +224,8 @@ customMetrics
 | summarize Total = sum(valueSum), Count = sum(valueCount) by name
 '@
 if ($null -ne $aiRows -and @($aiRows).Count -gt 0) {
-    foreach ($row in @($aiRows)) { Write-Host ("  {0}: total={1} count={2}" -f $row.name, $row.Total, $row.Count) }
-    $state.appInsightsTokenMetrics = @($aiRows | ForEach-Object { @{ name = [string]$_.name; total = [double]$_.Total; count = [double]$_.Count } })
+    foreach ($row in @($aiRows)) { Write-Host ("  {0}: total={1} count={2}" -f (Get-KqlValue -Row $row -Column 'name' -Default ''), (Get-KqlValue -Row $row -Column 'Total'), (Get-KqlValue -Row $row -Column 'Count')) }
+    $state.appInsightsTokenMetrics = @($aiRows | ForEach-Object { @{ name = [string](Get-KqlValue -Row $_ -Column 'name' -Default ''); total = [double](Get-KqlValue -Row $_ -Column 'Total'); count = [double](Get-KqlValue -Row $_ -Column 'Count') } })
 }
 else {
     Write-CycleInfo 'No customMetrics rows (the metric flows to Azure Monitor metrics, and App Insights ingestion lags too). Not a failure.'

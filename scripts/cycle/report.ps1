@@ -27,6 +27,15 @@ $state = Get-CycleState -Environment $Environment -Required
 $sb = [System.Text.StringBuilder]::new()
 function Add-Line { param([string] $Text = '') [void]$sb.AppendLine($Text) }
 
+# Markdown code spans. A literal backtick inside a double-quoted PowerShell string is the
+# escape character, and a nested double-quoted string inside a subexpression inside another
+# double-quoted string does not parse at all — which is how this script came to fail to parse
+# entirely, silently producing no evidence report. Both problems go away with one helper
+# built from a single-quoted backtick.
+$script:Tick = '`'
+function Format-Code { param([string] $Text) "$script:Tick$Text$script:Tick" }
+function Format-CodeList { param($Items) (@($Items) | ForEach-Object { Format-Code ([string]$_) }) -join ', ' }
+
 $when = if ($state.ContainsKey('upStartedUtc')) { ConvertFrom-CycleTimestamp $state.upStartedUtc } else { [datetimeoffset]::UtcNow }
 
 Add-Line "# Gateway cycle — live evidence, $($when.ToString('yyyy-MM-dd'))"
@@ -48,13 +57,13 @@ Add-Line "|---|---|"
 Add-Line "| Subscription | $($state.subscription) |"
 Add-Line "| Resource group | $($state.resourceGroup) ($($state.location)) |"
 if ($state.ContainsKey('outputs')) {
-    Add-Line "| Gateway URL | ``$($state.outputs.apimGatewayUrl)`` |"
-    Add-Line "| Anthropic front door | ``$($state.outputs.anthropicApiUrl)`` |"
-    Add-Line "| OpenAI front door | ``$($state.outputs.openaiApiUrl)`` |"
-    Add-Line "| APIM | ``$($state.outputs.apimName)`` |"
-    Add-Line "| Tier products | $((@($state.outputs.productIds) | ForEach-Object { "``$_``" }) -join ', ') |"
-    Add-Line "| Log Analytics workspace | ``$($state.outputs.logAnalyticsWorkspaceName)`` (``$($state.outputs.logAnalyticsWorkspaceCustomerId)``) |"
-    Add-Line "| Foundry accounts | $((@($state.outputs.foundryAccountNames) | ForEach-Object { "``$_``" }) -join ', ') |"
+    Add-Line ('| Gateway URL | {0} |' -f (Format-Code $state.outputs.apimGatewayUrl))
+    Add-Line ('| Anthropic front door | {0} |' -f (Format-Code $state.outputs.anthropicApiUrl))
+    Add-Line ('| OpenAI front door | {0} |' -f (Format-Code $state.outputs.openaiApiUrl))
+    Add-Line ('| APIM | {0} |' -f (Format-Code $state.outputs.apimName))
+    Add-Line ('| Tier products | {0} |' -f (Format-CodeList $state.outputs.productIds))
+    Add-Line ('| Log Analytics workspace | {0} ({1}) |' -f (Format-Code $state.outputs.logAnalyticsWorkspaceName), (Format-Code $state.outputs.logAnalyticsWorkspaceCustomerId))
+    Add-Line ('| Foundry accounts | {0} |' -f (Format-CodeList $state.outputs.foundryAccountNames))
 }
 if ($state.ContainsKey('quotaTiers')) {
     $std = @($state.quotaTiers | Where-Object { $_.name -eq 'standard' })[0]
@@ -138,10 +147,12 @@ if ($state.ContainsKey('d017')) {
     $d = $state.d017
     Add-Line '### D-017 / #178 — the `max()` de-duplication assumption'
     Add-Line ''
-    Add-Line "- Distinct `CorrelationId`s: **$($d.correlations)**"
+    # Same backtick trap as above: in a double-quoted string `C would just escape the C and
+    # the code span would silently vanish from the report.
+    Add-Line ('- Distinct {0}s: **{1}**' -f (Format-Code 'CorrelationId'), $d.correlations)
     Add-Line "- With more than one log entry: **$($d.multiEntry)** (max $($d.maxEntriesPerRequest) entries for a single request)"
-    Add-Line "- Naive `sum()` over every entry: **$($d.naiveSum)** tokens"
-    Add-Line "- De-duplicated (`max()` per CorrelationId, then sum): **$($d.dedupedSum)** tokens"
+    Add-Line ('- Naive {0} over every entry: **{1}** tokens' -f (Format-Code 'sum()'), $d.naiveSum)
+    Add-Line ('- De-duplicated ({0} per CorrelationId, then sum): **{1}** tokens' -f (Format-Code 'max()'), $d.dedupedSum)
     Add-Line "- Inflation a naive sum would have introduced: **$($d.inflationFactor)x**"
     Add-Line ''
 }
