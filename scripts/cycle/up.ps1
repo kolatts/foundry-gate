@@ -232,7 +232,36 @@ if ($WhatIf) {
 Write-CycleHeading "Deploying $DeploymentName (APIM v2 provisioning usually dominates: 5-10 min)"
 Write-CycleInfo "standard tier = $MonthlyTokenQuota tokens/month, $Tpm TPM"
 $deployStarted = Get-Date
-$result = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments $deployArgs
+$result = $null
+
+# Retry the DEPLOYMENT on the two APIM-name races, because neither is reliably visible
+# before the attempt. A just-deleted service reports ResourceNotFound to `az apim show`
+# while ARM still considers the name to be transitioning, so a pre-flight poll cannot see
+# what is about to reject the deploy:
+#   ServiceLocked                          "is transitioning at this time" — wait, retry.
+#   ServiceAlreadyExistsInSoftDeletedState the delete finished and reserved the name —
+#                                          purge, then retry.
+# Everything else fails on the first attempt: a retry loop around real deployment errors
+# would just burn ten minutes of APIM provisioning per attempt to reach the same failure.
+for ($attempt = 1; $attempt -le 5; $attempt++) {
+    $result = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments $deployArgs
+    if ($null -ne $result) { break }
+
+    $azError = Get-LastAzError
+    if ($azError -match 'ServiceAlreadyExistsInSoftDeletedState') {
+        Write-CycleInfo "Attempt ${attempt}: the APIM name is held by a soft-deleted service. Purging and retrying."
+        Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+            'apim', 'deletedservice', 'purge', '--service-name', $apimName, '--location', $Location
+        ) | Out-Null
+        continue
+    }
+    if ($azError -match 'ServiceLocked') {
+        Write-CycleInfo "Attempt ${attempt}: APIM is still transitioning. Waiting 90s and retrying."
+        Start-Sleep -Seconds 90
+        continue
+    }
+    break
+}
 
 if ($null -eq $result) {
     # The deployment itself failed. Surface the operation-level errors — the top-level
