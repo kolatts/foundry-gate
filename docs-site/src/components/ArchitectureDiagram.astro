@@ -1,15 +1,19 @@
 ---
-// Architecture at a glance — rendered ENTIRELY from src/generated/architecture.json,
-// which docs-site/scripts/generate-architecture.mjs derives from infra/*.bicep and
-// src/**. Nothing on this page is hand-transcribed: if a region, tier, model, schedule
-// or module edge changes in the repo, the next `npm run build` moves the picture, and CI
-// fails the PR that forgot to commit the regenerated file (#221).
+// Architecture at a glance — every FACT on this page comes from
+// src/generated/architecture.json, which docs-site/scripts/generate-architecture.mjs
+// derives from infra/*.bicep and src/**. No region, tier, model name, schedule, route or
+// module edge is transcribed by hand: change one in the repo and the next `npm run build`
+// moves the picture, and CI fails the PR that forgot to commit the regenerated file
+// (#221). The connective prose around them — the layer titles, the arrow labels, which
+// reference page each node links to — is written here.
 //
 // HTML/CSS rather than SVG on purpose: the nodes are links, the text is selectable and
 // searchable, and the whole thing reflows to one column on a phone without a second
 // hand-laid-out mobile variant. Shared primitives come from src/styles/diagrams.css.
 import { execSync } from 'node:child_process';
 import arch from '../generated/architecture.json';
+import { tokens, scheduleInline } from '../lib/architecture';
+import FgIcon from './FgIcon.astro';
 
 const base = import.meta.env.BASE_URL.endsWith('/')
   ? import.meta.env.BASE_URL
@@ -28,9 +32,27 @@ try {
 }
 
 const { infra, code } = arch;
-const nonTestProjects = code.projects.filter((p) => !p.isTest);
-const fmt = (n: number) =>
-  n >= 1_000_000 ? `${n / 1_000_000}M` : n >= 1000 ? `${n / 1000}K` : String(n);
+const fmt = tokens;
+
+// The .NET side, in dependency order: projects that reference nothing first, then each
+// project once everything it references has been placed. Rendered as layers under the
+// module graph, so the generated ProjectReference data is drawn, not just carried.
+const shipping = code.projects.filter((p) => !p.isTest);
+const projectLayers: (typeof shipping)[] = [];
+const placed = new Set<string>();
+while (placed.size < shipping.length) {
+  const layer = shipping.filter(
+    (p) => !placed.has(p.name) && p.references.every((r) => placed.has(r) || !shipping.some((s) => s.name === r)),
+  );
+  // Defensive: a reference cycle would loop forever. Bicep-style fail-loud is wrong for a
+  // docs page, so drop the remainder into a final layer instead.
+  if (!layer.length) {
+    projectLayers.push(shipping.filter((p) => !placed.has(p.name)));
+    break;
+  }
+  layer.forEach((p) => placed.add(p.name));
+  projectLayers.push(layer);
+}
 
 const ref = (slug: string) => `${base}${slug}/`;
 
@@ -43,7 +65,11 @@ const controlPlaneNodes = [
   },
   {
     title: 'FoundryGate.Api',
-    sub: `ASP.NET Core on Container Apps — ${code.apiRoutes.length} route groups under ${code.apiRouteTemplates[0] ?? 'api/v1'}`,
+    // apiRoutes are the resolved prefixes (api/v1/users, …); the raw [Route] template
+    // with its [controller] token is not reader-facing.
+    sub: `ASP.NET Core on Container Apps — ${code.apiRoutes.length} route groups: ${code.apiRoutes
+      .map((r) => r.split('/').pop())
+      .join(', ')}`,
     href: ref('reference/api'),
     module: 'containerApp',
   },
@@ -55,7 +81,7 @@ const controlPlaneNodes = [
   },
   {
     title: 'FoundryGate.Functions',
-    sub: code.functions.map((f) => `${f.name.replace(/Function$/, '')} — ${f.schedule.toLowerCase()}`).join(' · '),
+    sub: code.functions.map((f) => `${f.name.replace(/Function$/, '')} — ${scheduleInline(f.schedule)}`).join(' · '),
     href: ref('reference/configuration'),
     module: 'functionApp',
   },
@@ -90,7 +116,7 @@ const ariaLabel =
   infra.regions.map((r) => `${r.name} (${r.role}, ${r.deployments.length} model deployments)`).join(' and ') +
   `. Out of the request path, the control plane runs the Blazor UI, the API on Container Apps, Azure SQL, ` +
   `Key Vault and ${code.functions.length} timer functions: ` +
-  code.functions.map((f) => `${f.name} ${f.schedule.toLowerCase()}`).join(', ') +
+  code.functions.map((f) => `${f.name} ${scheduleInline(f.schedule)}`).join(', ') +
   '.';
 ---
 
@@ -102,9 +128,7 @@ const ariaLabel =
   <section class="fgd-gen__layer fgd-gen__layer--ext">
     <header class="fgd-gen__layer-head">
       <span class="fgd-gen__icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="4" width="18" height="12" rx="2" /><path d="M2 20h20" /><path d="m8 9 2 2-2 2" /><path d="M13 13h3" />
-        </svg>
+        <FgIcon name="laptop" size="100%" />
       </span>
       <span class="fgd-gen__layer-name">1 · What developers run</span>
       <span class="fgd-gen__layer-note">their laptop, their own key</span>
@@ -131,9 +155,7 @@ const ariaLabel =
   <section class="fgd-plane fgd-plane--data fgd-gen__layer">
     <header class="fgd-gen__layer-head">
       <span class="fgd-gen__icon fgd-gen__icon--azure" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2 4 5v6c0 5 3.4 9.2 8 11 4.6-1.8 8-6 8-11V5Z" /><path d="M9 12h6" /><path d="M12 9v6" />
-        </svg>
+        <FgIcon name="shield" size="100%" />
       </span>
       <span class="fgd-gen__layer-name">2 · The gate</span>
       <span class="fgd-gen__layer-note">Azure API Management — every limit is enforced here, on the request itself</span>
@@ -221,9 +243,7 @@ const ariaLabel =
   <section class="fgd-gen__layer fgd-gen__layer--models">
     <header class="fgd-gen__layer-head">
       <span class="fgd-gen__icon fgd-gen__icon--azure" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="6" y="6" width="12" height="12" rx="2" /><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4" />
-        </svg>
+        <FgIcon name="chip" size="100%" />
       </span>
       <span class="fgd-gen__layer-name">3 · The models</span>
       <span class="fgd-gen__layer-note">
@@ -263,9 +283,7 @@ const ariaLabel =
   <section class="fgd-plane fgd-plane--control fgd-gen__layer">
     <header class="fgd-gen__layer-head">
       <span class="fgd-gen__icon fgd-gen__icon--app" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 6h16M4 12h16M4 18h16" /><circle cx="9" cy="6" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="7" cy="18" r="2" />
-        </svg>
+        <FgIcon name="sliders" size="100%" />
       </span>
       <span class="fgd-gen__layer-name">4 · The app that manages it</span>
       <span class="fgd-gen__layer-note">
@@ -286,9 +304,7 @@ const ariaLabel =
   <section class="fgd-gen__layer fgd-gen__layer--graph">
     <header class="fgd-gen__layer-head">
       <span class="fgd-gen__icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="6" cy="6" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="12" cy="18" r="2.5" /><path d="M7.6 7.9 10.7 15.6M16.4 7.9 13.3 15.6M8.5 6h7" />
-        </svg>
+        <FgIcon name="graph" size="100%" />
       </span>
       <span class="fgd-gen__layer-name">How it gets built</span>
       <span class="fgd-gen__layer-note">
@@ -313,17 +329,34 @@ const ariaLabel =
     </ol>
     <p class="fgd-gen__aside">
       The control plane module fans out into {infra.controlPlaneModules.length} more:{' '}
-      {infra.controlPlaneModules.map((m) => m.symbol).join(', ')}. The .NET side is{' '}
-      {nonTestProjects.length} shipping projects, all of them resting on{' '}
-      <code>FoundryGate.Domain</code>, which references nothing.
+      {infra.controlPlaneModules.map((m) => m.symbol).join(', ')}.
     </p>
+
+    <p class="fgd-gen__step">
+      And the .NET side — {shipping.length} shipping projects, in reference order (each row
+      may only reference the rows above it)
+    </p>
+    <ol class="fgd-gen__stack">
+      {projectLayers.map((layer) => (
+        <li class="fgd-gen__stack-row">
+          {layer.map((p) => (
+            <span class="fgd-gen__stack-item">
+              {p.name}
+              <span class="fgd-gen__stack-refs">
+                {p.references.length ? `→ ${p.references.map((r) => r.replace('FoundryGate.', '')).join(', ')}` : 'references nothing'}
+              </span>
+            </span>
+          ))}
+        </li>
+      ))}
+    </ol>
   </section>
 
   <figcaption class="fgd-legend fgd-gen__caption">
     <span class="fgd-legend__item"><span class="fgd-legend__swatch"></span> the request path — real-time enforcement</span>
     <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--dashed"></span> out of band — telemetry and reconciliation</span>
     <span class="fgd-legend__item"><span class="fgd-legend__swatch fgd-legend__swatch--app"></span> control plane — lifecycle and tiers</span>
-    <span class="fgd-gen__provenance">
+    <span class="fgd-provenance">
       Generated from <code>infra/</code> and <code>src/</code> at build time{commit ? ` · commit ${commit}` : ''} ·{' '}
       <a href="https://github.com/kolatts/foundry-gate/blob/main/docs-site/scripts/generate-architecture.mjs">generator</a>
     </span>
@@ -570,18 +603,43 @@ const ariaLabel =
     color: var(--fg-text-muted, #7E96AD);
   }
 
+  /* Project reference layers: bottom-up, each row only referencing the rows above it. */
+  .fgd-gen__stack {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .fgd-gen__stack-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .fgd-gen__stack-item {
+    flex: 1 1 12rem;
+    display: grid;
+    gap: 0.1rem;
+    padding: 0.35rem 0.55rem;
+    border-radius: 6px;
+    border: 1px solid var(--fg-border-subtle, #1C2E44);
+    background: var(--fg-bg-raised, #101B2A);
+    font-family: var(--fgd-mono);
+    font-size: 0.72rem;
+    color: var(--fg-text-primary, #EDF2F7);
+  }
+
+  .fgd-gen__stack-refs {
+    font-size: 0.66rem;
+    color: var(--fg-text-muted, #7E96AD);
+  }
+
   .fgd-gen__caption {
     padding-top: 0.6rem;
     border-top: 1px solid var(--fg-border-subtle, #1C2E44);
   }
-
-  .fgd-gen__provenance {
-    flex-basis: 100%;
-    font-size: 0.68rem;
-    color: var(--fg-text-muted, #7E96AD);
-  }
-
-  .fgd-gen__provenance a { color: var(--fg-azure-neon, #4DCFFF); }
 
   @media (max-width: 719px) {
     .fgd-gen__graph-row {

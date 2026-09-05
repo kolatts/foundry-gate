@@ -9,14 +9,16 @@
 //   outputs  docs-site/src/generated/architecture.json (the model the site renders)
 //            docs-site/src/generated/architecture.mmd  (machine-readable Mermaid graph)
 //
-// Runs as `prebuild`, so `npm run build` cannot render a stale picture; CI regenerates
-// and fails on `git diff --exit-code docs-site/src/generated`, so a change to infra/ or
-// src/ that moves the diagram has to land with the regenerated file (#221).
+// Runs as `prebuild`, so `npm run build` cannot render a stale picture; CI regenerates and
+// fails if `git status --porcelain docs-site/src/generated` is non-empty, so a change to
+// infra/ or src/ that moves the diagram has to land with the regenerated file (#221).
 //
 // Deliberately dependency-free: a hand-rolled reader for the *subset* of Bicep the
 // template actually uses (literal params, module declarations, output references). It is
-// not a Bicep parser and does not try to be — anything it cannot read literally is kept
-// as an `{ expr }` marker rather than guessed at, and the renderer ignores those.
+// not a Bicep parser and does not try to be. Anything it cannot read literally comes back
+// as an `{ expr }` marker rather than a guess, and the values the diagram is BUILT from
+// are asserted to be real literals (see literalArray) so an unreadable one fails the
+// build loudly instead of quietly publishing an empty picture.
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname, relative, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +30,10 @@ const outDir = join(docsSite, 'src', 'generated');
 
 const read = (p) => readFileSync(join(repoRoot, p), 'utf8');
 const rel = (p) => relative(repoRoot, p).split('\\').join('/');
+
+// Code-unit ordering, never localeCompare: the output is a committed artifact compared
+// byte-for-byte by CI, and ICU collation can differ between a dev box and the runner.
+const byKey = (key) => (a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
 
 // ── A tolerant reader for Bicep literals ──────────────────────────────────────
 // Handles: 'strings', numbers, true/false/null, [arrays], {objects} (unquoted or
@@ -129,6 +135,8 @@ class BicepReader {
     if (c === '{') return this.readObject();
     if (/[-0-9]/.test(c)) {
       const m = /^-?\d+(\.\d+)?/.exec(this.s.slice(this.i));
+      // A lone `-` (unary minus on an expression) is not a number literal.
+      if (!m) return this.readExpression();
       const save = this.i;
       this.i += m[0].length;
       const after = this.s[this.i];
@@ -153,11 +161,14 @@ class BicepReader {
   }
 
   readArray() {
+    const open = this.i;
     this.i++; // [
     this.skip();
-    // A comprehension — `[for x in y: …]` — is an expression, not a literal.
+    // A comprehension — `[for x in y: …]` — is an expression, not a literal. Rewind to
+    // the bracket itself (not to open+1, which lands on whitespace when the `for` sits on
+    // the next line and would send readBracketedExpression running to EOF).
     if (/^for\b/.test(this.s.slice(this.i))) {
-      this.i--;
+      this.i = open;
       return this.readBracketedExpression('[', ']');
     }
     const out = [];
@@ -232,12 +243,43 @@ class BicepReader {
   }
 }
 
-/** Default value of `param <name> …= <literal>` in a Bicep file. */
+/**
+ * Default value of `param <name> …= <literal>` in a Bicep file. The type is matched
+ * loosely (`array`, `string[]`, a user-defined type name) so a type tidy-up in the
+ * template cannot silently turn a param into "absent" — which would render an EMPTY
+ * diagram that the CI freshness check would then bless as up to date.
+ */
 function bicepParam(text, name) {
-  const re = new RegExp(`^param\\s+${name}\\s+[A-Za-z]+\\s*=\\s*`, 'm');
+  const declared = new RegExp(`^param\\s+${name}\\b`, 'm').test(text);
+  const re = new RegExp(`^param\\s+${name}\\s+[A-Za-z_][A-Za-z0-9_.]*(\\[\\])?\\s*=\\s*`, 'm');
   const m = re.exec(text);
-  if (!m) return undefined;
+  if (!m) {
+    if (declared) {
+      throw new Error(
+        `generate-architecture: param '${name}' is declared but its default could not be read. ` +
+          `The diagram is derived from it — teach scripts/generate-architecture.mjs the new shape.`,
+      );
+    }
+    return undefined;
+  }
   return new BicepReader(text, m.index + m[0].length).readValue();
+}
+
+/**
+ * Assert a param that the renderer treats as a list really came back as one. An
+ * expression default (a ternary, a `union(...)`, a comprehension) reads as `{ expr }`,
+ * and quietly mapping over that would crash the build with a TypeError naming nothing.
+ */
+function literalArray(value, name) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `generate-architecture: param '${name}' is not an array literal ` +
+        `(read as ${JSON.stringify(value).slice(0, 120)}). The diagram is derived from it — ` +
+        `teach scripts/generate-architecture.mjs how to read the new shape.`,
+    );
+  }
+  return value;
 }
 
 /** Value of `var <name> = <literal>`. */
@@ -246,6 +288,20 @@ function bicepVar(text, name) {
   const m = re.exec(text);
   if (!m) return undefined;
   return new BicepReader(text, m.index + m[0].length).readValue();
+}
+
+/** The text inside a module's `if ( … )`, counting nested parens. Null when there is none. */
+function balancedCondition(tail) {
+  const at = /\bif\s*\(/.exec(tail);
+  if (!at) return null;
+  let depth = 1;
+  let i = at.index + at[0].length;
+  const start = i;
+  for (; i < tail.length && depth > 0; i++) {
+    if (tail[i] === '(') depth++;
+    else if (tail[i] === ')') depth--;
+  }
+  return depth === 0 ? tail.slice(start, i - 1).trim() : null;
 }
 
 /** Every `module <symbol> '<path>' = …` in a file, with its body text. */
@@ -262,13 +318,14 @@ function bicepModules(text, file) {
     const reader = new BicepReader(text, braceAt);
     reader.readBracketedExpression('{', '}');
     const body = text.slice(braceAt, reader.i);
-    const condition = /\bif\s*\(([^)]*)\)/.exec(tail);
+    // `if (…)` with balanced parens: `if (!empty(x))` must not truncate to `!empty(x`.
+    const condition = balancedCondition(tail);
     const loop = /\[\s*for\s+([^:]+):/.exec(tail);
     out.push({
       symbol,
       file,
       template: path,
-      conditional: condition ? condition[1].trim() : null,
+      conditional: condition,
       forEach: loop ? loop[1].trim() : null,
       body,
     });
@@ -304,7 +361,20 @@ const mainPath = 'infra/main.bicep';
 const main = read(mainPath);
 const gatewayBicep = read('infra/modules/ai-gateway.bicep');
 
-const moduleFiles = readdirSync(join(repoRoot, 'infra', 'modules'))
+// Directories the generator cannot do without. A rename would otherwise surface as a raw
+// ENOENT out of `prebuild`, which now also gates `npm run dev`.
+function requireDir(...segments) {
+  const dir = join(repoRoot, ...segments);
+  if (!existsSync(dir)) {
+    throw new Error(
+      `generate-architecture: expected ${segments.join('/')} to exist. If it moved, update ` +
+        'docs-site/scripts/generate-architecture.mjs; the architecture diagram is derived from it.',
+    );
+  }
+  return dir;
+}
+
+const moduleFiles = readdirSync(requireDir('infra', 'modules'))
   .filter((f) => f.endsWith('.bicep'))
   .sort();
 
@@ -331,11 +401,22 @@ const controlPlaneModules = collectModules(
   'infra/modules/control-plane.bicep',
 );
 
-const foundryRegions = bicepParam(main, 'foundryRegions') ?? [];
-const pooled = bicepParam(main, 'pooledModelDeployments') ?? [];
-const primaryOnly = bicepParam(main, 'primaryOnlyModelDeployments') ?? [];
-const quotaTiersRaw = bicepParam(main, 'quotaTiers') ?? [];
-const aliasMap = bicepParam(main, 'productModelAliases') ?? {};
+const foundryRegions = literalArray(bicepParam(main, 'foundryRegions'), 'foundryRegions');
+const pooled = literalArray(bicepParam(main, 'pooledModelDeployments'), 'pooledModelDeployments');
+const primaryOnly = literalArray(
+  bicepParam(main, 'primaryOnlyModelDeployments'),
+  'primaryOnlyModelDeployments',
+);
+const quotaTiersRaw = literalArray(bicepParam(main, 'quotaTiers'), 'quotaTiers');
+const aliasMapRaw = bicepParam(main, 'productModelAliases') ?? {};
+const aliasMap = Array.isArray(aliasMapRaw) || aliasMapRaw.expr ? {} : aliasMapRaw;
+
+if (!foundryRegions.length || !quotaTiersRaw.length) {
+  throw new Error(
+    'generate-architecture: read zero regions or zero quota tiers out of infra/main.bicep. ' +
+      'That would publish an empty diagram — refusing to write the model.',
+  );
+}
 
 const modelName = (d) => `${d.model}${d.version ? ` (${d.version})` : ''}`;
 
@@ -360,9 +441,13 @@ const quotaTiers = quotaTiersRaw.map((tier) => ({
   tpm: tier.tpm,
   aliases: Object.entries(aliasMap[tier.name] ?? {})
     .map(([alias, v]) => ({ alias, deployment: v.deployment, pool: v.pool, provider: v.provider }))
-    .sort((a, b) => a.alias.localeCompare(b.alias)),
+    .sort(byKey((a) => a.alias)),
 }));
 
+// The paths and APIM api names come out of ai-gateway.bicep; `label`, `client` and
+// `header` are editorial — which CLI a front door is for, and which header that CLI
+// already sends — and live here so the two diagrams say the same thing about them.
+// (Ground truth for the headers: CLAUDE.md §Architecture ground truths.)
 const frontDoors = [
   {
     provider: 'anthropic',
@@ -428,7 +513,7 @@ const CRON_PROSE = {
 };
 
 const functions = [];
-for (const file of csFiles(join(srcDir, 'FoundryGate.Functions'))) {
+for (const file of csFiles(requireDir('src', 'FoundryGate.Functions'))) {
   const text = readFileSync(file, 'utf8');
   const timer = /\[TimerTrigger\("([^"]+)"/.exec(text);
   if (!timer) continue;
@@ -441,13 +526,13 @@ for (const file of csFiles(join(srcDir, 'FoundryGate.Functions'))) {
   });
   sources.push(rel(file));
 }
-functions.sort((a, b) => a.name.localeCompare(b.name));
+functions.sort(byKey((f) => f.name));
 
 // API controller route prefixes: the [Route] template declared on the base class,
 // resolved per concrete controller by substituting [controller].
 const routeTemplates = new Set();
 const controllers = new Set();
-for (const file of csFiles(join(srcDir, 'FoundryGate.Api'))) {
+for (const file of csFiles(requireDir('src', 'FoundryGate.Api'))) {
   const text = readFileSync(file, 'utf8');
   for (const m of text.matchAll(/\[Route\("([^"]+)"\)\]/g)) routeTemplates.add(m[1]);
   for (const m of text.matchAll(/\bclass\s+([A-Za-z0-9_]+)Controller\b/g)) {
@@ -487,7 +572,14 @@ const model = {
         kind: 'pool',
         members: regions.map((r) => ({ region: r.name, priority: r.poolPriority })),
       },
-      { name: 'foundry-openai (primary account)', kind: 'single', members: [{ region: regions[0]?.name, priority: 1 }] },
+      {
+      // The OpenAI backend is named for the primary account in ai-gateway.bicep
+      // (`foundry-openai-${foundryAccounts[0].name}`); the account name is only known at
+      // deploy time, so the label carries the shape rather than a fake name.
+      name: 'foundry-openai (primary account)',
+      kind: 'single',
+      members: [{ region: regions[0].name, priority: 1 }],
+    },
     ],
   },
   code: { projects, functions, apiRouteTemplates, apiRoutes },

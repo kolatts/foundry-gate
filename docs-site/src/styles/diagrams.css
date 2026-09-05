@@ -359,6 +359,16 @@
   border-top-color: var(--fgd-app);
 }
 
+/* "Generated from infra/ and src/ …" — its own line under the legend swatches. Shared by
+   ArchitectureDiagram (fully generated) and SystemDiagram (generated values, drawn layout). */
+.fgd-provenance {
+  flex-basis: 100%;
+  font-size: 0.68rem;
+  color: var(--fg-text-muted, #7E96AD);
+}
+
+.fgd-provenance a { color: var(--fg-azure-neon, #4DCFFF); }
+
 /* ── Inline SVG diagrams (state machines) ─────────────────────── */
 /* SVGs keep a minimum rendered width so text never shrinks below legibility;
    the wrapper scrolls horizontally on narrow screens instead of the page. */

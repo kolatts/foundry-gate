@@ -38,10 +38,13 @@ jobs:
           path: TestResults
           if-no-files-found: ignore
 
-  # Docs build sanity on PRs that touch the site (not a required check). infra/ and src/
-  # are in the path filter because the architecture diagram is GENERATED from them
-  # (docs-site/scripts/generate-architecture.mjs, #221): a Bicep or Functions change with
-  # no docs edit is exactly the case where the committed model would go stale.
+  # Docs build sanity on PRs that touch the site (not a required check). The path filter
+  # also covers the GENERATOR's inputs (docs-site/scripts/generate-architecture.mjs, #221)
+  # — infra/, the two src/ projects it reads and the csproj graph — because a Bicep or
+  # Functions change with no docs edit is exactly the case where the committed
+  # architecture model would go stale. It deliberately does NOT cover all of src/: a
+  # change to Core/Data/Domain/Web alone cannot move the model, and would only buy every
+  # .NET PR an npm ci plus an Astro build.
   docs-build:
     runs-on: ubuntu-latest
     steps:
@@ -50,9 +53,14 @@ jobs:
       - name: Detect docs changes
         id: docs
         shell: bash
+        # base_ref via env, not inline expansion: a branch name is attacker-influenced text.
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if git fetch origin "${{ github.base_ref }}" --depth=1 && \
-             git diff --quiet "origin/${{ github.base_ref }}"...HEAD -- docs-site/ content/ infra/ src/; then
+          if git fetch origin "$BASE_REF" --depth=1 && \
+             git diff --quiet "origin/$BASE_REF"...HEAD -- \
+               docs-site/ content/ infra/ \
+               src/FoundryGate.Functions/ src/FoundryGate.Api/ 'src/*/*.csproj'; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -71,10 +79,16 @@ jobs:
           npm ci
           npm run build
 
-      # `npm run build` regenerates src/generated via prebuild; if that moved the
-      # committed model, the PR changed the architecture without updating the diagram.
+      # `npm run build` regenerates src/generated via prebuild; if that moved the committed
+      # model, the PR changed the architecture without updating the diagram. `git status`
+      # rather than `git diff` so a NEW generated file (untracked, therefore invisible to
+      # diff) fails too.
       - name: Architecture model is up to date
         if: steps.docs.outputs.changed == 'true'
         run: |
-          git diff --exit-code docs-site/src/generated \
-            || { echo "::error::Run 'npm run generate:architecture' in docs-site/ and commit docs-site/src/generated."; exit 1; }
+          if [ -n "$(git status --porcelain -- docs-site/src/generated)" ]; then
+            git status --porcelain -- docs-site/src/generated
+            git diff -- docs-site/src/generated
+            echo "::error::The architecture model is stale. Run 'npm run generate:architecture' in docs-site/ and commit docs-site/src/generated."
+            exit 1
+          fi

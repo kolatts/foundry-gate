@@ -5,11 +5,14 @@
 // architecture model so the tier figures can never drift from infra/main.bicep.
 import arch from '../generated/architecture.json';
 import FgIcon from './FgIcon.astro';
+import { tokens as fmt } from '../lib/architecture';
 
 const tiers = arch.infra.quotaTiers;
 const aliasCount = new Set(tiers.flatMap((t) => t.aliases.map((a) => a.alias))).size;
-const fmt = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : n >= 1000 ? `${n / 1000}K` : String(n));
-const tpmRange = `${fmt(Math.min(...tiers.map((t) => t.tpm)))}–${fmt(Math.max(...tiers.map((t) => t.tpm)))}`;
+const tpms = tiers.map((t) => t.tpm);
+// Spread on an empty array gives Infinity; the generator refuses to emit zero tiers, but
+// this component should degrade to a sentence rather than to "Infinity–-Infinity".
+const tpmRange = tpms.length ? `${fmt(Math.min(...tpms))}–${fmt(Math.max(...tpms))}` : 'a set number of';
 
 const steps = [
   {
@@ -20,29 +23,29 @@ const steps = [
   {
     icon: 'key' as const,
     title: 'Whose key is this?',
-    detail: `The key is an APIM subscription, and it belongs to exactly one of ${tiers.length} tier products. No product, no service.`,
+    detail: `The key belongs to exactly one of ${tiers.length} plans — an APIM subscription scoped to that plan's product. No plan, no service.`,
   },
   {
     icon: 'shield' as const,
     title: 'Is this model allowed here?',
-    detail: `The tier's alias map is the allowlist — ${aliasCount} aliases across the tiers. Anything else is refused before it costs a token.`,
+    detail: `Each plan names the models it carries — ${aliasCount} short model names across the plans. Anything else is refused before it costs a token.`,
   },
   {
     icon: 'gauge' as const,
     title: 'Is there budget left?',
-    detail: `Two counters, both on this developer alone: ${tpmRange} tokens a minute, and the monthly budget their tier carries.`,
+    detail: `Two counters, both on this developer alone: ${tpmRange} tokens a minute, and the monthly budget their plan carries.`,
   },
   {
     icon: 'chip' as const,
     title: 'The model answers',
-    detail: 'Routed with a managed identity to a Foundry account — the nearest region first, another region if that one is throttling.',
+    detail: 'Sent on to an Azure AI Foundry account — the nearest region first, another region if that one is busy. No account keys are involved.',
   },
 ];
 
 const outcomes = [
   { code: '200', tone: 'ok', label: 'Answered', detail: 'Headers come back saying what it cost and what is left.' },
   { code: '429', tone: 'warn', label: 'Slow down', detail: 'Too fast this minute. Retry-After tells the tool how long to wait; it waits by itself.' },
-  { code: '403', tone: 'stop', label: 'Stopped', detail: 'Monthly budget spent, or a model this tier does not carry. It says which, and when it comes back.' },
+  { code: '403', tone: 'stop', label: 'Stopped', detail: 'Monthly budget spent, or a model this plan does not carry. It says which, and when it comes back.' },
 ];
 ---
 
