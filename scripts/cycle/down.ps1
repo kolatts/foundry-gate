@@ -134,3 +134,6 @@ Save-CycleState -State $state
 
 Write-CycleHeading 'Teardown complete'
 & "$PSScriptRoot/status.ps1" -Environment $Environment -Subscription $Subscription
+
+# Explicit, so cycle.ps1's $LASTEXITCODE check reflects this stage rather than the last az call.
+exit 0

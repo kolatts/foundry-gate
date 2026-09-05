@@ -280,3 +280,7 @@ Write-Host "  APIM        : $($outputs.apimName)"
 Write-Host "  Products    : $(@($outputs.productIds) -join ', ')"
 Write-Host "  Workspace   : $($outputs.logAnalyticsWorkspaceName) ($($outputs.logAnalyticsWorkspaceCustomerId))"
 Write-Host "  State file  : $(Get-CycleStatePath -Environment $Environment)"
+
+# Explicit, because cycle.ps1 reads $LASTEXITCODE to decide whether this stage passed. Without
+# it, $LASTEXITCODE still holds whatever the last `az` call inside this script left behind.
+exit 0

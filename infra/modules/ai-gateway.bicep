@@ -363,35 +363,34 @@ resource tierProducts 'Microsoft.ApiManagement/service/products@2024-06-01-previ
   }
 ]
 
-// SERIALIZED. APIM rejects concurrent link writes that target the SAME API from different
-// products with `Conflict: Link already exists between specified Product and Api` — even on
-// a first deployment where no link exists yet. Observed live 2026-09-05 on a clean deploy:
-// ARM issued all three products' links to foundrygate-anthropic in parallel, one succeeded
-// and two failed, leaving those two tier products with no APIs attached and every key
-// issued against them dead on arrival. @batchSize(1) makes the loop sequential, which costs
-// a few seconds and removes the race. The same applies to the OpenAI links below.
-@batchSize(1)
+// The link id is prefixed with the tier because `apiLinkId` must be unique across the WHOLE
+// APIM SERVICE, not within its parent product — an easy thing to get wrong, since every
+// other APIM child resource is scoped to its parent. Naming all three tiers' links
+// `anthropic-link` made the first one win and the other two fail with
+// `Conflict: Link already exists between specified Product and Api`, on a clean deploy where
+// no link existed yet. The failure is worse than it sounds: the deployment reports failure,
+// but the tier PRODUCTS were created fine, so `standard` and `power` sat there looking
+// correct in the portal with no APIs attached — and an APIM key issued against a product
+// with no APIs is dead on arrival while every policy still reads as configured.
+// Observed live 2026-09-05, see #230.
 resource tierProductAnthropicLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
-    name: 'anthropic-link'
+    name: '${tier.name}-anthropic-link'
     properties: {
       apiId: anthropicApi.id
     }
   }
 ]
 
-// Serialized for the same reason as the Anthropic links above, and declared to run after
-// them so the two loops cannot race each other either.
-@batchSize(1)
+// Tier-prefixed for the same service-wide-uniqueness reason as the Anthropic links above.
 resource tierProductOpenaiLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
-    name: 'openai-link'
+    name: '${tier.name}-openai-link'
     properties: {
       apiId: openaiApi.id
     }
-    dependsOn: [tierProductAnthropicLinks]
   }
 ]
 

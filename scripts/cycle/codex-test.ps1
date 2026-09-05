@@ -88,6 +88,23 @@ Write-CycleInfo "CODEX_HOME=$codexHome (isolated), base_url=$openaiUrl"
  approval flags matter: without them codex can block on an approval prompt with no TTY,
  and this script must never wait on a human.
 #>
+function Resolve-CliPath {
+    param([Parameter(Mandatory)][string] $Name)
+    # Start-Process needs a real file, and on Windows both CLIs ship as shims — codex is a
+    # .cmd next to a extension-less shell script, claude is an .exe. `codex` alone resolves
+    # to the extension-less file, which Start-Process cannot launch.
+    $cmd = Get-Command $Name -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandType -in @('Application') } |
+        Sort-Object { $_.Source -match '\.(cmd|bat|exe)$' ? 0 : 1 } |
+        Select-Object -First 1
+    if ($null -eq $cmd) { return $null }
+    return $cmd.Source
+}
+
+$codexPath = Resolve-CliPath -Name 'codex'
+if (-not $codexPath) { throw "codex CLI not found on PATH. Install it, or run cycle.ps1 with -SkipHarness." }
+Write-CycleInfo "codex: $codexPath"
+
 function Invoke-CodexExec {
     param([Parameter(Mandatory)][string] $Prompt)
     $outFile = [System.IO.Path]::GetTempFileName()
@@ -95,7 +112,7 @@ function Invoke-CodexExec {
     try {
         $env:CODEX_HOME = $codexHome
         $env:FOUNDRYGATE_API_KEY = $bobKey
-        $p = Start-Process -FilePath 'codex' -NoNewWindow -Wait -PassThru `
+        $p = Start-Process -FilePath $codexPath -NoNewWindow -Wait -PassThru `
             -ArgumentList @(
             'exec',
             '--skip-git-repo-check',

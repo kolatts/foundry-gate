@@ -76,6 +76,15 @@ function Invoke-Kql {
     return $result
 }
 
+# `az monitor log-analytics query` lives in an extension, not core az. Installing it on
+# demand keeps the cycle runnable on a fresh machine; --only-show-errors and the explicit
+# --yes stop it prompting, which would hang an unattended run.
+$extensions = @(Invoke-Az -Subscription $subscription -AllowFailure -Arguments @('extension', 'list'))
+if (-not ($extensions | Where-Object { $_.name -eq 'log-analytics' })) {
+    Write-CycleInfo 'Installing the az log-analytics extension.'
+    & az extension add --name log-analytics --yes --only-show-errors 2>$null | Out-Null
+}
+
 # ---- M1: wait for ingestion -------------------------------------------------------
 Write-CycleHeading "M1 — waiting for ApiManagementGatewayLlmLog rows (workspace $workspaceId)"
 $deadline = (Get-Date).AddMinutes($TimeoutMinutes)

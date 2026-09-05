@@ -103,3 +103,6 @@ Add-CycleCheck -State $state -Id 'SUB-1' -Name 'Developer keys issued against ti
     -Detail ("dev-alice=standard, dev-bob=standard, dev-carol=power on {0}" -f $apimName)
 
 Write-CycleInfo "Keys stored in $(Get-CycleStatePath -Environment $Environment) (gitignored)."
+
+# Explicit, so cycle.ps1's $LASTEXITCODE check reflects this stage rather than the last az call.
+exit 0
