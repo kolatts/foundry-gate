@@ -13,9 +13,19 @@
       dev-carol   power      the control for the monthly quota — different tier, stays 200
 
     `az apim` has no subscription verb, so this goes through the Management REST API via
-    `az rest`. Idempotent: PUT is create-or-update and the keys are read back with
-    listSecrets either way, so re-running against an existing gateway returns the same keys
-    rather than rotating them.
+    `az rest`.
+
+    EACH CYCLE GETS FRESH SUBSCRIPTION IDS, and that is not cosmetic. The monthly
+    `token-quota` counter is keyed on `context.Subscription.Id` and there is no way to reset
+    it — a subscription that has spent its budget stays spent until the calendar month rolls
+    over. Reusing `dev-alice` across cycles therefore means the SECOND cycle in a month can
+    never demonstrate the quota wall (dev-alice starts at 403) and can never demonstrate the
+    TPM wall either (she never gets a 200 to burn). So the real APIM ids carry a cycle stamp
+    — `dev-alice-202609051530` — while the state file keeps the stable logical names the
+    other stages ask for.
+
+    -Reuse keeps whatever ids the state file already holds, for re-running a later stage
+    against the counters an earlier one built up.
 
     Keys land in the gitignored state file and are redacted out of every printed line and
     out of the evidence report. -ShowKeys prints them (local convenience; never in CI).
@@ -28,7 +38,9 @@ param(
     [string] $Environment = 'test',
     [string] $Subscription,
     [Parameter(HelpMessage = 'Print the subscription keys. Local use only.')]
-    [switch] $ShowKeys
+    [switch] $ShowKeys,
+    [Parameter(HelpMessage = 'Keep the subscription ids already in the state file instead of minting fresh ones.')]
+    [switch] $Reuse
 )
 
 Set-StrictMode -Version Latest
@@ -58,8 +70,20 @@ if (-not $state.ContainsKey('apimSubscriptions') -or $null -eq $state.apimSubscr
     $state.apimSubscriptions = @{}
 }
 
+$stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmm')
+
 foreach ($name in $developers.Keys) {
     $product = $developers[$name]
+
+    $existing = $state.apimSubscriptions[$name]
+    if ($Reuse -and $null -ne $existing -and $existing.ContainsKey('subscriptionId')) {
+        $subscriptionId = [string]$existing.subscriptionId
+        Write-CycleInfo "reusing $name -> $subscriptionId"
+    }
+    else {
+        $subscriptionId = "$name-$stamp"
+    }
+
     $body = @{
         properties = @{
             scope       = "$apimId/products/$product"
@@ -71,12 +95,12 @@ foreach ($name in $developers.Keys) {
         }
     } | ConvertTo-Json -Depth 6 -Compress
 
-    $bodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "fg-sub-$name.json"
+    $bodyFile = Join-Path ([System.IO.Path]::GetTempPath()) "fg-sub-$subscriptionId.json"
     Set-Content -Path $bodyFile -Value $body -Encoding utf8
     try {
         Invoke-Az -Subscription $Subscription -Arguments @(
             'rest', '--method', 'put',
-            '--url', "https://management.azure.com$apimId/subscriptions/$($name)?api-version=$apiVersion",
+            '--url', "https://management.azure.com$apimId/subscriptions/$($subscriptionId)?api-version=$apiVersion",
             '--body', "@$bodyFile"
         ) | Out-Null
     }
@@ -86,16 +110,17 @@ foreach ($name in $developers.Keys) {
 
     $secrets = Invoke-Az -Subscription $Subscription -Arguments @(
         'rest', '--method', 'post',
-        '--url', "https://management.azure.com$apimId/subscriptions/$name/listSecrets?api-version=$apiVersion"
+        '--url', "https://management.azure.com$apimId/subscriptions/$subscriptionId/listSecrets?api-version=$apiVersion"
     )
 
     $state.apimSubscriptions[$name] = @{
-        product    = $product
-        primaryKey = $secrets.primaryKey
-        scope      = "$apimId/products/$product"
+        product        = $product
+        subscriptionId = $subscriptionId
+        primaryKey     = $secrets.primaryKey
+        scope          = "$apimId/products/$product"
     }
     $shown = if ($ShowKeys) { $secrets.primaryKey } else { "$($secrets.primaryKey.Substring(0,4))… (redacted)" }
-    Write-Host "  $name -> product '$product', key $shown" -ForegroundColor Green
+    Write-Host "  $name -> $subscriptionId, product '$product', key $shown" -ForegroundColor Green
 }
 
 Save-CycleState -State $state

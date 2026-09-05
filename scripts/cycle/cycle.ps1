@@ -34,7 +34,9 @@ param(
     [string] $Environment = 'test',
     [string] $Location = 'eastus2',
     [int] $MonthlyTokenQuota = 40000,
-    [int] $Tpm = 8000,
+    # Must exceed one codex exec (~10K) or the harness deadlocks at the 429 wall and can
+    # never reach the monthly quota — see up.ps1's parameter comment.
+    [int] $Tpm = 12000,
     [switch] $CreateModelDeployments,
     [switch] $SkipClaude,
     [ValidateSet('KeepFoundry', 'Full', 'None')]

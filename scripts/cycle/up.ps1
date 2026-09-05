@@ -49,8 +49,17 @@ param(
     [Parameter(HelpMessage = 'Monthly token budget for the standard tier. Small on purpose: the 403 path must be reachable.')]
     [int] $MonthlyTokenQuota = 40000,
 
-    [Parameter(HelpMessage = 'Tokens-per-minute cap for the standard tier. Small on purpose: the 429 path must be reachable.')]
-    [int] $Tpm = 8000,
+    <#
+      Tokens-per-minute cap for the standard tier. Small on purpose so the 429 path is
+      reachable — but NOT smaller than one `codex exec`, which spends ~9-10K tokens on its
+      system prompt before it does anything. Verified live 2026-09-05 at 8000: Codex 429s,
+      retries, keeps the bucket empty, never completes a single exec, and therefore never
+      spends any of its MONTHLY budget — the harness deadlocks at the TPM wall and the quota
+      wall becomes unreachable. 12000 leaves enough headroom for one exec per minute, so a
+      standard-tier key hits 429 within a session and 403 after three or four of them.
+    #>
+    [Parameter(HelpMessage = 'Tokens-per-minute cap for the standard tier. Must exceed one codex exec (~10K) or the harness deadlocks at the 429 wall.')]
+    [int] $Tpm = 12000,
 
     [Parameter(HelpMessage = 'Force createModelDeployments=true. Only valid on a genuinely fresh Foundry account — see E-007.')]
     [switch] $CreateModelDeployments,

@@ -97,12 +97,15 @@ function Resolve-CliPath {
     # Start-Process needs a real file, and on Windows both CLIs ship as shims — codex is a
     # .cmd next to a extension-less shell script, claude is an .exe. `codex` alone resolves
     # to the extension-less file, which Start-Process cannot launch.
-    $cmd = Get-Command $Name -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandType -in @('Application') } |
-        Sort-Object { $_.Source -match '\.(cmd|bat|exe)$' ? 0 : 1 } |
-        Select-Object -First 1
-    if ($null -eq $cmd) { return $null }
-    return $cmd.Source
+    # -All matters: `codex` resolves to THREE commands on Windows (codex.ps1, codex.cmd and an
+    # extension-less shell script), and Get-Command without -All returns whichever the
+    # resolution order picks — often the extension-less one, which Start-Process cannot launch.
+    $candidates = @(Get-Command $Name -All -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandType -eq [System.Management.Automation.CommandTypes]::Application })
+    if ($candidates.Count -eq 0) { return $null }
+    $launchable = @($candidates | Where-Object { $_.Source -match '\.(cmd|bat|exe)$' })
+    if ($launchable.Count -gt 0) { return $launchable[0].Source }
+    return $candidates[0].Source
 }
 
 $codexPath = Resolve-CliPath -Name 'codex'
@@ -116,7 +119,14 @@ function Invoke-CodexExec {
     )
     $outFile = [System.IO.Path]::GetTempFileName()
     $errFile = [System.IO.Path]::GetTempFileName()
+    $inFile = [System.IO.Path]::GetTempFileName()
     try {
+        # The prompt goes in on STDIN, not as an argument. Start-Process joins -ArgumentList
+        # with spaces and does no quoting, so a multi-word prompt arrives as several
+        # arguments and codex refuses with "unexpected argument 'with' found". `codex exec`
+        # reads its instructions from stdin when no PROMPT argument is given, which sidesteps
+        # the quoting problem entirely and has no length limit.
+        Set-Content -Path $inFile -Value $Prompt -Encoding utf8
         $env:CODEX_HOME = $codexHome
         $env:FOUNDRYGATE_API_KEY = $Key
         $p = Start-Process -FilePath $codexPath -NoNewWindow -Wait -PassThru `
@@ -124,10 +134,9 @@ function Invoke-CodexExec {
             'exec',
             '--skip-git-repo-check',
             '--sandbox', 'read-only',
-            '--cd', $codexWork,
-            '--color', 'never',
-            $Prompt
-        ) -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+            '--cd', "`"$codexWork`"",
+            '--color', 'never'
+        ) -RedirectStandardInput $inFile -RedirectStandardOutput $outFile -RedirectStandardError $errFile
         return [pscustomobject]@{
             ExitCode = $p.ExitCode
             StdOut   = (Get-Content -Path $outFile -Raw -ErrorAction SilentlyContinue) ?? ''
@@ -135,7 +144,7 @@ function Invoke-CodexExec {
         }
     }
     finally {
-        Remove-Item -Path $outFile, $errFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $outFile, $errFile, $inFile -Force -ErrorAction SilentlyContinue
         Remove-Item Env:FOUNDRYGATE_API_KEY -ErrorAction SilentlyContinue
     }
 }
