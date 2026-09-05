@@ -45,11 +45,21 @@ Run them individually if you only need one; they all read and write the same sta
 
 ### `up.ps1` — 8-14 min
 
-Validates the policy XML offline, builds the Bicep, deploys `infra/main.bicep` at
-subscription scope. Overrides the `standard` tier down to **40 000 tokens/month and 8 000
-TPM** so the 403 and 429 paths are reachable in a handful of requests (`codex exec` burns
-~9K tokens per run on its own system prompt), and leaves `power`/`unlimited` generous so
-the "other tiers keep working" controls mean something.
+Purges a soft-deleted APIM holding the name (see below), validates the policy XML offline,
+builds the Bicep, deploys `infra/main.bicep` at subscription scope with two demo tiers of
+deliberately **opposite shapes**, because no single tier can demonstrate both meters:
+
+| Tier | Monthly | TPM | Proves |
+|---|---|---|---|
+| `standard` | 40 000 | 12 000 | the **429** wall (`T4`, `C2`) — tight per-minute cap |
+| `power` | 60 000 | 100 000 | the **403** wall (`T5c`, `C3`) — small budget, room to spend it |
+
+The TPM floor matters. `codex exec` spends ~9–10K tokens on its system prompt before it does
+anything, so a tier whose per-minute cap is *below* one exec **deadlocks the harness**: Codex
+429s, retries, keeps the bucket empty, gives up without finishing, and therefore never spends
+its monthly budget at all. Verified live across 25 consecutive execs at both 8 000 and 12 000
+TPM — the 403 is simply unreachable from behind a tight 429. That is why `C3` runs on the
+generous-TPM tier ([#237](https://github.com/kolatts/foundry-gate/issues/237)).
 
 PASS looks like: `UP-1 PASS`, a gateway URL printed, and every deployment listed as
 `Succeeded`. APIM StandardV2 provisioning dominates the wall clock.
@@ -63,9 +73,17 @@ Creates three APIM subscriptions against tier products, through the Management R
 |---|---|---|
 | `dev-alice` | standard | the victim — smoke.ps1 drives her into 429 then 403 |
 | `dev-bob` | standard | TPM isolation control, then the Codex harness subject |
-| `dev-carol` | power | monthly-quota control — stays 200 while alice is blocked |
+| `dev-carol` | power | monthly-quota control, and the `C3` harness subject |
 
-Idempotent: re-running reads the same keys back rather than rotating them.
+**Every cycle mints fresh subscription ids** (`dev-alice-202609051530`). This is not
+cosmetic: the monthly `token-quota` counter is keyed on the APIM subscription and there is no
+way to reset it, so reusing `dev-alice` means the *second* cycle in a calendar month starts
+her at 403 and can demonstrate neither wall. `-Reuse` keeps the ids already in the state file.
+
+The stage then **waits for each key to propagate**. A subscription the Management API has
+already created is not immediately accepted by the gateway; without the wait, the first few
+smoke checks fail with `401 Access denied due to invalid subscription key` on a key that
+works a minute later.
 
 ### `smoke.ps1` — 8-15 min
 
@@ -163,7 +181,13 @@ pwsh scripts/cycle/down.ps1 -Mode Full     # clean slate, spends Claude create a
 ```
 
 **`KeepFoundry` (default).** Deletes everything in the resource group *except* the
-`Microsoft.CognitiveServices/accounts`. APIM goes — it is the only meaningful idle cost —
+`Microsoft.CognitiveServices/accounts`, **and purges the soft-deleted APIM service**. That
+purge is load-bearing: deleting an APIM service only soft-deletes it and the name stays
+reserved, so without it the very next `up.ps1` fails with
+`ServiceAlreadyExistsInSoftDeletedState` and "spin up and down frequently" is impossible
+after exactly one cycle. Purging APIM has nothing to do with the Anthropic create-once
+problem, which is about Cognitive Services accounts — and those this mode keeps.
+APIM goes — it is the only meaningful idle cost —
 and the Foundry accounts and their model deployments survive, so the next `up.ps1` re-runs
 the template with `createModelDeployments=false` over them. Idle Foundry accounts cost
 nothing; consumption is per token. This is what makes "spin up and down frequently"
@@ -221,7 +245,12 @@ pwsh scripts/cycle/report.ps1 -Path validation/2026-09-05-gateway-cycle.md
 | `403` with `x-fg-error: model_not_permitted` | the `model` is not an alias in that tier's map | use the alias (`gpt`, `sonnet`, `haiku`), never the deployment name |
 | `403` with `x-fg-error: plan_required` | the key is not scoped to a tier product | reissue it against a product, not at API scope |
 | `403` with **no** `x-fg-error` | APIM's native monthly `token-quota` refusal | expected in T5/C3; otherwise move the developer to a bigger tier |
-| `429` + `Retry-After` | per-minute TPM cap | expected in T4/C2; honour `Retry-After` |
+| `429` + `Retry-After`, `x-fg-remaining-tpm: 0` | the gateway's per-subscription TPM cap | expected in T4/C2; honour `Retry-After` |
+| `429` but `x-fg-remaining-tpm` still **full** | not the meter — the shared Foundry deployment is saturated, passed through because the OpenAI policy does not retry a single backend | raise the deployment's capacity, or spread load; the developer's own budget is untouched |
+| Codex 429s forever and never finishes an exec | the tier's TPM is below one exec (~10K) | raise the tier's TPM — from behind this wall the monthly quota is unreachable (#237) |
+| `ServiceAlreadyExistsInSoftDeletedState` on deploy | APIM soft-delete reserves the name | `az apim deletedservice purge`; `up.ps1` and `down.ps1` both do this now |
+| `401` on a key that was just created | the key has not propagated to the gateway nodes yet | wait ~30–60s; `subscriptions.ps1` polls for this |
+| `Conflict: Link already exists between specified Product and Api` | `apiLinkId` must be unique across the whole APIM **service**, not per product | tier-prefix the link id, and delete the old links first (#230) |
 | `404` from the backend on a Claude alias | the alias resolved but the deployment does not exist | E-007 — do **not** recreate it in a loop |
 | M1 times out with no LLM log rows | Log Analytics ingestion lag | re-run `measure.ps1` then `report.ps1` later; not a gateway failure |
 | `az` "Failed to parse string as JSON" on a deployment | cmd.exe ate the quotes out of a JSON parameter | use `Format-AzJsonArg` from `_common.ps1` |
