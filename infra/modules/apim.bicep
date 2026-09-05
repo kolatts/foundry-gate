@@ -43,6 +43,16 @@ resource llmLogs 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: apim
   properties: {
     workspaceId: workspaceId
+    // REQUIRED, and its absence fails silently. Without `Dedicated`, Azure Monitor sends
+    // both categories to the legacy catch-all `AzureDiagnostics` table instead of the
+    // resource-specific `ApiManagementGatewayLlmLog` / `ApiManagementGatewayLogs` tables —
+    // which are exactly the two tables src/FoundryGate.Functions/Kql/UsageBySubscription.kql
+    // joins. The diagnostic setting reports healthy, rows really do arrive, and the
+    // reconciliation query returns an empty result forever.
+    // Verified live 2026-09-05: `search * | summarize count() by $table` showed 582 rows in
+    // AzureDiagnostics (289 GatewayLlmLogs + 293 GatewayLogs) and zero rows in either
+    // resource-specific table.
+    logAnalyticsDestinationType: 'Dedicated'
     logs: [
       { category: 'GatewayLogs', enabled: true }
       { category: 'GatewayLlmLogs', enabled: true }
