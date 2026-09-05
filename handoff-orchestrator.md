@@ -1,4 +1,48 @@
-# Session handoff — 2026-09-02 state, owner actions, live-validation order
+# Session handoff — 2026-09-05 state, what is live, what needs a human
+
+## 2026-09-05 session in one screen
+
+Sixteen PRs merged today (#218–#273). What changed, and where to resume:
+
+- **`dev` is live and the whole `Deploy All` chain is green** (#105 closed). Endpoints in
+  the table below. It is left running; tear it down with `infra-destroy.yml`
+  (`DESTROY-dev`), never with `scripts/cycle/down.ps1`.
+- **The demo works on the OpenAI path.** `.claude/skills/gateway-cycle/SKILL.md` +
+  `scripts/cycle/` spin up a gateway-only `test` stack on Imagile Paid, issue keys, run
+  `codex exec` through it, drive it into `429` then monthly `403`, prove Log Analytics
+  measurement (within 3% of the cap), and tear down (`KeepFoundry` by default). Evidence:
+  `validation/2026-09-05-gateway-cycle.md`. `-AttachOnly` runs the same checks against
+  `dev` without deploying (`validation/2026-09-05-dev-gateway.md`); reconciliation is
+  proven to the token (`UsageSyncFunction` → `QuotaAllocation.TokensUsed`).
+- **Claude is blocked at the subscription level** (#231/#88, `needs-human`,
+  `do-not-automate`): three creates on three accounts (fresh and long-lived) fail with an
+  opaque `InternalServerError` while the Marketplace agreement is Active. Needs an Azure
+  support ticket; agents must not attempt further creates.
+- **Admins manage models in the UI**: `/models` (allowed aliases per tier, written to the
+  APIM named value live — validated on dev, #226) and the `/foundry` provision dialog (#225).
+- **Docs**: generated architecture diagram (`architecture/diagram`, regenerated on every
+  build, CI fails when stale), more visual landing page, live-evidence links.
+- **Backlog shape**: 8 parents with native sub-issues, execution labels
+  (`automated-ok` / `needs-human` / `do-not-automate`), milestones `v0.6` + `Backlog`,
+  everything on [GitHub Project #3](https://github.com/users/kolatts/projects/3).
+  Conventions are in `PLANS.md`.
+
+| Parent | What it holds |
+|---|---|
+| #220 Live validation of dev | remaining: #178 §3/4 (monthly reset), #120 (needs `Entra__Enabled` + Graph grants), #192/#234 (admin UI walkthrough — do it signed in, MSAL redirect does not work under browser automation), #183, #205, #266 |
+| #81 Claude on Foundry | #88, #107, #126, #231 — all human-gated |
+| #222 Owner setup / production | production identities, `prod-destroy` second reviewer, #229 (read-only what-if impossible), #138 |
+| #223 Decisions | #122, #150 |
+| #224 Engineering debt | plus today's finds: #256/#257 (CLI), #262/#264/#265/#267–#270 (API), #272 (bUnit flake), #249/#250/#243/#254 (pipeline) |
+
+**Human actions, in priority order:** (1) Azure support ticket for Anthropic deployment
+creation (#231 has the correlation ids); (2) sign into the dev UI and walk the admin pages
+(#192); (3) flip `Entra__Enabled` after confirming the Graph grants (#120); (4) production
+identities and reviewers (#222/#109); (5) decide #229, #122, #150.
+
+---
+
+# Previous handoff (2026-09-02, with 2026-09-05 status blocks inline)
 
 Everything below is the complete state for whoever (human or agent) picks this up. The
 decision trail lives in `fable-refactor-log.md` (D-001–D-021, E-001–E-010); engineering
@@ -94,10 +138,12 @@ Two things that surprised this deploy and will surprise the next one:
 - **SQL lives in `centralus`, not `eastus2`** — both eastus2 and eastus are closed to *new*
   Azure SQL logical servers on this subscription, invisibly to every quota query (#241). The
   server's location is immutable, so this is a one-shot decision per environment.
-- **No model deployments exist.** Claude is wedged at the subscription's Marketplace agreement
-  (#88, `needs-human`) and `gpt-4-1-mini` was skipped because every post-day-0 run must carry
-  `create-model-deployments=false`. The gateway 404s on any model until one is created out of
-  band, which is the control plane's job (#60/#64) rather than ARM's.
+- **Only OpenAI models exist.** Claude is wedged at the subscription level (#231/#88,
+  `needs-human`). `gpt-4-1-mini` was missing after day 0 (#259) because the old
+  `createModelDeployments=false` rule skipped it too; since #273 ARM reconciles OpenAI
+  deployments on every run and only Anthropic ones are create-once
+  (`createAnthropicModelDeployments`). The deploy prints a warning when a tier's TPM exceeds
+  the backing deployment's capacity (#260).
 
 **Production has never been deployed** and has no identities, no SQL admin group and no
 Environment variables — that is the open half of #109. The "live-validate X" issues below are
