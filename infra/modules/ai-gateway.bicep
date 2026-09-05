@@ -363,6 +363,14 @@ resource tierProducts 'Microsoft.ApiManagement/service/products@2024-06-01-previ
   }
 ]
 
+// SERIALIZED. APIM rejects concurrent link writes that target the SAME API from different
+// products with `Conflict: Link already exists between specified Product and Api` — even on
+// a first deployment where no link exists yet. Observed live 2026-09-05 on a clean deploy:
+// ARM issued all three products' links to foundrygate-anthropic in parallel, one succeeded
+// and two failed, leaving those two tier products with no APIs attached and every key
+// issued against them dead on arrival. @batchSize(1) makes the loop sequential, which costs
+// a few seconds and removes the race. The same applies to the OpenAI links below.
+@batchSize(1)
 resource tierProductAnthropicLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
@@ -373,6 +381,9 @@ resource tierProductAnthropicLinks 'Microsoft.ApiManagement/service/products/api
   }
 ]
 
+// Serialized for the same reason as the Anthropic links above, and declared to run after
+// them so the two loops cannot race each other either.
+@batchSize(1)
 resource tierProductOpenaiLinks 'Microsoft.ApiManagement/service/products/apiLinks@2024-06-01-preview' = [
   for (tier, i) in quotaTiers: {
     parent: tierProducts[i]
@@ -380,6 +391,7 @@ resource tierProductOpenaiLinks 'Microsoft.ApiManagement/service/products/apiLin
     properties: {
       apiId: openaiApi.id
     }
+    dependsOn: [tierProductAnthropicLinks]
   }
 ]
 

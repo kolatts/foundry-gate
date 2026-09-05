@@ -69,6 +69,36 @@ Prod additionally requires `FG_SQL_ADMIN_GROUP_OBJECT_ID` and `FG_SQL_ADMIN_GROU
 access model, so prod deliberately fails to build until that group exists rather than
 pointing at the dev group; see [#109](https://github.com/kolatts/foundry-gate/issues/109)).
 
+## Local gateway test cycle
+
+The gateway data plane is meant to be stood up, proved and torn down often — APIM
+StandardV2 is the only meaningful idle cost (~$0.28/hr), and nothing else in the gateway
+half bills while it sits there. `scripts/cycle/` automates the whole loop:
+
+```bash
+pwsh scripts/cycle/cycle.ps1 -Subscription "<subscription name>"
+```
+
+Roughly 35–55 minutes, unattended. It deploys the template with the `standard` tier shrunk
+to demo size (40 000 tokens/month, 8 000 TPM) so the 403 and 429 paths are reachable in a
+handful of requests, issues three developer keys against tier products, runs the enforcement
+matrix, drives a real Codex CLI session into both walls, reconciles the token counts out of
+Log Analytics with `UsageBySubscription.kql`, tears the gateway down and writes a markdown
+evidence report to `validation/`.
+
+Individual stages (`up`, `subscriptions`, `smoke`, `codex-test`, `measure`, `down`,
+`status`) can be run on their own; they share a gitignored state file under
+`scripts/cycle/.state/`.
+
+Teardown defaults to **`KeepFoundry`**, which deletes everything in the resource group
+*except* the Foundry accounts. That is not a convenience — Anthropic deployments are
+create-once per account, so destroying the accounts spends the next spin-up's only Claude
+create attempt. `-Mode Full` deletes and purges everything, and is labelled with that risk.
+
+The agent-facing runbook, including the Anthropic create-once rules and the failure-mode
+table, is `.claude/skills/gateway-cycle/SKILL.md`. Committed evidence from real runs lives
+in [`validation/`](https://github.com/kolatts/foundry-gate/tree/main/validation).
+
 ## Naming convention
 
 `{env}` is `environmentName` (`test`, `dev`, `prod`); `{suffix}` is `nameSuffix`, needed

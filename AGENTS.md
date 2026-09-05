@@ -22,6 +22,10 @@
   side-remarks: file an issue (labeled appropriately, on the right milestone) and
   reference it. A PR that discovers new work files the issue in the same breath.
   PRs close their issues via `Closes #N`.
+- **Live gateway testing.** To stand the gateway up, prove enforcement and measurement
+  against it with real Codex/Claude Code sessions, and tear it back down, use the
+  `gateway-cycle` skill (`.claude/skills/gateway-cycle/SKILL.md`) and `scripts/cycle/`.
+  Teardown defaults to KeepFoundry because Anthropic deployments are create-once (E-007).
 - **imagile-bot automation** (mirrored from pncli): `claude-triage.yml` implements
   issues labeled `claude-triage` as `claude/issue-N` PRs under the imagile-bot app
   identity; `claude-review.yml` gives every PR a formal Claude review. Both are
