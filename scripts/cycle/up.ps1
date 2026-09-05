@@ -134,6 +134,24 @@ if ($create -and -not $SkipClaude) {
     Write-Host '  NOTE: this run will make its ONE Anthropic create attempt (E-007). It is never retried.' -ForegroundColor Yellow
 }
 
+# ---- 2b. Clear a soft-deleted APIM holding the name ------------------------------
+# APIM soft-deletes on delete and keeps the name reserved, so a deploy into a name whose
+# previous service is still in the soft-deleted state fails with
+# ServiceAlreadyExistsInSoftDeletedState. down.ps1 purges on the way out; this is the
+# recovery path for a gateway torn down some other way (a hand-run `az apim delete`, an
+# older cycle, someone deleting the resource group in the portal).
+$apimName = "apim-foundrygate-$Environment-$((Select-String -Path $paramFile -Pattern "nameSuffix\s*=\s*'([^']+)'").Matches[0].Groups[1].Value)"
+$softDeleted = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+    'apim', 'deletedservice', 'list', '--query', "[?name=='$apimName']"
+)
+if ($null -ne $softDeleted -and @($softDeleted).Count -gt 0) {
+    Write-CycleHeading "Purging soft-deleted APIM $apimName (it would block this deploy)"
+    Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+        'apim', 'deletedservice', 'purge', '--service-name', $apimName, '--location', $Location
+    ) | Out-Null
+    Write-CycleInfo 'Purged.'
+}
+
 # ---- 3. Parameter overrides ------------------------------------------------------
 # quotaTiers: standard shrunk to demo size, power/unlimited left generous so the
 # "other tiers keep working while alice is blocked" assertions are meaningful.

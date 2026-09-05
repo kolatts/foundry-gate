@@ -86,6 +86,18 @@ if ($Mode -eq 'KeepFoundry') {
         $args = @('apim', 'delete', '--name', $a.name, '--resource-group', $rgName, '--yes')
         if ($NoWait) { $args += '--no-wait' }
         Invoke-Az -Subscription $Subscription -AllowFailure -Arguments $args | Out-Null
+
+        # AND PURGE IT. Deleting an APIM service only SOFT-deletes it, and the name stays
+        # reserved: the very next up.ps1 fails with
+        #   ServiceAlreadyExistsInSoftDeletedState: Api service <name> was soft-deleted.
+        # which would defeat the entire point of a teardown you can run frequently.
+        # Purging APIM has nothing to do with the Anthropic create-once problem — that is
+        # about Cognitive Services accounts, which this mode keeps — so there is no reason
+        # not to, and every reason to.
+        Write-Host "  purge soft-deleted APIM $($a.name)" -ForegroundColor Yellow
+        Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
+            'apim', 'deletedservice', 'purge', '--service-name', $a.name, '--location', $a.location
+        ) | Out-Null
     }
 
     foreach ($r in @($drop | Where-Object { $_.type -ne 'Microsoft.ApiManagement/service' })) {
