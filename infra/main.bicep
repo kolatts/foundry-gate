@@ -85,6 +85,10 @@ param primaryOnlyModelDeployments array = [
     // that, the deployment throttles before the developer's own meter does and `x-fg-remaining-tpm`
     // is never the reason they are refused. GlobalStandard bills per token, so capacity is a rate
     // ceiling, not a reservation: raising it costs nothing until the tokens are actually spent.
+    // Headroom: the subscription's gpt-4.1-mini GlobalStandard quota is 5 000 units (read live
+    // 2026-09-05 from an InsufficientQuota error, which reports the limit), so 100 is 2% of it. A
+    // fork on a smaller quota lowers this — and every infra run now PUTs it, including the one
+    // _deploy-api.yml makes, so an over-large value fails the API deploy and not just infra.
     capacity: 100
   }
 ]
@@ -465,7 +469,23 @@ var tierAliasReach = flatten(
   }))
 )
 
-var modelCapacityShortfalls = filter(tierAliasReach, r => r.deploymentTpm < r.tierTpm)
+// One row per deployment, not per (tier, alias): the same under-provisioned deployment behind
+// three tiers is one thing to fix, and a warning channel that repeats itself is one nobody reads.
+var shortfallDeployments = union(
+  [],
+  map(filter(tierAliasReach, r => r.deploymentTpm < r.tierTpm), r => r.deployment)
+)
+
+var modelCapacityShortfalls = map(shortfallDeployments, name => {
+  deployment: name
+  deploymentTpm: deploymentServableTpm[?name] ?? 0
+  requiredTpm: reduce(
+    map(filter(tierAliasReach, r => r.deployment == name), r => r.tierTpm),
+    0,
+    (highest, tpm) => max(highest, tpm)
+  )
+  tiers: union([], map(filter(tierAliasReach, r => r.deployment == name && r.deploymentTpm < r.tierTpm), r => r.tier))
+})
 
 // ---- Outputs: the contract the deploy workflows and the CLI consume -------------
 // Gateway: addresses, the tier products that developer subscriptions scope to, the
@@ -527,5 +547,5 @@ output modelAliasRows array = controlPlane.?outputs.modelAliasRows ?? []
 @description('The gateway quota tier table as the control plane receives it — one row per tier, matching the Gateway__Tiers__{i}__* settings on both hosts (#201).')
 output quotaTierRows array = controlPlane.?outputs.quotaTierRows ?? []
 
-@description('Aliases whose backing deployment cannot serve the TPM of a tier that can reach it (#260). Empty means every tier is well-formed; each entry names the tier, the alias, the deployment, the tier TPM and the TPM the deployment can serve. Reported by the deploy as a warning, never fatal.')
+@description('Deployments that cannot serve the TPM of a tier that can reach them (#260). Empty means every tier is well-formed; each entry names the deployment, the TPM it can serve, the highest tier TPM routed at it, and the tiers affected. Reported by the deploy as a warning, never fatal.')
 output modelCapacityWarnings array = modelCapacityShortfalls

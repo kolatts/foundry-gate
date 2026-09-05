@@ -182,7 +182,7 @@ public sealed class FoundryDeploymentService(
                 "Anthropic (Claude) deployments cannot be created through the API: creation requires the Marketplace " +
                 "modelProviderData attestation, which the current Azure SDK cannot send and the API's identity is not " +
                 "permitted to make (see GitHub issues #107 and #126). Claude deployments are managed by the infrastructure " +
-                "deploy (infra/main.bicep, createModelDeployments=true, first run only). OpenAI-format deployments are supported.");
+                "deploy (infra/main.bicep, createAnthropicModelDeployments=true, first run only). OpenAI-format deployments are supported.");
         }
 
         // Create-once: an existing name is a 409, never a re-PUT (CLAUDE.md; E-006/E-007).

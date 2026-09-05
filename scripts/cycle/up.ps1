@@ -19,7 +19,7 @@
                                param file's values so the "carol is unaffected" half of
                                the quota test means something.
 
-      createModelDeployments   Anthropic deployments are CREATE-ONCE under ARM (E-007):
+      createAnthropicModelDeployments   Claude deployments are CREATE-ONCE under ARM (E-007):
                                re-PUTing one drives it to Failed and, after enough churn,
                                poisons Claude creation for the whole account. So this is
                                auto-detected — true only when the resource group holds no
@@ -30,7 +30,7 @@
                                subscription already burned a Claude create attempt.
 
     Idempotent: run it against an already-deployed environment and it re-runs the template
-    with createModelDeployments=false, which is the supported re-run shape.
+    with createAnthropicModelDeployments=false, which is the supported re-run shape.
 
 .EXAMPLE
     pwsh scripts/cycle/up.ps1 -Subscription "Imagile Paid"
@@ -61,7 +61,7 @@ param(
     [Parameter(HelpMessage = 'Tokens-per-minute cap for the standard tier. Must exceed one codex exec (~10K) or the harness deadlocks at the 429 wall.')]
     [int] $Tpm = 12000,
 
-    [Parameter(HelpMessage = 'Force createModelDeployments=true. Only valid on a genuinely fresh Foundry account — see E-007.')]
+    [Parameter(HelpMessage = 'Force createAnthropicModelDeployments=true. Only valid on a genuinely fresh Foundry account — see E-007.')]
     [switch] $CreateModelDeployments,
 
     [Parameter(HelpMessage = 'Deploy OpenAI model deployments only. Use when a Claude create attempt has already been spent in this subscription.')]
@@ -233,7 +233,7 @@ if ($AttachOnly) {
     $state.modelDeployments = $models.states
     $state.claudeAvailable = $models.claudeAvailable
 
-    $state.createModelDeploymentsUsed = $false
+    $state.createAnthropicModelDeploymentsUsed = $false
     $state.skipClaude = $true
     $state.upCompletedUtc = Get-CycleTimestamp
     $state.upElapsedSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds)
@@ -275,7 +275,7 @@ if ($LASTEXITCODE -ne 0) { throw 'az bicep build failed.' }
 Write-CycleInfo 'infra/main.bicep compiles.'
 
 # ---- 2. Day-0 detection ----------------------------------------------------------
-Write-CycleHeading 'Determining createModelDeployments'
+Write-CycleHeading 'Determining createAnthropicModelDeployments'
 $existingAccounts = @()
 $rg = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @('group', 'show', '--name', $resourceGroup)
 if ($null -ne $rg) {
@@ -291,11 +291,11 @@ if ($CreateModelDeployments) {
 }
 elseif ($existingAccounts.Count -gt 0) {
     $create = $false
-    Write-CycleInfo "Foundry account(s) already present ($($existingAccounts -join ', ')) — re-run shape, createModelDeployments=false."
+    Write-CycleInfo "Foundry account(s) already present ($($existingAccounts -join ', ')) — re-run shape, createAnthropicModelDeployments=false."
 }
 else {
     $create = $true
-    Write-CycleInfo 'No Foundry account in the resource group — this is day 0, createModelDeployments=true.'
+    Write-CycleInfo 'No Foundry account in the resource group — this is day 0, createAnthropicModelDeployments=true.'
 }
 
 if ($create -and -not $SkipClaude) {
@@ -380,7 +380,7 @@ $deployArgs = @(
     '--location', $Location
     '--template-file', (Join-Path $repoRoot 'infra' 'main.bicep')
     '--parameters', $paramFile
-    '--parameters', "createModelDeployments=$($create.ToString().ToLowerInvariant())"
+    '--parameters', "createAnthropicModelDeployments=$($create.ToString().ToLowerInvariant())"
     '--parameters', "quotaTiers=$quotaTiersJson"
 )
 if ($SkipClaude) {
@@ -457,20 +457,21 @@ foreach ($key in $result.properties.outputs.Keys) {
 
 $state.outputs = $outputs
 $state.quotaTiers = $quotaTiers
-$state.createModelDeploymentsUsed = $create
+$state.createAnthropicModelDeploymentsUsed = $create
 $state.skipClaude = [bool]$SkipClaude
 $state.upCompletedUtc = Get-CycleTimestamp
 $state.upElapsedSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds)
 $state.deployElapsedSeconds = [math]::Round($deployElapsed.TotalSeconds)
 
 # ---- 6. OpenAI create-if-missing on the primary account --------------------------
-# Narrow, deliberate exception to "ARM owns day-0 deployments". A re-run passes
-# createModelDeployments=false to protect the ANTHROPIC deployments (E-007), but that flag
-# is all-or-nothing, so an account that came up without its OpenAI deployment — an
-# interrupted day-0, a hand-deleted deployment — can never get one back from the template.
-# OpenAI deployments provision synchronously and reliably in the same accounts where
-# Anthropic ones are fragile (E-007e), so creating a MISSING one out of band is safe.
-# This never touches an existing deployment and never runs for format=Anthropic.
+# Belt and braces since #259: the template itself now reconciles OpenAI deployments on
+# every run (createAnthropicModelDeployments guards only the Claude ones, whose re-PUT is
+# what E-007 is about), so this block should find nothing to do on any run that deployed
+# the template successfully. It stays for the paths that skip or partially apply it — an
+# interrupted deploy, a hand-deleted deployment, a cycle attached to an environment
+# somebody else deployed. It never touches an existing deployment and never runs for
+# format=Anthropic. Capacity matches infra/main.bicep's primaryOnlyModelDeployments so the
+# out-of-band path cannot recreate the sub-tier-TPM deployment #260 was filed over.
 $primaryAccount = @($outputs.foundryAccountNames)[0]
 $existingDeployments = @()
 $listed = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
@@ -478,7 +479,7 @@ $listed = Invoke-Az -Subscription $Subscription -AllowFailure -Arguments @(
 )
 if ($null -ne $listed) { $existingDeployments = @($listed | ForEach-Object { $_.name }) }
 
-foreach ($m in @(@{ name = 'gpt-4-1-mini'; model = 'gpt-4.1-mini'; version = '2025-04-14'; sku = 'GlobalStandard'; capacity = 10 })) {
+foreach ($m in @(@{ name = 'gpt-4-1-mini'; model = 'gpt-4.1-mini'; version = '2025-04-14'; sku = 'GlobalStandard'; capacity = 100 })) {
     if ($existingDeployments -contains $m.name) { continue }
     Write-CycleHeading "Creating missing OpenAI deployment $($m.name) on $primaryAccount"
     Invoke-Az -Subscription $Subscription -Arguments @(
@@ -516,7 +517,7 @@ if (-not $claudeOk) {
 Save-CycleState -State $state
 
 Add-CycleCheck -State $state -Id 'UP-1' -Name 'Gateway deployed' -Status 'PASS' `
-    -Detail ("{0} in {1:mm\:ss}, createModelDeployments={2}" -f $outputs.apimGatewayUrl, $deployElapsed, $create)
+    -Detail ("{0} in {1:mm\:ss}, createAnthropicModelDeployments={2}" -f $outputs.apimGatewayUrl, $deployElapsed, $create)
 Add-CycleCheck -State $state -Id 'UP-2' -Name 'Anthropic (Claude) deployment provisioned' `
     -Status ($claudeOk ? 'PASS' : 'FAIL') `
     -Detail ($claudeOk ? 'At least one Anthropic deployment in Succeeded.' : 'No Anthropic deployment reached Succeeded — E-007. Not retried by design.')

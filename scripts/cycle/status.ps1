@@ -103,7 +103,7 @@ if ($attached) {
 }
 elseif ($apimCount -eq 0 -and $foundryCount -gt 0) {
     Write-Host "  State: TORN DOWN (KeepFoundry). $foundryCount Foundry account(s) and the telemetry stores remain, none of which bill at rest." -ForegroundColor Green
-    Write-Host '  Next up.ps1 will re-run the template with createModelDeployments=false over them.'
+    Write-Host '  Next up.ps1 will re-run the template with createAnthropicModelDeployments=false over them.'
 }
 elseif ($apimCount -gt 0) {
     Write-Host '  State: UP. APIM is the meter that is running — scripts/cycle/down.ps1 stops it.' -ForegroundColor Yellow

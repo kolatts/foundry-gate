@@ -10,7 +10,7 @@
       Microsoft.CognitiveServices/accounts. That removes APIM — the only meaningful idle
       cost in the stack — along with monitoring, while leaving the Foundry accounts and
       their model deployments in place, so the next up.ps1 re-runs the template with
-      createModelDeployments=false over surviving accounts.
+      createAnthropicModelDeployments=false over surviving accounts.
 
       This is the default BECAUSE of E-007: Anthropic deployments are create-once per
       account, an account that has churned Claude deployments starts refusing new ones, and

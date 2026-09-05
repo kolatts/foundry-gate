@@ -73,7 +73,8 @@
   existing one, never delete/recreate in a loop (see fable-refactor-log.md E-007).
 - Claude Code sends `x-api-key`; Codex needs `env_http_headers = { "api-key" = ... }`.
 - Infra lives in `infra/` (subscription-scope `main.bicep`); re-runs must pass
-  `createModelDeployments=false`.
+  `createAnthropicModelDeployments=false`. That flag guards **only** the Claude
+  deployments — OpenAI ones re-PUT idempotently, so ARM reconciles them every run (#259).
 
 ## Conventions
 

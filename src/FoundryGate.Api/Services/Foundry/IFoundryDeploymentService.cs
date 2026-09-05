@@ -12,7 +12,7 @@ namespace FoundryGate.Api.Services.Foundry;
 /// </summary>
 /// <remarks>
 /// <para><b>Ownership split.</b> Claude (Anthropic-format) deployments belong to the infrastructure
-/// deploy end to end: <c>infra/main.bicep</c> creates them once (<c>createModelDeployments</c>),
+/// deploy end to end: <c>infra/main.bicep</c> creates them once (<c>createAnthropicModelDeployments</c>),
 /// and the API neither creates nor deletes them — it lists them. The API manages OpenAI-format
 /// deployments. Reason (CLAUDE.md "Architecture ground truths"; fable-refactor-log.md E-006/E-007):
 /// Anthropic deployments need a Marketplace attestation the SDK cannot send (#126/#107), a re-PUT

@@ -40,8 +40,10 @@ az deployment sub create \
 
 # The capacity ceiling (#260): a tier whose TPM exceeds what its aliases' deployments can serve
 # throttles on the deployment before the developer's own meter is ever reached. Bicep computes the
-# shortfalls; this surfaces them where someone will see them. Never fatal - capacity is a human
-# decision, and for Claude a create-once one (#205).
+# shortfalls; this surfaces them where someone will see them.
+#
+# Reporting must never fail a deployment that succeeded, so the whole block is best-effort: `|| true`
+# on both the read and the render, and a broad except inside the renderer.
 WARNINGS=$(az deployment sub show --name "$DEPLOYMENT_NAME" \
   --query "properties.outputs.modelCapacityWarnings.value" --output json 2>/dev/null || echo '[]')
 
@@ -50,13 +52,13 @@ import json, sys
 
 try:
     rows = json.load(sys.stdin) or []
-except (ValueError, TypeError):
-    sys.exit(0)
-
-for r in rows:
-    print(
-        "::warning title=Model capacity below tier TPM::"
-        "Tier {tier} allows {tierTpm} TPM, but alias {alias} routes at deployment {deployment}, "
-        "which can serve {deploymentTpm} TPM. Developers on this tier are throttled by the "
-        "deployment before their own meter is ever reached (#260).".format(**r))
-'
+    for r in rows:
+        print(
+            "::warning title=Model capacity below tier TPM::"
+            "Deployment {} can serve {} TPM, but tier(s) {} route at it with up to {} TPM. "
+            "Developers on those tiers are throttled by the deployment before their own meter is "
+            "ever reached (#260).".format(
+                r["deployment"], r["deploymentTpm"], ", ".join(r["tiers"]), r["requiredTpm"]))
+except Exception as error:  # reporting is never worth failing a successful deploy
+    print("::notice::Could not render modelCapacityWarnings ({}).".format(error))
+' || true
