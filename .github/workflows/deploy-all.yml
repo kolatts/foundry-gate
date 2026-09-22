@@ -151,6 +151,26 @@ jobs:
   infra:
     name: Infra
     needs: plan
+    # EPHEMERAL BY DEFAULT (#279). A push to `main` no longer stands dev up.
+    #
+    # dev's gateway is an APIM Basic v2 instance: ~$4.93/day, ~$148/month, billed whether or
+    # not a request ever reaches it. `Imagile Paid` is capped at $50/month, so an environment
+    # that reappears on every merge cannot be reconciled with the cap — and no budget alert
+    # fixes that, because an alert fires after the money is already committed.
+    #
+    # The bill was never caused by an expensive resource. It was caused by an environment that
+    # existed BY DEFAULT: nothing in this chain ever asked whether dev needed to be up, so
+    # merging was the decision, and people merge for unrelated reasons. Stand dev up
+    # deliberately instead — the `gateway-cycle` skill, or a workflow_dispatch of this file —
+    # and tear it down when the testing that needed it is done.
+    #
+    # A workflow_dispatch is never gated by this, so deliberate dev runs and every production
+    # deploy behave exactly as before. Set the repo variable FG_DEV_AUTO_DEPLOY='true' to
+    # restore push-deploys-dev; it is a flag flip, not a rewrite.
+    #
+    # Everything downstream `needs: infra`, so it all skips together; `summary` is
+    # `if: always()` and reports the skip rather than failing the run.
+    if: github.event_name == 'workflow_dispatch' || vars.FG_DEV_AUTO_DEPLOY == 'true'
     uses: ./.github/workflows/_deploy-infra.yml
     permissions:
       id-token: write

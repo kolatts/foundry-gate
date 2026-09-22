@@ -22,12 +22,11 @@ pull request ──► ci.yml (build · Predeployment tests · format)   require
              ├─► FoundryGate.Web/**  → ui-deploy.yml      : SWA preview (ui-preview), closed when the PR closes
              └─► docs-site/**        → docs-deploy.yml    : Astro build
 
-merge to main ─► anything deployable → deploy-all.yml   : THE chain, against dev
+merge to main ─► anything deployable → deploy-all.yml   : SKIPPED unless FG_DEV_AUTO_DEPLOY
               │     (infra/**, src/**, Directory.*.props, global.json, NuGet.config,
               │      .github/workflows/_deploy-*.yml, .github/scripts/**, .github/actions/**)
               │
-              │     plan → infra → prepare-database → database → api → functions ∥ ui
-              │           → postdeployment tests → summary
+              │     plan runs; infra and everything after it skip, and summary says so
               └─► docs-site/**       → docs-deploy.yml : GitHub Pages
 
 manual ───────► deploy-all.yml    : the same chain against dev or production
@@ -35,8 +34,25 @@ manual ───────► deploy-all.yml    : the same chain against dev o
               └─► infra-destroy.yml : typed confirmation → listing → destroy gate → delete resource group
 ```
 
-**One workflow deploys on merge.** `deploy-all.yml` is the only workflow with a `push` trigger
-(besides docs). The single-component wrappers — `infra-deploy.yml`, `api-deploy.yml`,
+**Merging does not deploy dev.** `deploy-all.yml` is the only workflow with a `push` trigger
+(besides docs), and since [#279](https://github.com/kolatts/foundry-gate/issues/279) its `infra`
+job carries `if: github.event_name == 'workflow_dispatch' || vars.FG_DEV_AUTO_DEPLOY == 'true'`.
+A merge to `main` therefore runs `plan` and skips the rest.
+
+The reason is cost, and it is worth stating precisely because the shape recurs. dev's gateway is
+an APIM Basic v2 instance at roughly $148/month, billed whether or not a request ever reaches it,
+in a subscription capped at $50/month. The money was never caused by an expensive resource — it
+was caused by an environment that existed *by default*, because nothing in the chain ever asked
+whether dev needed to be up. Merging was the decision, and people merge for unrelated reasons.
+So dev is now spun up deliberately (the `gateway-cycle` skill, or a `workflow_dispatch` of this
+file) and torn down when the testing that needed it is done. A `workflow_dispatch` is never
+gated, so targeted dev runs and every production deploy are unchanged; setting the repo variable
+`FG_DEV_AUTO_DEPLOY='true'` restores the old behaviour.
+
+The cost of this is real and deliberate: a live dev environment no longer tracks `main` on its
+own, so "is the deployed thing current?" is a question you now have to ask rather than assume.
+
+ The single-component wrappers — `infra-deploy.yml`, `api-deploy.yml`,
 `functions-deploy.yml`, `ui-deploy.yml` — have **no** `push` trigger: they keep their PR-track
 jobs and a `workflow_dispatch` for targeted redeploys. That is deliberate. They all shared the
 `deploy-{env}` concurrency group, and GitHub keeps exactly one *pending* run per group, so a
@@ -91,7 +107,7 @@ children (`workflow_call`) that take `environment:` and are composed by `deploy-
 | File | Triggers | Jobs | Gate | Reads |
 |---|---|---|---|---|
 | `ci.yml` | PR, merge queue | `build-test` (**required check**), `docs-build` | — | — |
-| `deploy-all.yml` | **push `main`** (`infra/**`, `src/**`, `Directory.*.props`, `global.json`, `NuGet.config`, `.github/workflows/_deploy-*.yml`, `.github/scripts/**`, `.github/actions/**`) · dispatch (`environment`, `create-model-deployments`, `run-seed-test`) | plan → infra → prepare-database → database → api → functions ∥ ui → postdeployment-tests → summary | the target environment, once per gated job (six for a full production run) | — |
+| `deploy-all.yml` | **push `main`** (`infra/**`, `src/**`, `Directory.*.props`, `global.json`, `NuGet.config`, `.github/workflows/_deploy-*.yml`, `.github/scripts/**`, `.github/actions/**`) — deploys only when `vars.FG_DEV_AUTO_DEPLOY == 'true'`, otherwise `plan` runs and the rest skips (#279) · dispatch (`environment`, `create-model-deployments`, `run-seed-test`), never gated | plan → infra → prepare-database → database → api → functions ∥ ui → postdeployment-tests → summary | the target environment, once per gated job (six for a full production run) | — |
 | `infra-deploy.yml` | PR `infra/**` → what-if comment · dispatch (`environment`, `create-model-deployments`) | calls `_deploy-infra.yml` | `dev-plan` (PR what-if) · `dev` / `production` (dispatch) | — |
 | `infra-destroy.yml` | dispatch only (`environment`, `confirmation`, `purge-soft-deleted`) | `validate-confirmation` → `list-resources` → `destroy` | `dev-destroy` / `prod-destroy` | `AZURE_*` on the destroy environment |
 | `api-deploy.yml` | PR touching the Dockerfile → image build check · dispatch (`environment`, `run-seed-test`) | `image-build` (PR, no Azure) · `_prepare-database` → `_deploy-database` → `_deploy-api` | `dev` / `production` | — |
@@ -325,15 +341,16 @@ cleanly, so ARM reconciles them on every run
 ([#259](https://github.com/kolatts/foundry-gate/issues/259)).
 
 **Change infra.** Open a PR touching `infra/**`; read the what-if comment (run under the
-read-only `dev-plan` identity); merge → `deploy-all.yml` runs the whole chain against dev,
-starting with that infra deploy. Promote with `Actions → Deploy All → environment: production`
+read-only `dev-plan` identity); merge. The merge itself deploys nothing — dispatch
+`Actions → Deploy All → environment: dev` when you actually want dev standing, and tear it down
+afterwards. Promote with `Actions → Deploy All → environment: production`
 and approve the gate at each stage; `Actions → Infra Deploy → environment: production` promotes
 the infrastructure alone. One run holds one environment lock, so promotion is two dispatches
 rather than one `dev-then-production` run.
 
-**Ship code.** Merge to `main`. `deploy-all.yml` runs the whole ordered chain against dev — not
-just the component you touched, because schema, API, Functions and UI share `FoundryGate.Domain`
-and the ordering between them is the point. To redeploy one component (a flaky Functions
+**Ship code.** Merge to `main`, then dispatch `Deploy All` against dev when dev needs to exist.
+The chain deploys everything, not just the component you touched, because schema, API, Functions
+and UI share `FoundryGate.Domain` and the ordering between them is the point. To redeploy one component (a flaky Functions
 publish, a rollback), dispatch its wrapper: `API Deploy`, `Functions Deploy`, `UI Deploy`,
 `Infra Deploy`. Production is `deploy-all.yml` with `environment: production`, or the same
 per-component dispatch.
