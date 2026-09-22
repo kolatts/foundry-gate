@@ -106,6 +106,7 @@ jobs:
           TARGET_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
           CREATE_MODEL_DEPLOYMENTS: ${{ github.event_name == 'workflow_dispatch' && inputs.create-model-deployments || false }}
           TRIGGER: ${{ github.event_name }}
+          AUTO_DEPLOY: ${{ vars.FG_DEV_AUTO_DEPLOY }}
         run: |
           {
             echo "# Deploy All — ${TARGET_ENVIRONMENT}"
@@ -117,6 +118,24 @@ jobs:
             echo "                                              \`-> ui --------'"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          # Tell the truth about whether anything is going to be deployed. Since #279 a push
+          # does not stand dev up, so without this the summary would promise a chain that is
+          # about to skip.
+          if [ "${TRIGGER}" = "push" ] && [ "${AUTO_DEPLOY}" != "true" ]; then
+            {
+              echo "## Nothing will be deployed"
+              echo ""
+              echo "A push to \`main\` no longer stands dev up — every stage after \`plan\` skips."
+              echo "dev's APIM instance is ~\$148/month whether or not anything uses it, and this"
+              echo "subscription is capped at \$50/month, so the environment is spun up"
+              echo "deliberately and torn down after (#279)."
+              echo ""
+              echo "To deploy dev: **Actions → Deploy All → Run workflow → environment: dev**,"
+              echo "or set the repo variable \`FG_DEV_AUTO_DEPLOY='true'\` to restore the old behaviour."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           if [ "${TARGET_ENVIRONMENT}" != "production" ]; then
             echo "The \`${TARGET_ENVIRONMENT}\` Environment has no required reviewers — this run proceeds unattended." >> "$GITHUB_STEP_SUMMARY"
@@ -151,6 +170,26 @@ jobs:
   infra:
     name: Infra
     needs: plan
+    # EPHEMERAL BY DEFAULT (#279). A push to `main` no longer stands dev up.
+    #
+    # dev's gateway is an APIM Basic v2 instance: ~$4.93/day, ~$148/month, billed whether or
+    # not a request ever reaches it. `Imagile Paid` is capped at $50/month, so an environment
+    # that reappears on every merge cannot be reconciled with the cap — and no budget alert
+    # fixes that, because an alert fires after the money is already committed.
+    #
+    # The bill was never caused by an expensive resource. It was caused by an environment that
+    # existed BY DEFAULT: nothing in this chain ever asked whether dev needed to be up, so
+    # merging was the decision, and people merge for unrelated reasons. Stand dev up
+    # deliberately instead — the `gateway-cycle` skill, or a workflow_dispatch of this file —
+    # and tear it down when the testing that needed it is done.
+    #
+    # A workflow_dispatch is never gated by this, so deliberate dev runs and every production
+    # deploy behave exactly as before. Set the repo variable FG_DEV_AUTO_DEPLOY='true' to
+    # restore push-deploys-dev; it is a flag flip, not a rewrite.
+    #
+    # Everything downstream `needs: infra`, so it all skips together; `summary` is
+    # `if: always()` and reports the skip rather than failing the run.
+    if: github.event_name == 'workflow_dispatch' || vars.FG_DEV_AUTO_DEPLOY == 'true'
     uses: ./.github/workflows/_deploy-infra.yml
     permissions:
       id-token: write
