@@ -18,7 +18,7 @@ name: Deploy All
 # conditional `needs:`, so the dependency is unconditional; the cost is a few minutes, the
 # benefit is that the day-0 path — the one this file exists for — cannot race itself.
 #
-#   push to main (deployable paths) -> the whole chain against dev
+#   push to main (deployable paths) -> the whole chain against dev  [suspended, see `on:`]
 #   workflow_dispatch               -> the whole chain against the chosen environment
 #
 # A production run stops at the `production` reviewer gate once per pending job — SIX
@@ -36,26 +36,12 @@ name: Deploy All
 # Docs are not part of this chain: GitHub Pages deploys from docs-deploy.yml on push to main
 # and has no Azure dependency.
 
+# SUSPENDED 2026-10-17: the `push` trigger is removed while Foundry Gate is shut down, so a
+# merge to main can no longer re-create rg-foundrygate-dev (and its standing SQL / Container
+# App / registry cost). To resume, restore the `push:` block from git history and run this
+# workflow once by hand as a day-0 run (create-model-deployments = true) — infra-destroy
+# deleted the Foundry accounts, and Claude deployments are create-once.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "infra/**"
-      - "src/**"
-      - "Directory.Build.props"
-      - "Directory.Packages.props"
-      - "global.json"
-      - "NuGet.config"
-      - ".github/workflows/deploy-all.yml"
-      - ".github/workflows/_deploy-api.yml"
-      - ".github/workflows/_deploy-database.yml"
-      - ".github/workflows/_deploy-functions.yml"
-      - ".github/workflows/_deploy-infra.yml"
-      - ".github/workflows/_deploy-ui.yml"
-      - ".github/workflows/_postdeployment-tests.yml"
-      - ".github/workflows/_prepare-database.yml"
-      - ".github/scripts/**"
-      - ".github/actions/**"
   workflow_dispatch:
     inputs:
       environment:

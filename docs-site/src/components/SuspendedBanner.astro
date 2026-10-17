@@ -1,0 +1,54 @@
+---
+// Project-status notice shown on the landing page and every docs page.
+// Foundry Gate's Azure environments were shut down on 2026-10-17 to stop the
+// standing cost; the docs, source and captured evidence stay up. To lift the
+// suspension, delete this component's two usages (pages/index.astro and
+// components/PageFrame.astro) — nothing else depends on it.
+const base = import.meta.env.BASE_URL.replace(/\/?$/, '/');
+---
+
+<aside class="fg-suspended" role="status">
+  <span class="fg-suspended-tag">Suspended</span>
+  <span class="fg-suspended-text">
+    Foundry Gate is on hold. There is no hosted gateway or demo environment running right now, but the docs, source and
+    test evidence are all still here. To try it, <a href={`${base}getting-started/fork-guide/`}>deploy your own copy</a>.
+  </span>
+</aside>
+
+<style>
+  .fg-suspended {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem 0.75rem;
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid color-mix(in srgb, var(--fg-ember) 45%, transparent);
+    background: color-mix(in srgb, var(--fg-ember) 14%, var(--fg-bg-base));
+    color: var(--fg-text-primary);
+    font-size: 0.875rem;
+    line-height: 1.45;
+    text-align: center;
+  }
+
+  .fg-suspended-tag {
+    flex: none;
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    background: var(--fg-ember-hot);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .fg-suspended-text a {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+</style>
