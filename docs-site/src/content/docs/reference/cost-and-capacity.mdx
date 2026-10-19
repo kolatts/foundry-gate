@@ -15,19 +15,30 @@ EA/CSP agreements differ. Capacity figures derive from live gateway validation
 The gateway + control plane costs roughly the same whether it serves 5 developers or
 150 — model consumption is the variable cost, machinery is the fixed one.
 
-### Budget configuration (~$190–215/month)
+### Budget configuration (~$170–185/month)
 
 | Component | SKU | Monthly |
 |---|---|---|
 | API Management | Basic v2, 1 unit ($0.21/hr, 10M calls incl.) | $153.30 |
-| Azure SQL | GP serverless, auto-pause (control plane is light) | ~$11–22 |
+| Azure SQL | `Basic`, 5 DTU / 2 GB provisioned | ~$4.90 |
 | Container Apps (API) | 1 × 0.25 vCPU / 0.5 GiB, mostly idle | ~$4–14 |
 | Functions | Flex Consumption (timers — under free grant) | $0 |
 | Static Web Apps | Free tier | $0 |
 | Log Analytics | token logs, no message bodies (~0.3 GB @ $2.76/GB) | ~$1 |
 | App Insights | 10% sampling | ~$1–5 |
 | Storage + Key Vault + ACR Basic | | ~$6 |
-| **Total** | | **≈ $190–215** |
+| **Total** | | **≈ $170–185** |
+
+Dev's SQL was originally `GP_S_Gen5` serverless (1 max vCore, 0.5 min, 60-minute
+auto-pause), modeled at ~$11–22/month. It never actually paused: `UsageSyncFunction`
+polls on a 15-minute timer (`0 */15 * * * *`), so the database was touched four times an
+hour and the 60-minute idle window never elapsed. It billed a full vCore around the
+clock — **$166.47** across the first 16 days after the 2026-09-05 deploy, roughly
+$10.50/day and ~$315/month annualized, for a database holding 33 MB and growing
+~0.4 MB/day. Moved to provisioned `Basic` (5 DTU, 2 GB max size) on 2026-09-21
+([#277](https://github.com/kolatts/foundry-gate/issues/277)); `infra/modules/sql.bicep`
+no longer has a serverless code path at all, and
+`InfraSqlTierTests` fails the build on a `GP_S_*` SKU in any parameter file.
 
 ### Production configuration (~$660 with Basic v2 · ~$1,210 with Standard v2)
 

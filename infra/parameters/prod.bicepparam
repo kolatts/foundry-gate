@@ -41,15 +41,19 @@ param deployControlPlane = true
 param sqlAdminGroupObjectId = readEnvironmentVariable('FG_SQL_ADMIN_GROUP_OBJECT_ID')
 param sqlAdminGroupName = readEnvironmentVariable('FG_SQL_ADMIN_GROUP_NAME')
 
-// Provisioned General Purpose, 2 vCores, geo-redundant backups: no auto-pause latency
-// for the admin plane and cross-region restore for the system of record. Serverless
-// vs provisioned is derived from the SKU name (GP_S_* = serverless).
+// Provisioned General Purpose, 2 vCores, geo-redundant backups: predictable latency for the
+// admin plane and cross-region restore for the system of record. Serverless is not an option —
+// modules/sql.bicep is provisioned-only since #277. Inherits main.bicep's 32 GB sqlMaxSizeBytes,
+// which this SKU supports; Basic would not.
 param sqlDatabaseSku = {
   name: 'GP_Gen5_2'
   tier: 'GeneralPurpose'
   family: 'Gen5'
   capacity: 2
 }
+// 32 GB. Set explicitly because main.bicep's default is 2 GB, sized for the Basic default it ships
+// beside; General Purpose supports far more and prod should not inherit dev's ceiling.
+param sqlMaxSizeBytes = 34359738368
 // Geo: cross-region restore for the system of record. Note the asymmetry this creates with
 // the zone-redundant database below — RA-GRS backup storage is LRS *within* the primary
 // region, so a zone loss takes the primary backups with it while the database itself keeps

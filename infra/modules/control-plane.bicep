@@ -70,6 +70,8 @@ param quotaTiers array
 param sqlAdminGroupObjectId string
 param sqlAdminGroupName string
 param sqlDatabaseSku object
+@description('Max database size in bytes; must fit sqlDatabaseSku (Basic caps at 2 GB). Declared without a default for the same reason as its neighbours — see the note above.')
+param sqlMaxSizeBytes int
 param sqlBackupStorageRedundancy string
 @description('Spread the SQL database across availability zones (prod). Adds ~60% to the compute meter (see main.bicep); the region must offer AZs and the SKU must support ZR.')
 param sqlZoneRedundant bool
@@ -169,6 +171,7 @@ module sql 'sql.bicep' = {
     entraAdminGroupObjectId: sqlAdminGroupObjectId
     entraAdminGroupName: sqlAdminGroupName
     databaseSku: sqlDatabaseSku
+    maxSizeBytes: sqlMaxSizeBytes
     backupStorageRedundancy: sqlBackupStorageRedundancy
     zoneRedundant: sqlZoneRedundant
   }

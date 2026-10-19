@@ -46,9 +46,22 @@ param deployControlPlane = true
 param sqlAdminGroupObjectId = '186dafe0-e7af-4bc8-940d-cac5314ffe82'
 param sqlAdminGroupName = 'SG_FOUNDRYGATE_SQL_ADMINS'
 
-// Serverless GP_S_Gen5 x1 (the main.bicep default): auto-pauses after 60 idle minutes.
-// That pause is real only because nothing polls the database — the API's readiness probe
-// deliberately hits the hermetic /health, not /health/ready (modules/container-app.bicep).
+// Basic: 5 DTU, 2 GB, ~$4.90/month, provisioned. Explicit rather than inherited so the tier is
+// visible in the file that owns dev's cost.
+//
+// This replaced serverless GP_S_Gen5 on 2026-09-21 (#277). The theory behind serverless was that
+// dev idles and auto-pause makes idling free; the practice was that UsageSyncFunction reconnects
+// every 15 minutes, the 60-minute pause delay never elapsed, and dev billed a full vCore around
+// the clock — $166 in the first 16 days for a database holding 33 MB. Basic bills the same
+// whether the timer runs or not. Dev has grown ~0.4 MB/day, so 2 GB is roughly a decade of
+// headroom; if a demo ever needs more, S0 (10 DTU, 250 GB, ~$14.72/month) is the next step up and
+// sqlMaxSizeBytes has to grow with it.
+param sqlDatabaseSku = {
+  name: 'Basic'
+  tier: 'Basic'
+}
+param sqlMaxSizeBytes = 2147483648
+
 param sqlBackupStorageRedundancy = 'Local'
 
 // NOT eastus2, and this is not a preference. On 2026-09-05 both eastus2 and eastus were
