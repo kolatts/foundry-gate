@@ -62,9 +62,10 @@ jobs:
           classify_inline_comments: 'true'
           include_fix_links: 'true'
           plugin_marketplaces: |
-            https://github.com/kolatts/claude-marketplace.git
+            https://github.com/imagile-dev/claude-plugins.git
           plugins: |
-            sunny
+            imagile-dev-tools@imagile
+            sunny@imagile
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
