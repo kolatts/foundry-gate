@@ -140,9 +140,10 @@ jobs:
           # track_progress is rejected on workflow_dispatch by the action.
           track_progress: ${{ github.event_name == 'issues' }}
           plugin_marketplaces: |
-            https://github.com/kolatts/claude-marketplace.git
+            https://github.com/imagile-dev/claude-plugins.git
           plugins: |
-            sunny
+            imagile-dev-tools@imagile
+            sunny@imagile
           prompt: |
             You are an issue triage agent for the @kolatts/foundry-gate repository —
             an AI budget gateway for Azure AI Foundry (.NET 10 solution in src/,
