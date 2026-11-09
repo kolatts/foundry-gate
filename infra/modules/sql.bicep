@@ -18,11 +18,17 @@
 // on purpose: undeclared child resources are left alone by an incremental deployment, so a
 // re-run never wipes a rule the pipeline just added.
 //
-// AUTO-PAUSE: serverless SKUs (GP_S_*) get autoPauseDelay/minCapacity, derived from the
-// SKU name so a provisioned SKU can never be sent serverless-only properties. Whether the
-// database actually pauses depends on nothing touching it for that long — the API's
-// readiness probe deliberately does not (modules/container-app.bicep); periodic Functions
-// jobs (#84) should keep their cadence above the pause delay or accept an always-on vCore.
+// TIER: PROVISIONED ONLY. Serverless (GP_S_*) is deliberately not supported here, because its
+// whole saving is conditional on something a template cannot promise: that nothing touches the
+// database for the entire pause delay. Dev ran GP_S_Gen5 with a 60-minute delay from 2026-09-05
+// and never paused once — UsageSyncFunction's `0 */15 * * * *` timer (#84) reconnects four times
+// an hour, so the delay never elapsed. It billed a full vCore around the clock: ~$10.50/day,
+// ~$315/month, for a database holding 33 MB (#277). A provisioned SKU bills the same whether it
+// is touched or not, which makes the bill a property of this file rather than a property of a
+// timer schedule somebody may change later without thinking about SQL at all.
+//
+// Basic (5 DTU, 2 GB, ~$4.90/month) is what dev uses; prod uses provisioned General Purpose.
+// InfraSqlTierTests pins this: a GP_S_* name in main.bicep or any parameter file fails the build.
 param sqlServerName string
 param sqlDatabaseName string
 
@@ -47,25 +53,18 @@ param entraAdminGroupObjectId string
 @description('Display name of that group — becomes the server admin login name.')
 param entraAdminGroupName string
 
-@description('Database SKU: { name, tier, family?, capacity? }. GP_S_* names are serverless (auto-pause enabled); anything else is provisioned.')
+@description('Provisioned database SKU: { name, tier, family?, capacity? } — Basic for dev, GP_Gen5_2 for prod. Serverless GP_S_* names are rejected by InfraSqlTierTests; see the TIER note above.')
 param databaseSku object
-
-@description('Serverless only: minutes of inactivity before auto-pause (-1 disables auto-pause).')
-param autoPauseDelayMinutes int = 60
-
-@description('Serverless only: minimum vCores while active, as a decimal string (0.5 is the floor for 1 max vCore).')
-param serverlessMinCapacity string = '0.5'
 
 @allowed(['Local', 'Zone', 'Geo', 'GeoZone'])
 @description('Backup storage redundancy. Local for dev, Geo for prod.')
 param backupStorageRedundancy string = 'Local'
 
-@description('Max database size in bytes (default 32 GB).')
+@description('Max database size in bytes. Must fit the SKU — Basic caps at 2 GB (2147483648) and ARM fails the deployment rather than clamping a larger value.')
 param maxSizeBytes int = 34359738368
 
 param zoneRedundant bool = false
 
-var serverless = startsWith(databaseSku.name, 'GP_S_')
 
 resource sqlServer 'Microsoft.Sql/servers@2023-08-01-preview' = {
   name: sqlServerName
@@ -107,8 +106,6 @@ resource database 'Microsoft.Sql/servers/databases@2023-08-01-preview' = {
     maxSizeBytes: maxSizeBytes
     zoneRedundant: zoneRedundant
     requestedBackupStorageRedundancy: backupStorageRedundancy
-    autoPauseDelay: serverless ? autoPauseDelayMinutes : null
-    minCapacity: serverless ? json(serverlessMinCapacity) : null
   }
 }
 
@@ -116,6 +113,5 @@ output sqlServerName string = sqlServer.name
 output sqlServerId string = sqlServer.id
 output sqlServerFqdn string = sqlServer.properties.fullyQualifiedDomainName
 output sqlDatabaseName string = database.name
-output serverless bool = serverless
 @description('Entra-auth connection string (no secret in it). Same shape _deploy-database.yml computes for the dacpac deploy.')
 output entraConnectionString string = 'Server=tcp:${sqlServer.properties.fullyQualifiedDomainName},1433;Database=${database.name};Authentication=Active Directory Default;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;'

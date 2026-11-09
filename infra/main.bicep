@@ -176,13 +176,14 @@ param sqlAdminGroupObjectId string = ''
 @description('Display name of that group (becomes the SQL server admin login name).')
 param sqlAdminGroupName string = ''
 
-@description('Azure SQL database SKU: { name, tier, family?, capacity? }. GP_S_* names are serverless (auto-pause derived from the name); default is serverless for dev, prod.bicepparam uses provisioned General Purpose.')
+@description('Azure SQL database SKU: { name, tier, family?, capacity? }. PROVISIONED ONLY - serverless GP_S_* names are rejected by InfraSqlTierTests, because their auto-pause saving depends on nothing touching the database, and the 15-minute UsageSyncFunction timer guarantees something does (#277, modules/sql.bicep). The default is the cheap one on purpose: an environment that forgets to choose gets Basic, not a vCore billed around the clock. prod.bicepparam overrides it with provisioned General Purpose.')
 param sqlDatabaseSku object = {
-  name: 'GP_S_Gen5'
-  tier: 'GeneralPurpose'
-  family: 'Gen5'
-  capacity: 1
+  name: 'Basic'
+  tier: 'Basic'
 }
+
+@description('Max Azure SQL database size in bytes. Must fit sqlDatabaseSku: Basic caps at 2 GB (2147483648) and ARM fails the deployment rather than clamping a larger value. The default is 2 GB because the default SKU is Basic - the pair has to be coherent for an environment that overrides neither. An environment that moves up to General Purpose raises this too; prod.bicepparam sets both.')
+param sqlMaxSizeBytes int = 2147483648
 
 @allowed(['Local', 'Zone', 'Geo', 'GeoZone'])
 @description('Azure SQL backup storage redundancy: Local for dev, Geo for prod.')
@@ -398,6 +399,7 @@ module controlPlane 'modules/control-plane.bicep' = if (deployControlPlane) {
     sqlAdminGroupObjectId: sqlAdminGroupObjectId
     sqlAdminGroupName: sqlAdminGroupName
     sqlDatabaseSku: sqlDatabaseSku
+    sqlMaxSizeBytes: sqlMaxSizeBytes
     sqlBackupStorageRedundancy: sqlBackupStorageRedundancy
     sqlZoneRedundant: sqlZoneRedundant
     entraTenantId: entraTenantId

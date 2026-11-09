@@ -265,7 +265,8 @@ A fork that enables the gateway's GenAI diagnostic setting by hand needs the sam
 | `appEnvironment` | `qa` | `prod` | `ASPNETCORE_ENVIRONMENT` — lowercase `qa`/`prod`; `local` is docker-only |
 | `sqlAdminGroupObjectId` / `sqlAdminGroupName` | `SG_FOUNDRYGATE_SQL_ADMINS` | `$FG_SQL_ADMIN_GROUP_OBJECT_ID` / `$FG_SQL_ADMIN_GROUP_NAME` (required) | SQL server administrator (Entra-only auth; no SQL login exists) |
 | `sqlLocation` | `centralus` | set it explicitly | region for the SQL logical server, defaulting to `location`. Dev overrides it because **`eastus2` and `eastus` are both closed to new Azure SQL servers** on this subscription — see below |
-| `sqlDatabaseSku` | `GP_S_Gen5` ×1 — serverless, 60-min auto-pause | `GP_Gen5_2`, provisioned | serverless is derived from the SKU name (`GP_S_*`) |
+| `sqlDatabaseSku` | `Basic`, 5 DTU | `GP_Gen5_2`, provisioned, 2 vCore | dev was `GP_S_Gen5` serverless until [#277](https://github.com/kolatts/foundry-gate/issues/277) — see below; `sql.bicep` has no serverless code path any more, and `InfraSqlTierTests` fails the build on a `GP_S_*` SKU |
+| `sqlMaxSizeBytes` | `2147483648` (2 GB) | `34359738368` (32 GB) | `Basic` tops out at 2 GB; `InfraSqlTierTests` fails the build if a `Basic` SKU pairs with a larger max size |
 | `sqlBackupStorageRedundancy` | `Local` | `Geo` | |
 | `sqlZoneRedundant` | `false` | `true` | survives the loss of one availability zone without a restore; adds ~60% to the SQL compute meter (see [Cost & capacity](/foundry-gate/reference/cost-and-capacity/)) |
 | `entraTenantId` | tenant | tenant | `AzureAd__TenantId` |
@@ -325,6 +326,23 @@ Two things must agree with it: `sqlZoneRedundant` requires a region that actuall
 availability zones, and `sqlBackupStorageRedundancy = 'Geo'` geo-pairs from *this* region,
 not from `location`.
 :::
+
+### Why dev's SQL is `Basic`, not serverless
+
+Dev launched on `GP_S_Gen5` serverless (1 max vCore, 0.5 min, 60-minute auto-pause) on
+the theory that a lightly-used control-plane database would mostly sit paused. It never
+did: `UsageSyncFunction` runs on `0 */15 * * * *` (every 15 minutes), so the database was
+reconnected four times an hour and never went 60 minutes idle. It billed a full vCore
+around the clock — $166.47 across the first 16 days after the 2026-09-05 deploy for a
+database holding 33 MB. Moved to provisioned `Basic` (5 DTU, `sqlMaxSizeBytes` capped at
+2 GB) on 2026-09-21 ([#277](https://github.com/kolatts/foundry-gate/issues/277)), which
+drops the modeled cost to ~$4.90/month. `sql.bicep` no longer has a serverless code
+path — the `autoPauseDelayMinutes`/`serverlessMinCapacity` parameters, the `serverless`
+variable and output, and the `autoPauseDelay`/`minCapacity` properties are gone —
+and `InfraSqlTierTests` (Predeployment) fails the build if any parameter file or the
+`main.bicep` default names a `GP_S_*` SKU, or pairs a `Basic` SKU with a max size above
+2 GB. Prod was never serverless; it stays `GP_Gen5_2` provisioned, now with an explicit
+`sqlMaxSizeBytes = 34359738368` (32 GB).
 
 ## Role assignments
 
@@ -555,22 +573,26 @@ empty strings when `deployControlPlane = false`.
 | `apiIdentityName` / `ClientId` / `PrincipalId`, `functionsIdentityName` / `ClientId` / `PrincipalId` | `_deploy-database.yml` (`api-identity-name` / `functions-identity-name`, and **required**: `api-identity-client-id` / `functions-identity-client-id` → CLI `db grant-identities`, which creates the contained users `WITH SID` — see [Why the client ids](#why-the-client-ids-not-from-external-provider)), Graph permission grants |
 | `modelAliasRows`, `quotaTierRows` | what the control plane was actually handed as `Gateway__ModelAliases__*` / `Gateway__Tiers__*` — readable after a deploy without opening the app settings blade, so a fork that overrode `productModelAliases` or `quotaTiers` can confirm the override landed |
 
-## Health probes and serverless auto-pause
+## Health probes
 
 The API exposes `/health` (hermetic liveness) and `/health/ready` (adds an
 `AppDbContext` connectivity check). The Container App wires them as:
 
 | Probe | Path | Why |
 |---|---|---|
-| Startup | `/health/ready` (30 × 5 s) | a wrong connection string or identity fails the deploy right there; the window covers a paused serverless database resuming |
+| Startup | `/health/ready` (30 × 5 s) | a wrong connection string or identity fails the deploy right there |
 | Liveness | `/health` (30 s) | restart only on a hung process |
-| Readiness | `/health` (15 s) | **deliberately not** `/health/ready`: with `minReplicas: 1` a DB-touching readiness probe would open a SQL connection every 15 s and the dev serverless database would never reach its 60-minute auto-pause |
+| Readiness | `/health` (15 s) | **deliberately not** `/health/ready`: with `minReplicas: 1` a DB-touching readiness probe would open a SQL connection every 15 s for no operational benefit |
 
-The trade-off is explicit: for a single-replica admin API, "database down" surfacing as
-500s instead of 503s is not worth an always-on vCore in dev. The dev budget line on
-[Cost & Capacity](/foundry-gate/reference/cost-and-capacity/) (serverless, auto-pause)
-depends on this stance — and on periodic Functions jobs keeping their cadence above the
-pause delay. In the bootstrap-image mode all three probes use `/health` on port 80.
+This design predates dev's move to provisioned `Basic` SQL
+([#277](https://github.com/kolatts/foundry-gate/issues/277)) — it was originally meant to
+protect the dev database's 60-minute auto-pause window from a chatty readiness probe, but
+that auto-pause never actually fired (see
+[Why dev's SQL is `Basic`, not serverless](#why-devs-sql-is-basic-not-serverless)) and
+`Basic` has no pause state to protect. The probe split is kept anyway: for a
+single-replica admin API, "database down" surfacing as 500s instead of 503s still isn't
+worth an extra SQL connection every 15 seconds. In the bootstrap-image mode all three
+probes use `/health` on port 80.
 
 ## Firewall model for Azure SQL
 
