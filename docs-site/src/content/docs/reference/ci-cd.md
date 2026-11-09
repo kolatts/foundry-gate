@@ -22,37 +22,39 @@ pull request ──► ci.yml (build · Predeployment tests · format)   require
              ├─► FoundryGate.Web/**  → ui-deploy.yml      : SWA preview (ui-preview), closed when the PR closes
              └─► docs-site/**        → docs-deploy.yml    : Astro build
 
-merge to main ─► anything deployable → deploy-all.yml   : SKIPPED unless FG_DEV_AUTO_DEPLOY
-              │     (infra/**, src/**, Directory.*.props, global.json, NuGet.config,
-              │      .github/workflows/_deploy-*.yml, .github/scripts/**, .github/actions/**)
-              │
-              │     plan runs; infra and everything after it skip, and summary says so
-              └─► docs-site/**       → docs-deploy.yml : GitHub Pages
+merge to main ─► docs-site/**       → docs-deploy.yml : GitHub Pages
+              └─► nothing else deploys — deploy-all.yml has no push trigger
 
-manual ───────► deploy-all.yml    : the same chain against dev or production
+manual ───────► deploy-all.yml    : the whole chain against dev or production
               ├─► infra-/api-/functions-/ui-deploy.yml : redeploy one component
               └─► infra-destroy.yml : typed confirmation → listing → destroy gate → delete resource group
 ```
 
-**Merging does not deploy dev.** `deploy-all.yml` is the only workflow with a `push` trigger
-(besides docs), and since [#279](https://github.com/kolatts/foundry-gate/issues/279) its `infra`
-job carries `if: github.event_name == 'workflow_dispatch' || vars.FG_DEV_AUTO_DEPLOY == 'true'`.
-A merge to `main` therefore runs `plan` and skips the rest.
+**Merging deploys nothing but docs.** `deploy-all.yml` is **dispatch-only**: it lost its `push`
+trigger when the project was suspended
+([#281](https://github.com/kolatts/foundry-gate/pull/281)), so no merge to `main` can re-create
+`rg-foundrygate-dev`. Its `infra` job also carries
+`if: github.event_name == 'workflow_dispatch' || vars.FG_DEV_AUTO_DEPLOY == 'true'`
+([#279](https://github.com/kolatts/foundry-gate/issues/279)). With the trigger gone that
+condition is always true, so it changes nothing today — it is there for whoever restores the
+trigger, so that a push deploys only when the repo variable says to.
 
 The reason is cost, and it is worth stating precisely because the shape recurs. dev's gateway is
 an APIM Basic v2 instance at roughly $148/month, billed whether or not a request ever reaches it,
-in a subscription capped at $50/month. The money was never caused by an expensive resource — it
+in a subscription capped at $60/month. The money was never caused by an expensive resource — it
 was caused by an environment that existed *by default*, because nothing in the chain ever asked
 whether dev needed to be up. Merging was the decision, and people merge for unrelated reasons.
-So dev is now spun up deliberately (the `gateway-cycle` skill, or a `workflow_dispatch` of this
-file) and torn down when the testing that needed it is done. A `workflow_dispatch` is never
-gated, so targeted dev runs and every production deploy are unchanged; setting the repo variable
-`FG_DEV_AUTO_DEPLOY='true'` restores the old behaviour.
+So dev is spun up deliberately (the `gateway-cycle` skill, or a `workflow_dispatch` of this file)
+and torn down when the testing that needed it is done.
 
-The cost of this is real and deliberate: a live dev environment no longer tracks `main` on its
-own, so "is the deployed thing current?" is a question you now have to ask rather than assume.
+Resuming the project is therefore two steps, not one: restore the `push` trigger **and** run a
+day-0 deploy with `create-model-deployments = true`, because `infra-destroy` took the Foundry
+accounts with it and Anthropic deployments are create-once.
 
- The single-component wrappers — `infra-deploy.yml`, `api-deploy.yml`,
+The cost of this is real and deliberate: a live dev environment does not track `main` on its own,
+so "is the deployed thing current?" is a question you ask rather than assume.
+
+The single-component wrappers — `infra-deploy.yml`, `api-deploy.yml`,
 `functions-deploy.yml`, `ui-deploy.yml` — have **no** `push` trigger: they keep their PR-track
 jobs and a `workflow_dispatch` for targeted redeploys. That is deliberate. They all shared the
 `deploy-{env}` concurrency group, and GitHub keeps exactly one *pending* run per group, so a
@@ -107,7 +109,7 @@ children (`workflow_call`) that take `environment:` and are composed by `deploy-
 | File | Triggers | Jobs | Gate | Reads |
 |---|---|---|---|---|
 | `ci.yml` | PR, merge queue | `build-test` (**required check**), `docs-build` | — | — |
-| `deploy-all.yml` | **push `main`** (`infra/**`, `src/**`, `Directory.*.props`, `global.json`, `NuGet.config`, `.github/workflows/_deploy-*.yml`, `.github/scripts/**`, `.github/actions/**`) — deploys only when `vars.FG_DEV_AUTO_DEPLOY == 'true'`, otherwise `plan` runs and the rest skips (#279) · dispatch (`environment`, `create-model-deployments`, `run-seed-test`), never gated | plan → infra → prepare-database → database → api → functions ∥ ui → postdeployment-tests → summary | the target environment, once per gated job (six for a full production run) | — |
+| `deploy-all.yml` | **dispatch only** (`environment`, `create-model-deployments`, `run-seed-test`) — the `push` trigger was removed when the project was suspended (#281); the `infra` job's `vars.FG_DEV_AUTO_DEPLOY` gate (#279) applies if it is ever restored | plan → infra → prepare-database → database → api → functions ∥ ui → postdeployment-tests → summary | the target environment, once per gated job (six for a full production run) | — |
 | `infra-deploy.yml` | PR `infra/**` → what-if comment · dispatch (`environment`, `create-model-deployments`) | calls `_deploy-infra.yml` | `dev-plan` (PR what-if) · `dev` / `production` (dispatch) | — |
 | `infra-destroy.yml` | dispatch only (`environment`, `confirmation`, `purge-soft-deleted`) | `validate-confirmation` → `list-resources` → `destroy` | `dev-destroy` / `prod-destroy` | `AZURE_*` on the destroy environment |
 | `api-deploy.yml` | PR touching the Dockerfile → image build check · dispatch (`environment`, `run-seed-test`) | `image-build` (PR, no Azure) · `_prepare-database` → `_deploy-database` → `_deploy-api` | `dev` / `production` | — |
